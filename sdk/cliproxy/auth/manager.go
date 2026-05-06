@@ -1,0 +1,826 @@
+package auth
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	internalconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/logging"
+	log "github.com/sirupsen/logrus"
+)
+
+const (
+	refreshCheckInterval  = 5 * time.Second
+	refreshMaxConcurrency = 16
+	refreshPendingBackoff = time.Minute
+	refreshFailureBackoff = 5 * time.Minute
+	// refreshIneffectiveBackoff throttles refresh attempts when the refresh completes
+	// successfully but the auth still evaluates as needing refresh (e.g. token expiry
+	// wasn't updated). Without this guard, the auto-refresh loop can tight-loop and
+	// burn CPU at idle.
+	refreshIneffectiveBackoff = 30 * time.Second
+)
+
+// RefreshEvaluator allows runtime state to override refresh decisions.
+type RefreshEvaluator interface {
+	ShouldRefresh(now time.Time, auth *Auth) bool
+}
+
+// Manager orchestrates auth lifecycle, selection, and persistence for CLIProxyAPIHome.
+//
+// This is intentionally narrower than CPA's full execution manager: it only supports
+// registering/updating auths, scheduling selection (Dispatch), and background refresh.
+type Manager struct {
+	store    Store
+	selector Selector
+
+	mu        sync.RWMutex
+	auths     map[string]*Auth
+	scheduler *authScheduler
+
+	oauthModelAlias atomic.Value
+	runtimeConfig   atomic.Value
+
+	rtProvider RoundTripperProvider
+
+	refreshCancel context.CancelFunc
+	refreshLoop   *authAutoRefreshLoop
+}
+
+func NewManager(store Store, selector Selector, _ any) *Manager {
+	if selector == nil {
+		selector = &RoundRobinSelector{}
+	}
+	mgr := &Manager{
+		store:    store,
+		selector: selector,
+		auths:    make(map[string]*Auth),
+	}
+	mgr.scheduler = newAuthScheduler(selector)
+	mgr.runtimeConfig.Store(&internalconfig.Config{})
+	// atomic.Value requires non-nil initial value.
+	mgr.oauthModelAlias.Store(&oauthModelAliasTable{})
+	return mgr
+}
+
+func (m *Manager) SetRoundTripperProvider(p RoundTripperProvider) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.rtProvider = p
+	m.mu.Unlock()
+}
+
+func (m *Manager) roundTripperFor(auth *Auth) http.RoundTripper {
+	m.mu.RLock()
+	p := m.rtProvider
+	m.mu.RUnlock()
+	if p == nil || auth == nil {
+		return nil
+	}
+	return p.RoundTripperFor(auth)
+}
+
+func (m *Manager) SetConfig(cfg *internalconfig.Config) {
+	if m == nil {
+		return
+	}
+	if cfg == nil {
+		cfg = &internalconfig.Config{}
+	}
+	m.runtimeConfig.Store(cfg)
+}
+
+func (m *Manager) SetSelector(selector Selector) {
+	if m == nil {
+		return
+	}
+	if selector == nil {
+		selector = &RoundRobinSelector{}
+	}
+
+	m.mu.Lock()
+	prev := m.selector
+	m.selector = selector
+	scheduler := m.scheduler
+	m.mu.Unlock()
+
+	if scheduler != nil {
+		scheduler.setSelector(selector)
+	}
+	if stoppable, ok := prev.(StoppableSelector); ok {
+		stoppable.Stop()
+	}
+}
+
+func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
+	if m == nil {
+		return nil, fmt.Errorf("auth manager: nil manager")
+	}
+	if auth == nil || strings.TrimSpace(auth.ID) == "" {
+		return nil, fmt.Errorf("auth manager: missing auth id")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	now := time.Now().UTC()
+	next := auth.Clone()
+	if next.CreatedAt.IsZero() {
+		next.CreatedAt = now
+	}
+	next.UpdatedAt = now
+
+	m.mu.Lock()
+	if m.auths == nil {
+		m.auths = make(map[string]*Auth)
+	}
+	if _, exists := m.auths[next.ID]; exists {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("auth manager: auth already exists")
+	}
+	m.auths[next.ID] = next
+	m.mu.Unlock()
+
+	m.scheduler.upsertAuth(next)
+	if errPersist := m.persist(ctx, next); errPersist != nil {
+		return nil, errPersist
+	}
+	m.queueRefreshReschedule(next.ID)
+	return next.Clone(), nil
+}
+
+func (m *Manager) Delete(ctx context.Context, id string) error {
+	if m == nil {
+		return fmt.Errorf("auth manager: nil manager")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("auth manager: missing auth id")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	m.mu.Lock()
+	_, ok := m.auths[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("auth manager: auth not found")
+	}
+	delete(m.auths, id)
+	loop := m.refreshLoop
+	m.mu.Unlock()
+
+	if m.scheduler != nil {
+		m.scheduler.removeAuth(id)
+	}
+	if loop != nil {
+		loop.remove(id)
+	}
+	if invalidator, ok := m.selector.(interface{ InvalidateAuth(string) }); ok {
+		invalidator.InvalidateAuth(id)
+	}
+	if shouldSkipPersist(ctx) {
+		return nil
+	}
+	if m.store == nil {
+		return nil
+	}
+	return m.store.Delete(ctx, id)
+}
+
+func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
+	if m == nil {
+		return nil, fmt.Errorf("auth manager: nil manager")
+	}
+	if auth == nil || strings.TrimSpace(auth.ID) == "" {
+		return nil, fmt.Errorf("auth manager: missing auth id")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	now := time.Now().UTC()
+
+	m.mu.Lock()
+	current, ok := m.auths[auth.ID]
+	if !ok || current == nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("auth manager: auth not found")
+	}
+	next := auth.Clone()
+	if next.CreatedAt.IsZero() {
+		next.CreatedAt = current.CreatedAt
+	}
+	next.UpdatedAt = now
+	m.auths[next.ID] = next
+	m.mu.Unlock()
+
+	m.scheduler.upsertAuth(next)
+	if errPersist := m.persist(ctx, next); errPersist != nil {
+		return nil, errPersist
+	}
+	m.queueRefreshReschedule(next.ID)
+	return next.Clone(), nil
+}
+
+func (m *Manager) persist(ctx context.Context, auth *Auth) error {
+	if m == nil || m.store == nil || auth == nil {
+		return nil
+	}
+	if shouldSkipPersist(ctx) {
+		return nil
+	}
+	if auth.Attributes != nil {
+		if strings.EqualFold(strings.TrimSpace(auth.Attributes["runtime_only"]), "true") {
+			return nil
+		}
+	}
+	if auth.Disabled {
+		// Keep disabled auth entries persisted to disk too, consistent with CPA.
+	}
+	if auth.Metadata == nil && auth.Storage == nil {
+		return nil
+	}
+	_, errSave := m.store.Save(ctx, auth)
+	return errSave
+}
+
+func (m *Manager) List() []*Auth {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]*Auth, 0, len(m.auths))
+	for _, a := range m.auths {
+		if a == nil {
+			continue
+		}
+		out = append(out, a.Clone())
+	}
+	return out
+}
+
+func (m *Manager) GetByID(id string) (*Auth, bool) {
+	if m == nil {
+		return nil, false
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, false
+	}
+	m.mu.RLock()
+	a := m.auths[id]
+	m.mu.RUnlock()
+	if a == nil {
+		return nil, false
+	}
+	return a.Clone(), true
+}
+
+func (m *Manager) RefreshSchedulerEntry(authID string) {
+	if m == nil || m.scheduler == nil {
+		return
+	}
+	auth, ok := m.GetByID(authID)
+	if !ok || auth == nil {
+		return
+	}
+	m.scheduler.upsertAuth(auth)
+}
+
+func (m *Manager) ReconcileRegistryModelStates(_ context.Context, _ string) {
+	// CLIProxyAPIHome does not execute upstream requests, so it does not maintain
+	// per-model runtime state beyond the shared model registry.
+}
+
+func ensureRequestedModelMetadata(opts Options, requestedModel string) Options {
+	requestedModel = strings.TrimSpace(requestedModel)
+	if requestedModel == "" {
+		return opts
+	}
+	if opts.Metadata == nil {
+		opts.Metadata = map[string]any{RequestedModelMetadataKey: requestedModel}
+		return opts
+	}
+	if _, exists := opts.Metadata[RequestedModelMetadataKey]; !exists {
+		opts.Metadata[RequestedModelMetadataKey] = requestedModel
+	}
+	return opts
+}
+
+func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedModel string, opts Options) (*DispatchDecision, error) {
+	if m == nil {
+		return nil, &Error{Code: "provider_not_found", Message: "manager is nil"}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if len(providers) == 0 {
+		return nil, &Error{Code: "provider_not_found", Message: "no provider supplied"}
+	}
+
+	routeModel := strings.TrimSpace(requestedModel)
+	opts = ensureRequestedModelMetadata(opts, routeModel)
+
+	tried := make(map[string]struct{})
+	for {
+		auth, providerKey, errPick := m.scheduler.pickMixed(ctx, providers, routeModel, opts, tried)
+		if errPick != nil {
+			return nil, errPick
+		}
+		if auth == nil {
+			return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+		}
+		tried[auth.ID] = struct{}{}
+
+		models := m.executionModelCandidates(auth, routeModel)
+		if len(models) == 0 {
+			continue
+		}
+		upstream := strings.TrimSpace(models[0])
+		if upstream == "" {
+			upstream = routeModel
+		}
+		return &DispatchDecision{
+			Auth:          auth.Clone(),
+			Provider:      providerKey,
+			UpstreamModel: upstream,
+			PooledModels:  false,
+		}, nil
+	}
+}
+
+func (m *Manager) executionModelCandidates(auth *Auth, routeModel string) []string {
+	requestedModel := rewriteModelForAuth(routeModel, auth)
+	requestedModel = m.applyOAuthModelAlias(auth, requestedModel)
+	resolved := m.applyAPIKeyModelAlias(auth, requestedModel)
+	if strings.TrimSpace(resolved) == "" {
+		resolved = requestedModel
+	}
+	if strings.TrimSpace(resolved) == "" {
+		resolved = strings.TrimSpace(routeModel)
+	}
+	if strings.TrimSpace(resolved) == "" {
+		return nil
+	}
+	return []string{resolved}
+}
+
+func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
+	if a == nil || a.Disabled {
+		return false
+	}
+	if !a.NextRefreshAfter.IsZero() && now.Before(a.NextRefreshAfter) {
+		return false
+	}
+	if evaluator, ok := a.Runtime.(RefreshEvaluator); ok && evaluator != nil {
+		return evaluator.ShouldRefresh(now, a)
+	}
+
+	lastRefresh := a.LastRefreshedAt
+	if lastRefresh.IsZero() {
+		if ts, ok := authLastRefreshTimestamp(a); ok {
+			lastRefresh = ts
+		}
+	}
+
+	expiry, hasExpiry := a.ExpirationTime()
+
+	if interval := authPreferredInterval(a); interval > 0 {
+		if hasExpiry && !expiry.IsZero() {
+			if !expiry.After(now) {
+				return true
+			}
+			if expiry.Sub(now) <= interval {
+				return true
+			}
+		}
+		if lastRefresh.IsZero() {
+			return true
+		}
+		return now.Sub(lastRefresh) >= interval
+	}
+
+	provider := strings.ToLower(a.Provider)
+	lead := ProviderRefreshLead(provider, a.Runtime)
+	if lead == nil {
+		return false
+	}
+	if *lead <= 0 {
+		if hasExpiry && !expiry.IsZero() {
+			return now.After(expiry)
+		}
+		return false
+	}
+	if hasExpiry && !expiry.IsZero() {
+		return time.Until(expiry) <= *lead
+	}
+	if !lastRefresh.IsZero() {
+		return now.Sub(lastRefresh) >= *lead
+	}
+	return true
+}
+
+func (m *Manager) markRefreshPending(id string, now time.Time) bool {
+	m.mu.Lock()
+	auth, ok := m.auths[id]
+	if !ok || auth == nil || auth.Disabled {
+		m.mu.Unlock()
+		return false
+	}
+	if !auth.NextRefreshAfter.IsZero() && now.Before(auth.NextRefreshAfter) {
+		m.mu.Unlock()
+		return false
+	}
+	auth.NextRefreshAfter = now.Add(refreshPendingBackoff)
+	m.auths[id] = auth
+	m.mu.Unlock()
+
+	m.queueRefreshReschedule(id)
+	return true
+}
+
+func authPreferredInterval(a *Auth) time.Duration {
+	if a == nil {
+		return 0
+	}
+	if d := durationFromMetadata(a.Metadata, "refresh_interval_seconds", "refreshIntervalSeconds", "refresh_interval", "refreshInterval"); d > 0 {
+		return d
+	}
+	if d := durationFromAttributes(a.Attributes, "refresh_interval_seconds", "refreshIntervalSeconds", "refresh_interval", "refreshInterval"); d > 0 {
+		return d
+	}
+	return 0
+}
+
+func durationFromMetadata(meta map[string]any, keys ...string) time.Duration {
+	if len(meta) == 0 {
+		return 0
+	}
+	for _, key := range keys {
+		if val, ok := meta[key]; ok {
+			if dur := parseDurationValue(val); dur > 0 {
+				return dur
+			}
+		}
+	}
+	return 0
+}
+
+func durationFromAttributes(attrs map[string]string, keys ...string) time.Duration {
+	if len(attrs) == 0 {
+		return 0
+	}
+	for _, key := range keys {
+		if val, ok := attrs[key]; ok {
+			if dur := parseDurationString(val); dur > 0 {
+				return dur
+			}
+		}
+	}
+	return 0
+}
+
+func parseDurationValue(val any) time.Duration {
+	switch v := val.(type) {
+	case time.Duration:
+		if v <= 0 {
+			return 0
+		}
+		return v
+	case int:
+		if v <= 0 {
+			return 0
+		}
+		return time.Duration(v) * time.Second
+	case int32:
+		if v <= 0 {
+			return 0
+		}
+		return time.Duration(v) * time.Second
+	case int64:
+		if v <= 0 {
+			return 0
+		}
+		return time.Duration(v) * time.Second
+	case uint:
+		if v == 0 {
+			return 0
+		}
+		return time.Duration(v) * time.Second
+	case uint32:
+		if v == 0 {
+			return 0
+		}
+		return time.Duration(v) * time.Second
+	case uint64:
+		if v == 0 {
+			return 0
+		}
+		return time.Duration(v) * time.Second
+	case float32:
+		if v <= 0 {
+			return 0
+		}
+		return time.Duration(float64(v) * float64(time.Second))
+	case float64:
+		if v <= 0 {
+			return 0
+		}
+		return time.Duration(v * float64(time.Second))
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			if i <= 0 {
+				return 0
+			}
+			return time.Duration(i) * time.Second
+		}
+		if f, err := v.Float64(); err == nil && f > 0 {
+			return time.Duration(f * float64(time.Second))
+		}
+	case string:
+		return parseDurationString(v)
+	}
+	return 0
+}
+
+func parseDurationString(raw string) time.Duration {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0
+	}
+	if dur, err := time.ParseDuration(s); err == nil && dur > 0 {
+		return dur
+	}
+	if secs, err := strconv.ParseFloat(s, 64); err == nil && secs > 0 {
+		return time.Duration(secs * float64(time.Second))
+	}
+	return 0
+}
+
+func authLastRefreshTimestamp(a *Auth) (time.Time, bool) {
+	if a == nil {
+		return time.Time{}, false
+	}
+	if a.Metadata != nil {
+		if ts, ok := lookupMetadataTime(a.Metadata, "last_refresh", "lastRefresh", "last_refreshed_at", "lastRefreshedAt"); ok {
+			return ts, true
+		}
+	}
+	if a.Attributes != nil {
+		for _, key := range []string{"last_refresh", "lastRefresh", "last_refreshed_at", "lastRefreshedAt"} {
+			if val := strings.TrimSpace(a.Attributes[key]); val != "" {
+				if ts, ok := parseTimeValue(val); ok {
+					return ts, true
+				}
+			}
+		}
+	}
+	return time.Time{}, false
+}
+
+func lookupMetadataTime(meta map[string]any, keys ...string) (time.Time, bool) {
+	for _, key := range keys {
+		if val, ok := meta[key]; ok {
+			if ts, ok1 := parseTimeValue(val); ok1 {
+				return ts, true
+			}
+		}
+	}
+	return time.Time{}, false
+}
+
+func (m *Manager) queueRefreshReschedule(authID string) {
+	if m == nil || authID == "" {
+		return
+	}
+	m.mu.RLock()
+	loop := m.refreshLoop
+	m.mu.RUnlock()
+	if loop == nil {
+		return
+	}
+	loop.queueReschedule(authID)
+}
+
+func (m *Manager) StartAutoRefresh(parent context.Context, interval time.Duration) {
+	if m == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = refreshCheckInterval
+	}
+
+	m.mu.Lock()
+	cancelPrev := m.refreshCancel
+	m.refreshCancel = nil
+	m.refreshLoop = nil
+	m.mu.Unlock()
+	if cancelPrev != nil {
+		cancelPrev()
+	}
+
+	ctx, cancelCtx := context.WithCancel(parent)
+	loop := newAuthAutoRefreshLoop(m, interval, refreshMaxConcurrency)
+
+	m.mu.Lock()
+	m.refreshCancel = cancelCtx
+	m.refreshLoop = loop
+	m.mu.Unlock()
+
+	loop.rebuild(time.Now())
+	go loop.run(ctx)
+}
+
+func (m *Manager) StopAutoRefresh() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	cancel := m.refreshCancel
+	m.refreshCancel = nil
+	m.refreshLoop = nil
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if stoppable, ok := m.selector.(StoppableSelector); ok {
+		stoppable.Stop()
+	}
+}
+
+// RefreshNow forces a best-effort credential refresh for the given auth.
+// It updates the in-memory record and persists it when enabled.
+func (m *Manager) RefreshNow(ctx context.Context, authID string) (*Auth, error) {
+	if m == nil {
+		return nil, fmt.Errorf("auth manager: nil manager")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return nil, fmt.Errorf("auth manager: missing auth id")
+	}
+
+	m.mu.RLock()
+	requested := m.auths[authID]
+	targetID := authID
+	if requested != nil && requested.Attributes != nil {
+		if parent := strings.TrimSpace(requested.Attributes["gemini_virtual_parent"]); parent != "" {
+			targetID = parent
+		}
+	}
+	target := m.auths[targetID]
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	m.mu.RUnlock()
+
+	if requested == nil {
+		return nil, fmt.Errorf("auth manager: auth not found")
+	}
+	if target == nil {
+		return nil, fmt.Errorf("auth manager: auth not found")
+	}
+	if target.Disabled {
+		allowDisabled := false
+		if target.Attributes != nil && strings.EqualFold(strings.TrimSpace(target.Attributes["gemini_virtual_primary"]), "true") {
+			allowDisabled = true
+		}
+		if !allowDisabled {
+			return nil, fmt.Errorf("auth manager: auth disabled")
+		}
+	}
+	if cfg == nil {
+		cfg = &internalconfig.Config{}
+	}
+
+	rt := m.roundTripperFor(target)
+	updated, errRefresh := refreshCredential(ctx, cfg, target.Clone(), rt)
+	now := time.Now().UTC()
+	if errRefresh != nil {
+		snapshot := target.Clone()
+		snapshot.NextRefreshAfter = now.Add(refreshFailureBackoff)
+		snapshot.LastError = &Error{Message: errRefresh.Error()}
+		_, _ = m.Update(ctx, snapshot)
+		return nil, errRefresh
+	}
+	if updated == nil {
+		updated = target.Clone()
+	}
+	if updated.Runtime == nil {
+		updated.Runtime = target.Runtime
+	}
+	updated.LastRefreshedAt = now
+	updated.NextRefreshAfter = time.Time{}
+	updated.LastError = nil
+	if m.shouldRefresh(updated, now) {
+		updated.NextRefreshAfter = now.Add(refreshIneffectiveBackoff)
+	}
+	updatedPersisted, errUpdate := m.Update(ctx, updated)
+	if errUpdate != nil {
+		return nil, errUpdate
+	}
+	if targetID != authID {
+		refreshed, ok := m.GetByID(authID)
+		if !ok || refreshed == nil {
+			return nil, fmt.Errorf("auth manager: auth not found")
+		}
+		return refreshed, nil
+	}
+	return updatedPersisted, nil
+}
+
+func (m *Manager) refreshAuth(ctx context.Context, authID string) {
+	if m == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return
+	}
+
+	m.mu.RLock()
+	current := m.auths[authID]
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	m.mu.RUnlock()
+	if current == nil || current.Disabled {
+		return
+	}
+	if cfg == nil {
+		cfg = &internalconfig.Config{}
+	}
+
+	now := time.Now()
+	if !m.shouldRefresh(current, now) {
+		return
+	}
+
+	updated, errRefresh := refreshCredential(ctx, cfg, current.Clone(), m.roundTripperFor(current))
+	if errRefresh != nil && errors.Is(errRefresh, context.Canceled) {
+		log.Debugf("auth refresh canceled | auth=%s provider=%s", authID, current.Provider)
+		return
+	}
+	if errRefresh != nil {
+		logEntryWithRequestID(ctx).Warnf("auth refresh failed | auth=%s provider=%s err=%v", authID, current.Provider, errRefresh)
+		shouldReschedule := false
+		var schedulerSnapshot *authScheduler
+		var updatedSnapshot *Auth
+		m.mu.Lock()
+		if cur := m.auths[authID]; cur != nil {
+			cur.NextRefreshAfter = now.Add(refreshFailureBackoff)
+			cur.LastError = &Error{Message: errRefresh.Error()}
+			m.auths[authID] = cur
+			shouldReschedule = true
+			schedulerSnapshot = m.scheduler
+			updatedSnapshot = cur.Clone()
+		}
+		m.mu.Unlock()
+		if shouldReschedule && schedulerSnapshot != nil && updatedSnapshot != nil {
+			schedulerSnapshot.upsertAuth(updatedSnapshot)
+		}
+		if shouldReschedule {
+			m.queueRefreshReschedule(authID)
+		}
+		return
+	}
+	if updated == nil {
+		updated = current.Clone()
+	}
+	if updated.Runtime == nil {
+		updated.Runtime = current.Runtime
+	}
+	updated.LastRefreshedAt = now
+	updated.NextRefreshAfter = time.Time{}
+	updated.LastError = nil
+	updated.UpdatedAt = now
+	if m.shouldRefresh(updated, now) {
+		updated.NextRefreshAfter = now.Add(refreshIneffectiveBackoff)
+	}
+	_, _ = m.Update(ctx, updated)
+}
+
+// logEntryWithRequestID returns a logrus entry with request_id field if available in context.
+func logEntryWithRequestID(ctx context.Context) *log.Entry {
+	if ctx == nil {
+		return log.NewEntry(log.StandardLogger())
+	}
+	if reqID := logging.GetRequestID(ctx); reqID != "" {
+		return log.WithField("request_id", reqID)
+	}
+	return log.NewEntry(log.StandardLogger())
+}
