@@ -29,6 +29,9 @@ func (r *Runtime) startFileWatcher(ctx context.Context, configPath string) error
 	r.cfgMu.RUnlock()
 
 	w, errNew := watcher.NewWatcher(configPath, authDir, watcher.Callbacks{
+		OnConfigYAMLChange: func(ctx context.Context, data []byte) {
+			r.PublishConfigYAML(data)
+		},
 		OnConfigReload: func(ctx context.Context, cfg *config.Config) {
 			if errApply := r.applyConfigAndReloadAuths(ctx, cfg); errApply != nil {
 				log.Errorf("config reload apply failed: %v", errApply)

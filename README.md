@@ -89,3 +89,19 @@ Return (RESP bulk string, JSON):
   - `{"auth_index":"<auth-id>","auth":{...}}`
 - Error:
   - `{"error":{"message":"..."}}`
+
+### 6) `GET config`
+
+Returns the full raw YAML config file content.
+
+Return (RESP bulk string, YAML):
+
+- Success: `<config.yaml bytes>`
+
+### 7) `SUBSCRIBE config`
+
+Subscribes the current TCP connection to config file changes.
+Whenever the config file content changes, the server pushes the full raw YAML config as a RESP bulk string.
+
+- Returns: `OK`
+- Push message: `<config.yaml bytes>` (RESP bulk string)

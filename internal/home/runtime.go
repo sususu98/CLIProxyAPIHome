@@ -28,7 +28,12 @@ type Runtime struct {
 	cfgMu sync.RWMutex
 	cfg   *config.Config
 
-	authDir string
+	authDir    string
+	configPath string
+
+	configSubsMu    sync.Mutex
+	nextConfigSubID uint64
+	configSubs      map[uint64]func(payload []byte) error
 
 	accessManager *sdkaccess.Manager
 	coreManager   *coreauth.Manager
@@ -81,6 +86,20 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
+	configPath = strings.TrimSpace(configPath)
+	if configPath != "" {
+		configPath = filepath.Clean(configPath)
+		if !filepath.IsAbs(configPath) {
+			if abs, errAbs := filepath.Abs(configPath); errAbs == nil {
+				configPath = abs
+			}
+		}
+	}
+
+	r.cfgMu.Lock()
+	r.configPath = configPath
+	r.cfgMu.Unlock()
 
 	runCtx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel

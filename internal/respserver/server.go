@@ -95,35 +95,28 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	clientIP, localClient := resolveRemoteIP(conn.RemoteAddr())
 	authed := false
 	reader := bufio.NewReader(conn)
-	writer := bufio.NewWriter(conn)
+	writer := newSafeWriter(bufio.NewWriter(conn))
+	var unsubscribeConfig func()
 	defer func() {
+		if unsubscribeConfig != nil {
+			unsubscribeConfig()
+			unsubscribeConfig = nil
+		}
 		if errClose := conn.Close(); errClose != nil {
 			log.Errorf("resp connection close error: %v", errClose)
 		}
 	}()
 
-	flush := func() bool {
-		if errFlush := writer.Flush(); errFlush != nil {
-			log.Errorf("resp flush error: %v", errFlush)
-			return false
-		}
-		return true
-	}
-
 	for {
 		args, errRead := readRESPArray(reader)
 		if errRead != nil {
 			if !errors.Is(errRead, io.EOF) {
-				_ = writeRedisError(writer, "ERR "+errRead.Error())
-				_ = writer.Flush()
+				_ = writer.WriteRedisError("ERR " + errRead.Error())
 			}
 			return
 		}
 		if len(args) == 0 {
-			_ = writeRedisError(writer, "ERR empty command")
-			if !flush() {
-				return
-			}
+			_ = writer.WriteRedisError("ERR empty command")
 			continue
 		}
 
@@ -133,15 +126,12 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			if s.auth != nil {
 				_, statusCode, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, "")
 				if statusCode == http.StatusForbidden && strings.HasPrefix(errMsg, "IP banned due to too many failed attempts") {
-					_ = writeRedisError(writer, "ERR "+errMsg)
+					_ = writer.WriteRedisError("ERR " + errMsg)
 				} else {
-					_ = writeRedisError(writer, "NOAUTH Authentication required.")
+					_ = writer.WriteRedisError("NOAUTH Authentication required.")
 				}
 			} else {
-				_ = writeRedisError(writer, "NOAUTH Authentication required.")
-			}
-			if !flush() {
-				return
+				_ = writer.WriteRedisError("NOAUTH Authentication required.")
 			}
 			continue
 		}
@@ -152,51 +142,49 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 				if s.auth != nil {
 					_, statusCode, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, "")
 					if statusCode == http.StatusForbidden && strings.HasPrefix(errMsg, "IP banned due to too many failed attempts") {
-						_ = writeRedisError(writer, "ERR "+errMsg)
-						if !flush() {
-							return
-						}
+						_ = writer.WriteRedisError("ERR " + errMsg)
 						continue
 					}
 				}
-				_ = writeRedisError(writer, "ERR wrong number of arguments for 'auth' command")
-				if !flush() {
-					return
-				}
+				_ = writer.WriteRedisError("ERR wrong number of arguments for 'auth' command")
 				continue
 			}
 			if s.auth == nil {
-				_ = writeRedisError(writer, "ERR remote management disabled")
-				if !flush() {
-					return
-				}
+				_ = writer.WriteRedisError("ERR remote management disabled")
 				continue
 			}
 			allowed, _, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, password)
 			if !allowed {
-				_ = writeRedisError(writer, "ERR "+errMsg)
-				if !flush() {
-					return
-				}
+				_ = writer.WriteRedisError("ERR " + errMsg)
 				continue
 			}
 			authed = true
-			_ = writeRedisSimpleString(writer, "OK")
-			if !flush() {
-				return
-			}
+			_ = writer.WriteRedisSimpleString("OK")
 			continue
 		}
 
 		reply := dispatch.Err("registry not ready")
 		if s.registry != nil {
-			reply = s.registry.Execute(ctx, dispatch.Env{Runtime: s.runtime}, args)
+			reply = s.registry.Execute(ctx, dispatch.Env{
+				Runtime: s.runtime,
+				Conn: &dispatch.ConnEnv{
+					SubscribeConfigYAML: func() error {
+						if s.runtime == nil {
+							return fmt.Errorf("runtime not ready")
+						}
+						if unsubscribeConfig != nil {
+							return nil
+						}
+						unsubscribeConfig = s.runtime.SubscribeConfigYAML(func(payload []byte) error {
+							return writer.WriteRedisBulkString(payload)
+						})
+						return nil
+					},
+				},
+			}, args)
 		}
-		if errWrite := writeDispatchReply(writer, reply); errWrite != nil {
+		if errWrite := writer.WriteDispatchReply(reply); errWrite != nil {
 			log.Errorf("resp write reply error: %v", errWrite)
-			return
-		}
-		if !flush() {
 			return
 		}
 	}

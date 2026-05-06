@@ -31,6 +31,9 @@ const (
 type Callbacks struct {
 	// OnConfigReload is invoked after the config file is reloaded successfully.
 	OnConfigReload func(ctx context.Context, cfg *config.Config)
+	// OnConfigYAMLChange is invoked when the config file content changes (raw YAML bytes).
+	// It is called even if the updated config cannot be parsed successfully.
+	OnConfigYAMLChange func(ctx context.Context, data []byte)
 	// OnAuthChange is invoked when auth-dir content changes and should be reloaded.
 	OnAuthChange func(ctx context.Context)
 }
@@ -214,6 +217,10 @@ func (w *Watcher) reloadConfigIfChanged(ctx context.Context) {
 	}
 	w.lastConfigSum = sumHex
 	w.mu.Unlock()
+
+	if w.cb.OnConfigYAMLChange != nil {
+		w.cb.OnConfigYAMLChange(ctx, data)
+	}
 
 	cfg, errLoad := config.LoadConfigOptional(w.configPath, false)
 	if errLoad != nil {

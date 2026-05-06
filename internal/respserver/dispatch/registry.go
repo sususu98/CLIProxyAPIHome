@@ -12,6 +12,11 @@ import (
 
 type Env struct {
 	Runtime *home.Runtime
+	Conn    *ConnEnv
+}
+
+type ConnEnv struct {
+	SubscribeConfigYAML func() error
 }
 
 type ReplyKind int
