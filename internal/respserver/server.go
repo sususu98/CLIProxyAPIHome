@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ type Server struct {
 	addr     string
 	runtime  *home.Runtime
 	registry *dispatch.Registry
+	auth     *managementAuthenticator
 }
 
 func New(addr string, runtime *home.Runtime) *Server {
@@ -27,6 +29,7 @@ func New(addr string, runtime *home.Runtime) *Server {
 		addr:     strings.TrimSpace(addr),
 		runtime:  runtime,
 		registry: buildRegistry(),
+		auth:     newManagementAuthenticator(runtime),
 	}
 }
 
@@ -89,6 +92,8 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		ctx = context.Background()
 	}
 
+	clientIP, localClient := resolveRemoteIP(conn.RemoteAddr())
+	authed := false
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
 	defer func() {
@@ -116,6 +121,67 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		}
 		if len(args) == 0 {
 			_ = writeRedisError(writer, "ERR empty command")
+			if !flush() {
+				return
+			}
+			continue
+		}
+
+		cmd := strings.ToUpper(strings.TrimSpace(args[0]))
+
+		if cmd != "AUTH" && !authed {
+			if s.auth != nil {
+				_, statusCode, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, "")
+				if statusCode == http.StatusForbidden && strings.HasPrefix(errMsg, "IP banned due to too many failed attempts") {
+					_ = writeRedisError(writer, "ERR "+errMsg)
+				} else {
+					_ = writeRedisError(writer, "NOAUTH Authentication required.")
+				}
+			} else {
+				_ = writeRedisError(writer, "NOAUTH Authentication required.")
+			}
+			if !flush() {
+				return
+			}
+			continue
+		}
+
+		if cmd == "AUTH" {
+			password, ok := parseAuthPassword(args)
+			if !ok {
+				if s.auth != nil {
+					_, statusCode, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, "")
+					if statusCode == http.StatusForbidden && strings.HasPrefix(errMsg, "IP banned due to too many failed attempts") {
+						_ = writeRedisError(writer, "ERR "+errMsg)
+						if !flush() {
+							return
+						}
+						continue
+					}
+				}
+				_ = writeRedisError(writer, "ERR wrong number of arguments for 'auth' command")
+				if !flush() {
+					return
+				}
+				continue
+			}
+			if s.auth == nil {
+				_ = writeRedisError(writer, "ERR remote management disabled")
+				if !flush() {
+					return
+				}
+				continue
+			}
+			allowed, _, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, password)
+			if !allowed {
+				_ = writeRedisError(writer, "ERR "+errMsg)
+				if !flush() {
+					return
+				}
+				continue
+			}
+			authed = true
+			_ = writeRedisSimpleString(writer, "OK")
 			if !flush() {
 				return
 			}
