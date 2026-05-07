@@ -48,7 +48,7 @@ Dispatch request:
 Input JSON format:
 
 ```json
-{"type":"auth","model":"<requested-model>","headers":{"authorization":"Bearer ...","x-api-key":"..."}}
+{"type":"auth","model":"<requested-model>","session_id":"<optional-session-id>","headers":{"authorization":"Bearer ...","x-api-key":"..."}}
 ```
 
 Return (RESP bulk string, JSON):

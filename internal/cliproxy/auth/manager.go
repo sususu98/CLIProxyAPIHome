@@ -14,6 +14,7 @@ import (
 
 	internalconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/logging"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -320,6 +321,32 @@ func ensureRequestedModelMetadata(opts Options, requestedModel string) Options {
 	return opts
 }
 
+func isBuiltInSelector(selector Selector) bool {
+	switch selector.(type) {
+	case *FillFirstSelector, *RoundRobinSelector:
+		return true
+	default:
+		return false
+	}
+}
+
+func selectionArgForSelector(selector Selector, routeModel string) string {
+	if isBuiltInSelector(selector) {
+		return ""
+	}
+	return routeModel
+}
+
+func (m *Manager) useSchedulerFastPath() bool {
+	if m == nil || m.scheduler == nil {
+		return false
+	}
+	m.mu.RLock()
+	selector := m.selector
+	m.mu.RUnlock()
+	return isBuiltInSelector(selector)
+}
+
 func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedModel string, opts Options) (*DispatchDecision, error) {
 	if m == nil {
 		return nil, &Error{Code: "provider_not_found", Message: "manager is nil"}
@@ -334,14 +361,82 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 	routeModel := strings.TrimSpace(requestedModel)
 	opts = ensureRequestedModelMetadata(opts, routeModel)
 
+	if m.useSchedulerFastPath() {
+		tried := make(map[string]struct{})
+		for {
+			auth, providerKey, errPick := m.scheduler.pickMixed(ctx, providers, routeModel, opts, tried)
+			if errPick != nil {
+				return nil, errPick
+			}
+			if auth == nil {
+				return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+			}
+			tried[auth.ID] = struct{}{}
+
+			models := m.executionModelCandidates(auth, routeModel)
+			if len(models) == 0 {
+				continue
+			}
+			upstream := strings.TrimSpace(models[0])
+			if upstream == "" {
+				upstream = routeModel
+			}
+			return &DispatchDecision{
+				Auth:          auth.Clone(),
+				Provider:      providerKey,
+				UpstreamModel: upstream,
+				PooledModels:  false,
+			}, nil
+		}
+	}
+
+	normalizedProviders := normalizeProviderKeys(providers)
+	if len(normalizedProviders) == 0 {
+		return nil, &Error{Code: "provider_not_found", Message: "no provider supplied"}
+	}
+	providerForSelector := "mixed"
+	if len(normalizedProviders) == 1 {
+		providerForSelector = normalizedProviders[0]
+	}
+	routeKey := canonicalModelKey(routeModel)
+	registryRef := registry.GetGlobalRegistry()
+
 	tried := make(map[string]struct{})
 	for {
-		auth, providerKey, errPick := m.scheduler.pickMixed(ctx, providers, routeModel, opts, tried)
+		m.mu.RLock()
+		selector := m.selector
+		candidates := make([]*Auth, 0, len(m.auths))
+		for _, candidate := range m.auths {
+			if candidate == nil || candidate.Disabled {
+				continue
+			}
+			if _, used := tried[candidate.ID]; used {
+				continue
+			}
+			providerKey := strings.ToLower(strings.TrimSpace(candidate.Provider))
+			if providerKey == "" {
+				continue
+			}
+			if !containsProvider(normalizedProviders, providerKey) {
+				continue
+			}
+			if routeKey != "" && (registryRef == nil || !registryRef.ClientSupportsModel(candidate.ID, routeKey)) {
+				continue
+			}
+			candidates = append(candidates, candidate)
+		}
+		m.mu.RUnlock()
+
+		if len(candidates) == 0 {
+			return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+		}
+
+		auth, errPick := selector.Pick(ctx, providerForSelector, selectionArgForSelector(selector, routeModel), opts, candidates)
 		if errPick != nil {
 			return nil, errPick
 		}
 		if auth == nil {
-			return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+			return nil, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
 		}
 		tried[auth.ID] = struct{}{}
 
@@ -352,6 +447,10 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 		upstream := strings.TrimSpace(models[0])
 		if upstream == "" {
 			upstream = routeModel
+		}
+		providerKey := strings.ToLower(strings.TrimSpace(auth.Provider))
+		if providerKey == "" {
+			providerKey = providerForSelector
 		}
 		return &DispatchDecision{
 			Auth:          auth.Clone(),

@@ -275,6 +275,9 @@ func (r *Runtime) Dispatch(ctx context.Context, reqModel string, headers http.He
 	}
 
 	opts := coreauth.Options{}
+	if headers != nil {
+		opts.Headers = headers.Clone()
+	}
 	decision, errDispatch := r.coreManager.Dispatch(ctx, providers, reqModel, opts)
 	if errDispatch != nil {
 		return nil, errDispatch

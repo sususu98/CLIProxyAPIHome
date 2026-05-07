@@ -82,6 +82,10 @@ func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*hom
 	}
 
 	headers := parseHeaders(jsonArg)
+	sessionID := strings.TrimSpace(gjson.Get(jsonArg, "session_id").String())
+	if sessionID != "" && strings.TrimSpace(headers.Get("X-Session-ID")) == "" {
+		headers.Set("X-Session-ID", sessionID)
+	}
 	_, authErr := env.Runtime.Authenticate(ctx, headers)
 	if authErr != nil {
 		if access.IsAuthErrorCode(authErr, access.AuthErrorCodeNoCredentials) {
