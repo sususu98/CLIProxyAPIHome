@@ -4,7 +4,7 @@ This project is a central scheduling/dispatch service for **CLIProxyAPI (CPA)** 
 CPA can send a request (model + full HTTP headers) to this service, and receive back:
 
 - The resolved upstream model name (after model-alias resolution)
-- The selected credential (either `access_token` **or** `base_url` + `api_key`)
+- The selected credential snapshot (`auth` JSON payload)
 
 ## Build
 
@@ -61,7 +61,6 @@ Return (RESP bulk string, JSON):
 Notes:
 
 - Returned `auth` is sanitized for downstream CPA nodes: `refresh_token` and Vertex `service_account` are removed.
-- Legacy `{"type":"access_token",...}` is still supported and returns the minimal credential shape.
 
 ### 3) `LPRUSH usage <json>` (also accepts `LPUSH`)
 

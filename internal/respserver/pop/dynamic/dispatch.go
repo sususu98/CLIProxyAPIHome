@@ -14,43 +14,15 @@ import (
 )
 
 const (
-	typeAccessToken = "access_token"
-	typeAuth        = "auth"
+	typeAuth = "auth"
 )
 
 func Register(reg *dispatch.Registry) {
 	if reg == nil {
 		return
 	}
-	_ = reg.RegisterDynamic("RPOP", typeAccessToken, handleAccessToken)
 	_ = reg.RegisterDynamic("RPOP", typeAuth, handleAuth)
-	_ = reg.SetDynamicDefault("RPOP", handleAccessToken)
-}
-
-func handleAccessToken(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
-	result, errReply := dispatchRequest(ctx, env, args)
-	if errReply != nil {
-		return *errReply
-	}
-	if result == nil {
-		return dispatch.BulkString([]byte(buildErrorJSON("no dispatch result")))
-	}
-
-	out := "{}"
-	out, _ = sjson.Set(out, "model", strings.TrimSpace(result.Model))
-
-	if strings.TrimSpace(result.AccessToken) != "" {
-		out, _ = sjson.Set(out, "access_token", strings.TrimSpace(result.AccessToken))
-		return dispatch.BulkString([]byte(out))
-	}
-
-	if strings.TrimSpace(result.APIKey) == "" {
-		return dispatch.BulkString([]byte(buildErrorJSON("no credential available")))
-	}
-
-	out, _ = sjson.Set(out, "base_url", strings.TrimSpace(result.BaseURL))
-	out, _ = sjson.Set(out, "api_key", strings.TrimSpace(result.APIKey))
-	return dispatch.BulkString([]byte(out))
+	_ = reg.SetDynamicDefault("RPOP", handleAuth)
 }
 
 func handleAuth(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
