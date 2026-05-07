@@ -64,7 +64,7 @@ Notes:
 
 ### 3) `LPRUSH usage <json>` (also accepts `LPUSH`)
 
-Accepts a usage record JSON blob. Currently discarded.
+Accepts a usage record JSON blob and appends it to `./logs/usage.log` (one JSON per line).
 
 - Returns: `OK`
 

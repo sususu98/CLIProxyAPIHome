@@ -2,11 +2,18 @@ package push
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
+
+var usageLogMu sync.Mutex
 
 func handleUsage(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
 	_ = ctx
@@ -25,6 +32,50 @@ func handleUsage(ctx context.Context, env dispatch.Env, args []string) dispatch.
 		return dispatch.Err("invalid usage json")
 	}
 
-	// Intentionally dropped (no persistence yet).
+	if errAppend := appendUsageLog(payload); errAppend != nil {
+		log.Errorf("usage log write error: %v", errAppend)
+		return dispatch.Err("usage log write failed")
+	}
+
 	return dispatch.SimpleString("OK")
+}
+
+func appendUsageLog(payload string) error {
+	if strings.TrimSpace(payload) == "" {
+		return fmt.Errorf("empty payload")
+	}
+
+	usageLogMu.Lock()
+	defer usageLogMu.Unlock()
+
+	logDir := "logs"
+	if errMk := os.MkdirAll(logDir, 0o755); errMk != nil {
+		return fmt.Errorf("ensure logs dir: %w", errMk)
+	}
+
+	filePath := filepath.Join(logDir, "usage.log")
+	f, errOpen := os.OpenFile(filePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if errOpen != nil {
+		return fmt.Errorf("open usage log: %w", errOpen)
+	}
+	defer func() {
+		if errClose := f.Close(); errClose != nil {
+			log.Errorf("usage log close error: %v", errClose)
+		}
+	}()
+
+	line := payload
+	if !strings.HasSuffix(line, "\n") {
+		line += "\n"
+	}
+
+	for len(line) > 0 {
+		n, errWrite := f.WriteString(line)
+		if errWrite != nil {
+			return fmt.Errorf("write usage log: %w", errWrite)
+		}
+		line = line[n:]
+	}
+
+	return nil
 }
