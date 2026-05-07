@@ -48,10 +48,16 @@ func handleAuth(ctx context.Context, env dispatch.Env, args []string) dispatch.R
 		return dispatch.BulkString([]byte(buildErrorJSON(errMarshal.Error())))
 	}
 
+	authIndex := strings.TrimSpace(auth.ID)
+	authJSON, errSetAuthIndex := sjson.SetBytes(authJSON, "auth_index", authIndex)
+	if errSetAuthIndex != nil {
+		return dispatch.BulkString([]byte(buildErrorJSON(errSetAuthIndex.Error())))
+	}
+
 	out := []byte("{}")
 	out, _ = sjson.SetBytes(out, "model", strings.TrimSpace(result.Model))
 	out, _ = sjson.SetBytes(out, "provider", strings.TrimSpace(result.Provider))
-	out, _ = sjson.SetBytes(out, "auth_index", strings.TrimSpace(auth.ID))
+	out, _ = sjson.SetBytes(out, "auth_index", authIndex)
 	out, _ = sjson.SetRawBytes(out, "auth", authJSON)
 	return dispatch.BulkString(out)
 }
