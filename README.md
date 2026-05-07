@@ -101,7 +101,9 @@ Return (RESP bulk string, YAML):
 ### 7) `SUBSCRIBE config`
 
 Subscribes the current TCP connection to config file changes.
-Whenever the config file content changes, the server pushes the full raw YAML config as a RESP bulk string.
+Whenever the config file content changes, the server pushes a Pub/Sub `message` with the full raw YAML config (RESP array reply).
 
-- Returns: `OK`
-- Push message: `<config.yaml bytes>` (RESP bulk string)
+- Subscribe confirmation (RESP array reply):
+  - `["subscribe","config",1]`
+- Push message (RESP array reply):
+  - `["message","config","<config.yaml bytes>"]`

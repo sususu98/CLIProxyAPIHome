@@ -17,9 +17,14 @@ func handleConfig(ctx context.Context, env dispatch.Env, args []string) dispatch
 		return dispatch.Err("subscribe not supported")
 	}
 
-	if errSub := env.Conn.SubscribeConfigYAML(); errSub != nil {
+	count, errSub := env.Conn.SubscribeConfigYAML()
+	if errSub != nil {
 		return dispatch.Err(errSub.Error())
 	}
 
-	return dispatch.SimpleString("OK")
+	return dispatch.Array(
+		dispatch.BulkString([]byte("subscribe")),
+		dispatch.BulkString([]byte("config")),
+		dispatch.Integer(count),
+	)
 }

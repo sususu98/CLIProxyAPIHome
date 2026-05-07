@@ -168,17 +168,32 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			reply = s.registry.Execute(ctx, dispatch.Env{
 				Runtime: s.runtime,
 				Conn: &dispatch.ConnEnv{
-					SubscribeConfigYAML: func() error {
+					SubscribeConfigYAML: func() (int64, error) {
 						if s.runtime == nil {
-							return fmt.Errorf("runtime not ready")
+							return 0, fmt.Errorf("runtime not ready")
 						}
 						if unsubscribeConfig != nil {
-							return nil
+							return 1, nil
 						}
 						unsubscribeConfig = s.runtime.SubscribeConfigYAML(func(payload []byte) error {
-							return writer.WriteRedisBulkString(payload)
+							return writer.WriteDispatchReply(dispatch.Array(
+								dispatch.BulkString([]byte("message")),
+								dispatch.BulkString([]byte("config")),
+								dispatch.BulkString(payload),
+							))
 						})
-						return nil
+						return 1, nil
+					},
+					UnsubscribeConfigYAML: func() (int64, error) {
+						if unsubscribeConfig == nil {
+							return 0, nil
+						}
+						unsubscribeConfig()
+						unsubscribeConfig = nil
+						return 0, nil
+					},
+					IsSubscribed: func() bool {
+						return unsubscribeConfig != nil
 					},
 				},
 			}, args)
@@ -302,5 +317,13 @@ func writeRedisBulkString(writer *bufio.Writer, payload []byte) error {
 		return errWrite
 	}
 	_, errWrite := writer.WriteString("\r\n")
+	return errWrite
+}
+
+func writeRedisInteger(writer *bufio.Writer, value int64) error {
+	if writer == nil {
+		return net.ErrClosed
+	}
+	_, errWrite := writer.WriteString(":" + strconv.FormatInt(value, 10) + "\r\n")
 	return errWrite
 }

@@ -16,7 +16,9 @@ type Env struct {
 }
 
 type ConnEnv struct {
-	SubscribeConfigYAML func() error
+	SubscribeConfigYAML   func() (int64, error)
+	UnsubscribeConfigYAML func() (int64, error)
+	IsSubscribed          func() bool
 }
 
 type ReplyKind int
@@ -25,6 +27,8 @@ const (
 	ReplyKindSimpleString ReplyKind = iota
 	ReplyKindBulkString
 	ReplyKindRedisError
+	ReplyKindInteger
+	ReplyKindArray
 )
 
 type Reply struct {
@@ -33,6 +37,8 @@ type Reply struct {
 	SimpleString string
 	BulkString   []byte
 	RedisError   string
+	Integer      int64
+	Array        []Reply
 }
 
 func SimpleString(value string) Reply {
@@ -46,6 +52,20 @@ func BulkString(payload []byte) Reply {
 	return Reply{
 		Kind:       ReplyKindBulkString,
 		BulkString: payload,
+	}
+}
+
+func Integer(value int64) Reply {
+	return Reply{
+		Kind:    ReplyKindInteger,
+		Integer: value,
+	}
+}
+
+func Array(elements ...Reply) Reply {
+	return Reply{
+		Kind:  ReplyKindArray,
+		Array: elements,
 	}
 }
 
