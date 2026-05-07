@@ -12,14 +12,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/access"
 	configaccess "github.com/router-for-me/CLIProxyAPIHome/internal/access/config_access"
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
-	sdkaccess "github.com/router-for-me/CLIProxyAPIHome/sdk/access"
-	sdkAuth "github.com/router-for-me/CLIProxyAPIHome/sdk/auth"
-	coreauth "github.com/router-for-me/CLIProxyAPIHome/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
@@ -35,7 +34,7 @@ type Runtime struct {
 	nextConfigSubID uint64
 	configSubs      map[uint64]func(payload []byte) error
 
-	accessManager *sdkaccess.Manager
+	accessManager *access.Manager
 	coreManager   *coreauth.Manager
 
 	cancel context.CancelFunc
@@ -56,7 +55,7 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 		cfg.AuthDir = resolvedAuthDir
 	}
 
-	store := sdkAuth.GetTokenStore()
+	store := coreauth.GetTokenStore()
 	if dirSetter, ok := store.(interface{ SetBaseDir(string) }); ok {
 		dirSetter.SetBaseDir(cfg.AuthDir)
 	}
@@ -67,9 +66,9 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 	coreManager.SetConfig(cfg)
 	coreManager.SetOAuthModelAlias(cfg.OAuthModelAlias)
 
-	accessManager := sdkaccess.NewManager()
+	accessManager := access.NewManager()
 	configaccess.Register(&cfg.SDKConfig)
-	accessManager.SetProviders(sdkaccess.RegisteredProviders())
+	accessManager.SetProviders(access.RegisteredProviders())
 
 	return &Runtime{
 		cfg:           cfg,
@@ -163,14 +162,14 @@ func (r *Runtime) CoreManager() *coreauth.Manager {
 	return r.coreManager
 }
 
-func (r *Runtime) AccessManager() *sdkaccess.Manager {
+func (r *Runtime) AccessManager() *access.Manager {
 	if r == nil {
 		return nil
 	}
 	return r.accessManager
 }
 
-func (r *Runtime) Authenticate(ctx context.Context, headers http.Header) (*sdkaccess.Result, *sdkaccess.AuthError) {
+func (r *Runtime) Authenticate(ctx context.Context, headers http.Header) (*access.Result, *access.AuthError) {
 	return r.authenticateRequest(ctx, headers)
 }
 
@@ -422,7 +421,7 @@ func (r *Runtime) applyAuthFile(ctx context.Context, fullPath string, data []byt
 	}
 }
 
-func (r *Runtime) authenticateRequest(ctx context.Context, headers http.Header) (*sdkaccess.Result, *sdkaccess.AuthError) {
+func (r *Runtime) authenticateRequest(ctx context.Context, headers http.Header) (*access.Result, *access.AuthError) {
 	if r == nil || r.accessManager == nil {
 		return nil, nil
 	}
@@ -432,7 +431,7 @@ func (r *Runtime) authenticateRequest(ctx context.Context, headers http.Header) 
 
 	req, errReq := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/", nil)
 	if errReq != nil {
-		return nil, sdkaccess.NewNoCredentialsError()
+		return nil, access.NewNoCredentialsError()
 	}
 	if headers != nil {
 		req.Header = headers.Clone()

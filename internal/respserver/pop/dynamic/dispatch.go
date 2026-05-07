@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/access"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
-	sdkaccess "github.com/router-for-me/CLIProxyAPIHome/sdk/access"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -112,11 +112,11 @@ func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*hom
 	headers := parseHeaders(jsonArg)
 	_, authErr := env.Runtime.Authenticate(ctx, headers)
 	if authErr != nil {
-		if sdkaccess.IsAuthErrorCode(authErr, sdkaccess.AuthErrorCodeNoCredentials) {
+		if access.IsAuthErrorCode(authErr, access.AuthErrorCodeNoCredentials) {
 			reply := dispatch.BulkString([]byte(buildErrorJSON("missing required credential headers")))
 			return nil, &reply
 		}
-		if sdkaccess.IsAuthErrorCode(authErr, sdkaccess.AuthErrorCodeInvalidCredential) {
+		if access.IsAuthErrorCode(authErr, access.AuthErrorCodeInvalidCredential) {
 			reply := dispatch.BulkString([]byte(buildErrorJSON("invalid api key")))
 			return nil, &reply
 		}

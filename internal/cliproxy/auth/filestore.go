@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	cliproxyauth "github.com/router-for-me/CLIProxyAPIHome/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -40,7 +39,7 @@ func (s *FileTokenStore) SetBaseDir(dir string) {
 }
 
 // Save persists token storage and metadata to the resolved auth file path.
-func (s *FileTokenStore) Save(ctx context.Context, auth *cliproxyauth.Auth) (string, error) {
+func (s *FileTokenStore) Save(ctx context.Context, auth *Auth) (string, error) {
 	if auth == nil {
 		return "", fmt.Errorf("auth filestore: auth is nil")
 	}
@@ -124,12 +123,12 @@ func (s *FileTokenStore) Save(ctx context.Context, auth *cliproxyauth.Auth) (str
 }
 
 // List enumerates all auth JSON files under the configured directory.
-func (s *FileTokenStore) List(ctx context.Context) ([]*cliproxyauth.Auth, error) {
+func (s *FileTokenStore) List(ctx context.Context) ([]*Auth, error) {
 	dir := s.baseDirSnapshot()
 	if dir == "" {
 		return nil, fmt.Errorf("auth filestore: directory not configured")
 	}
-	entries := make([]*cliproxyauth.Auth, 0)
+	entries := make([]*Auth, 0)
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -182,7 +181,7 @@ func (s *FileTokenStore) resolveDeletePath(id string) (string, error) {
 	return filepath.Join(dir, id), nil
 }
 
-func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth, error) {
+func (s *FileTokenStore) readAuthFile(path, baseDir string) (*Auth, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read file: %w", err)
@@ -204,11 +203,11 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth,
 	}
 	id := s.idFor(path, baseDir)
 	disabled, _ := metadata["disabled"].(bool)
-	status := cliproxyauth.StatusActive
+	status := StatusActive
 	if disabled {
-		status = cliproxyauth.StatusDisabled
+		status = StatusDisabled
 	}
-	auth := &cliproxyauth.Auth{
+	auth := &Auth{
 		ID:               id,
 		Provider:         provider,
 		FileName:         id,
@@ -225,7 +224,7 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth,
 	if email, ok := metadata["email"].(string); ok && email != "" {
 		auth.Attributes["email"] = email
 	}
-	cliproxyauth.ApplyCustomHeadersFromMetadata(auth)
+	ApplyCustomHeadersFromMetadata(auth)
 	return auth, nil
 }
 
@@ -243,7 +242,7 @@ func (s *FileTokenStore) idFor(path, baseDir string) string {
 	return id
 }
 
-func (s *FileTokenStore) resolveAuthPath(auth *cliproxyauth.Auth) (string, error) {
+func (s *FileTokenStore) resolveAuthPath(auth *Auth) (string, error) {
 	if auth == nil {
 		return "", fmt.Errorf("auth filestore: auth is nil")
 	}

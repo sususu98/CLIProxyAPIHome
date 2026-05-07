@@ -6,12 +6,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/access"
 	configaccess "github.com/router-for-me/CLIProxyAPIHome/internal/access/config_access"
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher"
-	sdkaccess "github.com/router-for-me/CLIProxyAPIHome/sdk/access"
-	sdkAuth "github.com/router-for-me/CLIProxyAPIHome/sdk/auth"
-	coreauth "github.com/router-for-me/CLIProxyAPIHome/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -78,7 +77,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 		log.Infof("log level changed from %s to %s (debug=%t)", currentLevel, nextLevel, cfg.Debug)
 	}
 
-	store := sdkAuth.GetTokenStore()
+	store := coreauth.GetTokenStore()
 	if dirSetter, ok := store.(interface{ SetBaseDir(string) }); ok {
 		dirSetter.SetBaseDir(cfg.AuthDir)
 	}
@@ -91,7 +90,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 
 	configaccess.Register(&cfg.SDKConfig)
 	if r.accessManager != nil {
-		r.accessManager.SetProviders(sdkaccess.RegisteredProviders())
+		r.accessManager.SetProviders(access.RegisteredProviders())
 	}
 
 	if strings.TrimSpace(cfg.AuthDir) != "" {

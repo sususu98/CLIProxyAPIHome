@@ -3,8 +3,8 @@ package home
 import (
 	"strings"
 
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/runtime/geminicli"
-	coreauth "github.com/router-for-me/CLIProxyAPIHome/sdk/cliproxy/auth"
 )
 
 // SanitizeAuthForDownstream removes refresh-capable credentials from the auth payload

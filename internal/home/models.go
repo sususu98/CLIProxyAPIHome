@@ -4,9 +4,9 @@ import (
 	"strings"
 	"time"
 
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
-	coreauth "github.com/router-for-me/CLIProxyAPIHome/sdk/cliproxy/auth"
 )
 
 type ModelInfo = registry.ModelInfo

@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/diff"
-	coreauth "github.com/router-for-me/CLIProxyAPIHome/sdk/cliproxy/auth"
 )
 
 // ConfigSynthesizer generates Auth entries from configuration API keys.

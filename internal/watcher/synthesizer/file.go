@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/codex"
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/runtime/geminicli"
-	coreauth "github.com/router-for-me/CLIProxyAPIHome/sdk/cliproxy/auth"
 )
 
 // FileSynthesizer generates Auth entries from OAuth JSON files.

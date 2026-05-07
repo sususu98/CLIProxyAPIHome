@@ -2,24 +2,22 @@ package auth
 
 import (
 	"sync"
-
-	coreauth "github.com/router-for-me/CLIProxyAPIHome/sdk/cliproxy/auth"
 )
 
 var (
 	storeMu         sync.RWMutex
-	registeredStore coreauth.Store
+	registeredStore Store
 )
 
 // RegisterTokenStore sets the global token store used by the authentication helpers.
-func RegisterTokenStore(store coreauth.Store) {
+func RegisterTokenStore(store Store) {
 	storeMu.Lock()
 	registeredStore = store
 	storeMu.Unlock()
 }
 
 // GetTokenStore returns the globally registered token store.
-func GetTokenStore() coreauth.Store {
+func GetTokenStore() Store {
 	storeMu.RLock()
 	s := registeredStore
 	storeMu.RUnlock()

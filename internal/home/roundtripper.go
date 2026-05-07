@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	coreauth "github.com/router-for-me/CLIProxyAPIHome/sdk/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPIHome/sdk/proxyutil"
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/proxyutil"
 	log "github.com/sirupsen/logrus"
 )
 

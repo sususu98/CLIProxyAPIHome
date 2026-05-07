@@ -2,8 +2,6 @@ package auth
 
 import (
 	"time"
-
-	cliproxyauth "github.com/router-for-me/CLIProxyAPIHome/sdk/cliproxy/auth"
 )
 
 var (
@@ -23,7 +21,7 @@ func init() {
 }
 
 func registerRefreshLead(provider string, lead *time.Duration) {
-	cliproxyauth.RegisterRefreshLeadProvider(provider, func() *time.Duration {
+	RegisterRefreshLeadProvider(provider, func() *time.Duration {
 		if lead == nil || *lead <= 0 {
 			return nil
 		}
