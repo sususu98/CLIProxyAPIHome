@@ -122,6 +122,32 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 
 		cmd := strings.ToUpper(strings.TrimSpace(args[0]))
 
+		if cmd == "PING" {
+			switch len(args) {
+			case 1:
+				if unsubscribeConfig != nil {
+					_ = writer.WriteDispatchReply(dispatch.Array(
+						dispatch.BulkString([]byte("pong")),
+						dispatch.BulkString([]byte{}),
+					))
+				} else {
+					_ = writer.WriteRedisSimpleString("PONG")
+				}
+			case 2:
+				if unsubscribeConfig != nil {
+					_ = writer.WriteDispatchReply(dispatch.Array(
+						dispatch.BulkString([]byte("pong")),
+						dispatch.BulkString([]byte(args[1])),
+					))
+				} else {
+					_ = writer.WriteRedisBulkString([]byte(args[1]))
+				}
+			default:
+				_ = writer.WriteRedisError("ERR wrong number of arguments for 'ping' command")
+			}
+			continue
+		}
+
 		if cmd != "AUTH" && !authed {
 			if s.auth != nil {
 				_, statusCode, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, "")
