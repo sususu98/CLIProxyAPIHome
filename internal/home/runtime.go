@@ -16,6 +16,7 @@ import (
 	configaccess "github.com/router-for-me/CLIProxyAPIHome/internal/access/config_access"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	homeerrors "github.com/router-for-me/CLIProxyAPIHome/internal/errors"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
@@ -271,7 +272,10 @@ func (r *Runtime) Dispatch(ctx context.Context, reqModel string, headers http.He
 		if trimmedModel == "" {
 			trimmedModel = "requested model"
 		}
-		return nil, &coreauth.Error{Code: "model_not_found", Message: fmt.Sprintf("model %s does not exist", trimmedModel)}
+		return nil, &coreauth.Error{
+			Code:    homeerrors.TypeModelNotFound,
+			Message: fmt.Sprintf(homeerrors.MessageModelDoesNotExistFmt, trimmedModel),
+		}
 	}
 
 	opts := coreauth.Options{}

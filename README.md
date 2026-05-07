@@ -56,7 +56,7 @@ Return (RESP bulk string, JSON):
 - Success:
   - `{"model":"<upstream-model>","provider":"<provider>","auth_index":"<auth-id>","auth":{...}}`
 - Error:
-  - `{"error":{"message":"..."}}`
+  - `{"error":{"type":"...","message":"..."}}`
 
 Notes:
 
@@ -87,7 +87,7 @@ Return (RESP bulk string, JSON):
 - Success:
   - `{"auth_index":"<auth-id>","auth":{...}}`
 - Error:
-  - `{"error":{"message":"..."}}`
+  - `{"error":{"type":"...","message":"..."}}`
 
 ### 6) `GET config`
 

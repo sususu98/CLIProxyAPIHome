@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/access"
+	homeerrors "github.com/router-for-me/CLIProxyAPIHome/internal/errors"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
 	"github.com/tidwall/gjson"
@@ -31,15 +32,15 @@ func handleAuth(ctx context.Context, env dispatch.Env, args []string) dispatch.R
 		return *errReply
 	}
 	if result == nil {
-		return dispatch.BulkString([]byte(buildErrorJSON("no dispatch result")))
+		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageNoDispatchResult)))
 	}
 	if result.Auth == nil {
-		return dispatch.BulkString([]byte(buildErrorJSON("no auth available")))
+		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageNoAuthAvailable)))
 	}
 
 	auth := home.SanitizeAuthForDownstream(result.Auth)
 	if auth == nil {
-		return dispatch.BulkString([]byte(buildErrorJSON("no auth available")))
+		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageNoAuthAvailable)))
 	}
 
 	authJSON, errMarshal := json.Marshal(auth)
@@ -57,7 +58,7 @@ func handleAuth(ctx context.Context, env dispatch.Env, args []string) dispatch.R
 
 func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*home.DispatchResult, *dispatch.Reply) {
 	if env.Runtime == nil {
-		reply := dispatch.BulkString([]byte(buildErrorJSON("runtime not ready")))
+		reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageRuntimeNotReady)))
 		return nil, &reply
 	}
 	if ctx == nil {
@@ -66,18 +67,18 @@ func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*hom
 
 	jsonArg, ok := dispatch.ExtractJSONArgument(args, 1)
 	if !ok {
-		reply := dispatch.BulkString([]byte(buildErrorJSON("wrong number of arguments for 'rpop' command")))
+		reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageWrongNumberOfArgumentsRPOP)))
 		return nil, &reply
 	}
 	jsonArg = strings.TrimSpace(jsonArg)
 	if jsonArg == "" || !gjson.Valid(jsonArg) {
-		reply := dispatch.BulkString([]byte(buildErrorJSON("invalid request json")))
+		reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageInvalidRequestJSON)))
 		return nil, &reply
 	}
 
 	model := strings.TrimSpace(gjson.Get(jsonArg, "model").String())
 	if model == "" {
-		reply := dispatch.BulkString([]byte(buildErrorJSON("missing model")))
+		reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageMissingModel)))
 		return nil, &reply
 	}
 
@@ -89,11 +90,11 @@ func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*hom
 	_, authErr := env.Runtime.Authenticate(ctx, headers)
 	if authErr != nil {
 		if access.IsAuthErrorCode(authErr, access.AuthErrorCodeNoCredentials) {
-			reply := dispatch.BulkString([]byte(buildErrorJSON("missing required credential headers")))
+			reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageMissingRequiredCredentialHeaders)))
 			return nil, &reply
 		}
 		if access.IsAuthErrorCode(authErr, access.AuthErrorCodeInvalidCredential) {
-			reply := dispatch.BulkString([]byte(buildErrorJSON("invalid api key")))
+			reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageInvalidAPIKey)))
 			return nil, &reply
 		}
 		reply := dispatch.BulkString([]byte(buildErrorJSON(authErr.Error())))
@@ -149,11 +150,9 @@ func parseHeaders(jsonArg string) http.Header {
 }
 
 func buildErrorJSON(message string) string {
-	message = strings.TrimSpace(message)
-	if message == "" {
-		message = "error"
-	}
+	errorType, errorMessage := homeerrors.SplitRedisErrorMessage(message)
 	out := "{}"
-	out, _ = sjson.Set(out, "error.message", message)
+	out, _ = sjson.Set(out, "error.type", errorType)
+	out, _ = sjson.Set(out, "error.message", errorMessage)
 	return out
 }
