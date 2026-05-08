@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
 	log "github.com/sirupsen/logrus"
 )
@@ -96,11 +97,17 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 	authed := false
 	reader := bufio.NewReader(conn)
 	writer := newSafeWriter(bufio.NewWriter(conn))
+	connectedAt := time.Now()
+	addedNode := false
 	var unsubscribeConfig func()
 	defer func() {
 		if unsubscribeConfig != nil {
 			unsubscribeConfig()
 			unsubscribeConfig = nil
+		}
+		if addedNode {
+			node.GlobalRegistry().Remove(clientIP)
+			addedNode = false
 		}
 		if errClose := conn.Close(); errClose != nil {
 			log.Errorf("resp connection close error: %v", errClose)
@@ -201,6 +208,10 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 						if unsubscribeConfig != nil {
 							return 1, nil
 						}
+						if !addedNode {
+							node.GlobalRegistry().Add(clientIP, connectedAt)
+							addedNode = true
+						}
 						unsubscribeConfig = s.runtime.SubscribeConfigYAML(func(payload []byte) error {
 							return writer.WriteDispatchReply(dispatch.Array(
 								dispatch.BulkString([]byte("message")),
@@ -216,6 +227,10 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 						}
 						unsubscribeConfig()
 						unsubscribeConfig = nil
+						if addedNode {
+							node.GlobalRegistry().Remove(clientIP)
+							addedNode = false
+						}
 						return 0, nil
 					},
 					IsSubscribed: func() bool {
