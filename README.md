@@ -66,7 +66,7 @@ Notes:
 
 Accepts a usage record JSON blob and appends it to `./logs/usage.log` (one JSON per line).
 
-- Returns: `OK`
+- Returns: integer `1`
 
 ### 4) `GET models`
 

@@ -37,7 +37,11 @@ func handleUsage(ctx context.Context, env dispatch.Env, args []string) dispatch.
 		return dispatch.Err("usage log write failed")
 	}
 
-	return dispatch.SimpleString("OK")
+	// Redis' LPUSH returns the length of the list after the push (integer reply).
+	// CPA forwards usage via go-redis LPush which expects an integer, not "+OK".
+	// This server doesn't maintain a real list, so always return 1 as a stable
+	// integer reply and avoid client retries.
+	return dispatch.Integer(1)
 }
 
 func appendUsageLog(payload string) error {
