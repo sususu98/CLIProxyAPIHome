@@ -27,7 +27,7 @@ func Register(reg *dispatch.Registry) {
 }
 
 func handleAuth(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
-	result, errReply := dispatchRequest(ctx, env, args)
+	result, userAPIKey, errReply := dispatchRequest(ctx, env, args)
 	if errReply != nil {
 		return *errReply
 	}
@@ -58,14 +58,15 @@ func handleAuth(ctx context.Context, env dispatch.Env, args []string) dispatch.R
 	out, _ = sjson.SetBytes(out, "model", strings.TrimSpace(result.Model))
 	out, _ = sjson.SetBytes(out, "provider", strings.TrimSpace(result.Provider))
 	out, _ = sjson.SetBytes(out, "auth_index", authIndex)
+	out, _ = sjson.SetBytes(out, "user_api_key", strings.TrimSpace(userAPIKey))
 	out, _ = sjson.SetRawBytes(out, "auth", authJSON)
 	return dispatch.BulkString(out)
 }
 
-func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*home.DispatchResult, *dispatch.Reply) {
+func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*home.DispatchResult, string, *dispatch.Reply) {
 	if env.Runtime == nil {
 		reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageRuntimeNotReady)))
-		return nil, &reply
+		return nil, "", &reply
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -74,18 +75,18 @@ func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*hom
 	jsonArg, ok := dispatch.ExtractJSONArgument(args, 1)
 	if !ok {
 		reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageWrongNumberOfArgumentsRPOP)))
-		return nil, &reply
+		return nil, "", &reply
 	}
 	jsonArg = strings.TrimSpace(jsonArg)
 	if jsonArg == "" || !gjson.Valid(jsonArg) {
 		reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageInvalidRequestJSON)))
-		return nil, &reply
+		return nil, "", &reply
 	}
 
 	model := strings.TrimSpace(gjson.Get(jsonArg, "model").String())
 	if model == "" {
 		reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageMissingModel)))
-		return nil, &reply
+		return nil, "", &reply
 	}
 
 	headers := parseHeaders(jsonArg)
@@ -93,26 +94,31 @@ func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*hom
 	if sessionID != "" && strings.TrimSpace(headers.Get("X-Session-ID")) == "" {
 		headers.Set("X-Session-ID", sessionID)
 	}
-	_, authErr := env.Runtime.Authenticate(ctx, headers)
+	authRes, authErr := env.Runtime.Authenticate(ctx, headers)
 	if authErr != nil {
 		if access.IsAuthErrorCode(authErr, access.AuthErrorCodeNoCredentials) {
 			reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageMissingRequiredCredentialHeaders)))
-			return nil, &reply
+			return nil, "", &reply
 		}
 		if access.IsAuthErrorCode(authErr, access.AuthErrorCodeInvalidCredential) {
 			reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageInvalidAPIKey)))
-			return nil, &reply
+			return nil, "", &reply
 		}
 		reply := dispatch.BulkString([]byte(buildErrorJSON(authErr.Error())))
-		return nil, &reply
+		return nil, "", &reply
 	}
 
 	result, errDispatch := env.Runtime.Dispatch(ctx, model, headers)
 	if errDispatch != nil {
 		reply := dispatch.BulkString([]byte(buildErrorJSON(errDispatch.Error())))
-		return nil, &reply
+		return nil, "", &reply
 	}
-	return result, nil
+
+	userAPIKey := ""
+	if authRes != nil {
+		userAPIKey = authRes.Principal
+	}
+	return result, userAPIKey, nil
 }
 
 func parseHeaders(jsonArg string) http.Header {
