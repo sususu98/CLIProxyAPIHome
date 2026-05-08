@@ -80,11 +80,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			continue
 		}
 
-		go s.handleConn(ctx, conn)
+		go s.HandleConn(ctx, conn)
 	}
 }
 
-func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
+func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 	if s == nil || conn == nil {
 		return
 	}

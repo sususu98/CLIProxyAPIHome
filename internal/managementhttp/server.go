@@ -1,0 +1,392 @@
+package managementhttp
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	cpasdkapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/api"
+	cpasdkauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
+	cpacoreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	cpaconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
+	log "github.com/sirupsen/logrus"
+)
+
+type RouteKey struct {
+	Method string
+	Path   string
+}
+
+type RouteRegistry struct {
+	routes map[RouteKey]gin.HandlerFunc
+}
+
+func newRouteRegistry() *RouteRegistry {
+	return &RouteRegistry{
+		routes: make(map[RouteKey]gin.HandlerFunc),
+	}
+}
+
+func (r *RouteRegistry) Set(method, path string, handler gin.HandlerFunc) {
+	if r == nil || handler == nil {
+		return
+	}
+	method = strings.ToUpper(strings.TrimSpace(method))
+	path = strings.TrimSpace(path)
+	if method == "" || path == "" {
+		return
+	}
+	r.routes[RouteKey{Method: method, Path: path}] = handler
+}
+
+func (r *RouteRegistry) Delete(method, path string) {
+	if r == nil {
+		return
+	}
+	method = strings.ToUpper(strings.TrimSpace(method))
+	path = strings.TrimSpace(path)
+	if method == "" || path == "" {
+		return
+	}
+	delete(r.routes, RouteKey{Method: method, Path: path})
+}
+
+func (r *RouteRegistry) Register(group *gin.RouterGroup) {
+	if r == nil || group == nil || len(r.routes) == 0 {
+		return
+	}
+	keys := make([]RouteKey, 0, len(r.routes))
+	for k := range r.routes {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Path == keys[j].Path {
+			return keys[i].Method < keys[j].Method
+		}
+		return keys[i].Path < keys[j].Path
+	})
+	for _, k := range keys {
+		h := r.routes[k]
+		if h == nil {
+			continue
+		}
+		group.Handle(k.Method, k.Path, h)
+	}
+}
+
+type RouteOption func(*RouteRegistry)
+
+func WithRoute(method, path string, handler gin.HandlerFunc) RouteOption {
+	return func(r *RouteRegistry) {
+		if r == nil {
+			return
+		}
+		r.Set(method, path, handler)
+	}
+}
+
+func WithoutRoute(method, path string) RouteOption {
+	return func(r *RouteRegistry) {
+		if r == nil {
+			return
+		}
+		r.Delete(method, path)
+	}
+}
+
+type BuildResult struct {
+	Engine      *gin.Engine
+	Handler     *cpasdkapi.Handler
+	AuthManager *cpacoreauth.Manager
+}
+
+func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
+	configFilePath = strings.TrimSpace(configFilePath)
+	if configFilePath == "" {
+		return nil, fmt.Errorf("management http: config file path is empty")
+	}
+
+	cfg, errLoad := cpaconfig.LoadConfigOptional(configFilePath, false)
+	if errLoad != nil {
+		return nil, fmt.Errorf("management http: load config: %w", errLoad)
+	}
+	if cfg == nil {
+		cfg = &cpaconfig.Config{}
+	}
+
+	if !cfg.Debug {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(cfg.AuthDir)
+	if errResolveAuthDir != nil {
+		return nil, fmt.Errorf("management http: resolve auth dir: %w", errResolveAuthDir)
+	}
+	if strings.TrimSpace(resolvedAuthDir) != "" {
+		cfg.AuthDir = resolvedAuthDir
+	}
+
+	tokenStore := cpasdkauth.GetTokenStore()
+	if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok && strings.TrimSpace(cfg.AuthDir) != "" {
+		dirSetter.SetBaseDir(cfg.AuthDir)
+	}
+
+	authManager := cpacoreauth.NewManager(tokenStore, nil, nil)
+	authManager.SetConfig(cfg)
+	authManager.SetOAuthModelAlias(cfg.OAuthModelAlias)
+	if errAuthLoad := authManager.Load(context.Background()); errAuthLoad != nil {
+		return nil, fmt.Errorf("management http: load auths: %w", errAuthLoad)
+	}
+
+	handler := cpasdkapi.NewHandler(cfg, configFilePath, authManager)
+	handler.SetLogDirectory("logs")
+
+	engine := gin.New()
+	engine.Use(gin.Recovery())
+
+	mgmt := engine.Group("/v0/management")
+	mgmt.Use(refreshAndAvailabilityMiddleware(configFilePath, handler, authManager, tokenStore), handler.Middleware())
+
+	reg := defaultRoutes(handler)
+	for i := range opts {
+		if opts[i] == nil {
+			continue
+		}
+		opts[i](reg)
+	}
+	reg.Register(mgmt)
+
+	return &BuildResult{
+		Engine:      engine,
+		Handler:     handler,
+		AuthManager: authManager,
+	}, nil
+}
+
+func refreshAndAvailabilityMiddleware(configFilePath string, handler *cpasdkapi.Handler, authManager *cpacoreauth.Manager, tokenStore any) gin.HandlerFunc {
+	envSecret, envSecretSet := os.LookupEnv("MANAGEMENT_PASSWORD")
+	envSecret = strings.TrimSpace(envSecret)
+	envManagementSecret := envSecretSet && envSecret != ""
+
+	return func(c *gin.Context) {
+		if c == nil {
+			return
+		}
+
+		cfg, errLoad := cpaconfig.LoadConfigOptional(configFilePath, false)
+		if errLoad != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "config_reload_failed", "message": errLoad.Error()})
+			return
+		}
+		if cfg == nil {
+			cfg = &cpaconfig.Config{}
+		}
+
+		resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(cfg.AuthDir)
+		if errResolveAuthDir != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "resolve_auth_dir_failed", "message": errResolveAuthDir.Error()})
+			return
+		}
+		if strings.TrimSpace(resolvedAuthDir) != "" {
+			cfg.AuthDir = resolvedAuthDir
+		}
+
+		hasSecret := strings.TrimSpace(cfg.RemoteManagement.SecretKey) != "" || envManagementSecret
+		if !hasSecret {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+
+		if handler != nil {
+			handler.SetConfig(cfg)
+		}
+		if authManager != nil {
+			authManager.SetConfig(cfg)
+			authManager.SetOAuthModelAlias(cfg.OAuthModelAlias)
+		}
+		if tokenStore != nil {
+			if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok && strings.TrimSpace(cfg.AuthDir) != "" {
+				dirSetter.SetBaseDir(cfg.AuthDir)
+			}
+		}
+		if authManager != nil {
+			ctx := c.Request.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			if errAuthLoad := authManager.Load(ctx); errAuthLoad != nil {
+				log.WithError(errAuthLoad).Warn("management http: auth manager reload failed")
+			}
+		}
+
+		c.Next()
+	}
+}
+
+func defaultRoutes(handler *cpasdkapi.Handler) *RouteRegistry {
+	r := newRouteRegistry()
+	if handler == nil {
+		return r
+	}
+
+	r.Set(http.MethodGet, "/config", handler.GetConfig)
+	r.Set(http.MethodGet, "/config.yaml", handler.GetConfigYAML)
+	r.Set(http.MethodPut, "/config.yaml", handler.PutConfigYAML)
+	r.Set(http.MethodGet, "/latest-version", handler.GetLatestVersion)
+
+	r.Set(http.MethodGet, "/debug", handler.GetDebug)
+	r.Set(http.MethodPut, "/debug", handler.PutDebug)
+	r.Set(http.MethodPatch, "/debug", handler.PutDebug)
+
+	r.Set(http.MethodGet, "/logging-to-file", handler.GetLoggingToFile)
+	r.Set(http.MethodPut, "/logging-to-file", handler.PutLoggingToFile)
+	r.Set(http.MethodPatch, "/logging-to-file", handler.PutLoggingToFile)
+
+	r.Set(http.MethodGet, "/logs-max-total-size-mb", handler.GetLogsMaxTotalSizeMB)
+	r.Set(http.MethodPut, "/logs-max-total-size-mb", handler.PutLogsMaxTotalSizeMB)
+	r.Set(http.MethodPatch, "/logs-max-total-size-mb", handler.PutLogsMaxTotalSizeMB)
+
+	r.Set(http.MethodGet, "/error-logs-max-files", handler.GetErrorLogsMaxFiles)
+	r.Set(http.MethodPut, "/error-logs-max-files", handler.PutErrorLogsMaxFiles)
+	r.Set(http.MethodPatch, "/error-logs-max-files", handler.PutErrorLogsMaxFiles)
+
+	r.Set(http.MethodGet, "/usage-statistics-enabled", handler.GetUsageStatisticsEnabled)
+	r.Set(http.MethodPut, "/usage-statistics-enabled", handler.PutUsageStatisticsEnabled)
+	r.Set(http.MethodPatch, "/usage-statistics-enabled", handler.PutUsageStatisticsEnabled)
+
+	r.Set(http.MethodGet, "/proxy-url", handler.GetProxyURL)
+	r.Set(http.MethodPut, "/proxy-url", handler.PutProxyURL)
+	r.Set(http.MethodPatch, "/proxy-url", handler.PutProxyURL)
+	r.Set(http.MethodDelete, "/proxy-url", handler.DeleteProxyURL)
+
+	r.Set(http.MethodPost, "/api-call", handler.APICall)
+
+	r.Set(http.MethodGet, "/quota-exceeded/switch-project", handler.GetSwitchProject)
+	r.Set(http.MethodPut, "/quota-exceeded/switch-project", handler.PutSwitchProject)
+	r.Set(http.MethodPatch, "/quota-exceeded/switch-project", handler.PutSwitchProject)
+
+	r.Set(http.MethodGet, "/quota-exceeded/switch-preview-model", handler.GetSwitchPreviewModel)
+	r.Set(http.MethodPut, "/quota-exceeded/switch-preview-model", handler.PutSwitchPreviewModel)
+	r.Set(http.MethodPatch, "/quota-exceeded/switch-preview-model", handler.PutSwitchPreviewModel)
+
+	r.Set(http.MethodGet, "/api-keys", handler.GetAPIKeys)
+	r.Set(http.MethodPut, "/api-keys", handler.PutAPIKeys)
+	r.Set(http.MethodPatch, "/api-keys", handler.PatchAPIKeys)
+	r.Set(http.MethodDelete, "/api-keys", handler.DeleteAPIKeys)
+	r.Set(http.MethodGet, "/api-key-usage", handler.GetAPIKeyUsage)
+	r.Set(http.MethodGet, "/usage-queue", handler.GetUsageQueue)
+
+	r.Set(http.MethodGet, "/gemini-api-key", handler.GetGeminiKeys)
+	r.Set(http.MethodPut, "/gemini-api-key", handler.PutGeminiKeys)
+	r.Set(http.MethodPatch, "/gemini-api-key", handler.PatchGeminiKey)
+	r.Set(http.MethodDelete, "/gemini-api-key", handler.DeleteGeminiKey)
+
+	r.Set(http.MethodGet, "/logs", handler.GetLogs)
+	r.Set(http.MethodDelete, "/logs", handler.DeleteLogs)
+	r.Set(http.MethodGet, "/request-error-logs", handler.GetRequestErrorLogs)
+	r.Set(http.MethodGet, "/request-error-logs/:name", handler.DownloadRequestErrorLog)
+	r.Set(http.MethodGet, "/request-log-by-id/:id", handler.GetRequestLogByID)
+	r.Set(http.MethodGet, "/request-log", handler.GetRequestLog)
+	r.Set(http.MethodPut, "/request-log", handler.PutRequestLog)
+	r.Set(http.MethodPatch, "/request-log", handler.PutRequestLog)
+	r.Set(http.MethodGet, "/ws-auth", handler.GetWebsocketAuth)
+	r.Set(http.MethodPut, "/ws-auth", handler.PutWebsocketAuth)
+	r.Set(http.MethodPatch, "/ws-auth", handler.PutWebsocketAuth)
+
+	r.Set(http.MethodGet, "/ampcode", handler.GetAmpCode)
+	r.Set(http.MethodGet, "/ampcode/upstream-url", handler.GetAmpUpstreamURL)
+	r.Set(http.MethodPut, "/ampcode/upstream-url", handler.PutAmpUpstreamURL)
+	r.Set(http.MethodPatch, "/ampcode/upstream-url", handler.PutAmpUpstreamURL)
+	r.Set(http.MethodDelete, "/ampcode/upstream-url", handler.DeleteAmpUpstreamURL)
+	r.Set(http.MethodGet, "/ampcode/upstream-api-key", handler.GetAmpUpstreamAPIKey)
+	r.Set(http.MethodPut, "/ampcode/upstream-api-key", handler.PutAmpUpstreamAPIKey)
+	r.Set(http.MethodPatch, "/ampcode/upstream-api-key", handler.PutAmpUpstreamAPIKey)
+	r.Set(http.MethodDelete, "/ampcode/upstream-api-key", handler.DeleteAmpUpstreamAPIKey)
+	r.Set(http.MethodGet, "/ampcode/restrict-management-to-localhost", handler.GetAmpRestrictManagementToLocalhost)
+	r.Set(http.MethodPut, "/ampcode/restrict-management-to-localhost", handler.PutAmpRestrictManagementToLocalhost)
+	r.Set(http.MethodPatch, "/ampcode/restrict-management-to-localhost", handler.PutAmpRestrictManagementToLocalhost)
+	r.Set(http.MethodGet, "/ampcode/model-mappings", handler.GetAmpModelMappings)
+	r.Set(http.MethodPut, "/ampcode/model-mappings", handler.PutAmpModelMappings)
+	r.Set(http.MethodPatch, "/ampcode/model-mappings", handler.PatchAmpModelMappings)
+	r.Set(http.MethodDelete, "/ampcode/model-mappings", handler.DeleteAmpModelMappings)
+	r.Set(http.MethodGet, "/ampcode/force-model-mappings", handler.GetAmpForceModelMappings)
+	r.Set(http.MethodPut, "/ampcode/force-model-mappings", handler.PutAmpForceModelMappings)
+	r.Set(http.MethodPatch, "/ampcode/force-model-mappings", handler.PutAmpForceModelMappings)
+	r.Set(http.MethodGet, "/ampcode/upstream-api-keys", handler.GetAmpUpstreamAPIKeys)
+	r.Set(http.MethodPut, "/ampcode/upstream-api-keys", handler.PutAmpUpstreamAPIKeys)
+	r.Set(http.MethodPatch, "/ampcode/upstream-api-keys", handler.PatchAmpUpstreamAPIKeys)
+	r.Set(http.MethodDelete, "/ampcode/upstream-api-keys", handler.DeleteAmpUpstreamAPIKeys)
+
+	r.Set(http.MethodGet, "/request-retry", handler.GetRequestRetry)
+	r.Set(http.MethodPut, "/request-retry", handler.PutRequestRetry)
+	r.Set(http.MethodPatch, "/request-retry", handler.PutRequestRetry)
+	r.Set(http.MethodGet, "/max-retry-interval", handler.GetMaxRetryInterval)
+	r.Set(http.MethodPut, "/max-retry-interval", handler.PutMaxRetryInterval)
+	r.Set(http.MethodPatch, "/max-retry-interval", handler.PutMaxRetryInterval)
+
+	r.Set(http.MethodGet, "/force-model-prefix", handler.GetForceModelPrefix)
+	r.Set(http.MethodPut, "/force-model-prefix", handler.PutForceModelPrefix)
+	r.Set(http.MethodPatch, "/force-model-prefix", handler.PutForceModelPrefix)
+
+	r.Set(http.MethodGet, "/routing/strategy", handler.GetRoutingStrategy)
+	r.Set(http.MethodPut, "/routing/strategy", handler.PutRoutingStrategy)
+	r.Set(http.MethodPatch, "/routing/strategy", handler.PutRoutingStrategy)
+
+	r.Set(http.MethodGet, "/claude-api-key", handler.GetClaudeKeys)
+	r.Set(http.MethodPut, "/claude-api-key", handler.PutClaudeKeys)
+	r.Set(http.MethodPatch, "/claude-api-key", handler.PatchClaudeKey)
+	r.Set(http.MethodDelete, "/claude-api-key", handler.DeleteClaudeKey)
+
+	r.Set(http.MethodGet, "/codex-api-key", handler.GetCodexKeys)
+	r.Set(http.MethodPut, "/codex-api-key", handler.PutCodexKeys)
+	r.Set(http.MethodPatch, "/codex-api-key", handler.PatchCodexKey)
+	r.Set(http.MethodDelete, "/codex-api-key", handler.DeleteCodexKey)
+
+	r.Set(http.MethodGet, "/openai-compatibility", handler.GetOpenAICompat)
+	r.Set(http.MethodPut, "/openai-compatibility", handler.PutOpenAICompat)
+	r.Set(http.MethodPatch, "/openai-compatibility", handler.PatchOpenAICompat)
+	r.Set(http.MethodDelete, "/openai-compatibility", handler.DeleteOpenAICompat)
+
+	r.Set(http.MethodGet, "/vertex-api-key", handler.GetVertexCompatKeys)
+	r.Set(http.MethodPut, "/vertex-api-key", handler.PutVertexCompatKeys)
+	r.Set(http.MethodPatch, "/vertex-api-key", handler.PatchVertexCompatKey)
+	r.Set(http.MethodDelete, "/vertex-api-key", handler.DeleteVertexCompatKey)
+
+	r.Set(http.MethodGet, "/oauth-excluded-models", handler.GetOAuthExcludedModels)
+	r.Set(http.MethodPut, "/oauth-excluded-models", handler.PutOAuthExcludedModels)
+	r.Set(http.MethodPatch, "/oauth-excluded-models", handler.PatchOAuthExcludedModels)
+	r.Set(http.MethodDelete, "/oauth-excluded-models", handler.DeleteOAuthExcludedModels)
+
+	r.Set(http.MethodGet, "/oauth-model-alias", handler.GetOAuthModelAlias)
+	r.Set(http.MethodPut, "/oauth-model-alias", handler.PutOAuthModelAlias)
+	r.Set(http.MethodPatch, "/oauth-model-alias", handler.PatchOAuthModelAlias)
+	r.Set(http.MethodDelete, "/oauth-model-alias", handler.DeleteOAuthModelAlias)
+
+	r.Set(http.MethodGet, "/auth-files", handler.ListAuthFiles)
+	r.Set(http.MethodGet, "/auth-files/models", handler.GetAuthFileModels)
+	r.Set(http.MethodGet, "/model-definitions/:channel", handler.GetStaticModelDefinitions)
+	r.Set(http.MethodGet, "/auth-files/download", handler.DownloadAuthFile)
+	r.Set(http.MethodPost, "/auth-files", handler.UploadAuthFile)
+	r.Set(http.MethodDelete, "/auth-files", handler.DeleteAuthFile)
+	r.Set(http.MethodPatch, "/auth-files/status", handler.PatchAuthFileStatus)
+	r.Set(http.MethodPatch, "/auth-files/fields", handler.PatchAuthFileFields)
+	r.Set(http.MethodPost, "/vertex/import", handler.ImportVertexCredential)
+
+	r.Set(http.MethodGet, "/anthropic-auth-url", handler.RequestAnthropicToken)
+	r.Set(http.MethodGet, "/codex-auth-url", handler.RequestCodexToken)
+	r.Set(http.MethodGet, "/gemini-cli-auth-url", handler.RequestGeminiCLIToken)
+	r.Set(http.MethodGet, "/antigravity-auth-url", handler.RequestAntigravityToken)
+	r.Set(http.MethodGet, "/kimi-auth-url", handler.RequestKimiToken)
+	r.Set(http.MethodPost, "/oauth-callback", handler.PostOAuthCallback)
+	r.Set(http.MethodGet, "/get-auth-status", handler.GetAuthStatus)
+
+	return r
+}
