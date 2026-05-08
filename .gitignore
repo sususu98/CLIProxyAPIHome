@@ -1,5 +1,6 @@
 docs/
 logs/
+static/
 config.yaml
 .env
 AGENTS.md
