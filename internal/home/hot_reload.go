@@ -10,6 +10,7 @@ import (
 	configaccess "github.com/router-for-me/CLIProxyAPIHome/internal/access/config_access"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher"
 	log "github.com/sirupsen/logrus"
 )
@@ -98,6 +99,8 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 			return fmt.Errorf("home runtime: ensure auth dir: %w", errEnsure)
 		}
 	}
+
+	managementasset.SetCurrentConfig(cfg)
 
 	r.cfgMu.Lock()
 	r.cfg = cfg

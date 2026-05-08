@@ -28,3 +28,17 @@ func ResolveAuthDir(authDir string) (string, error) {
 	}
 	return filepath.Clean(authDir), nil
 }
+
+// WritablePath returns the cleaned WRITABLE_PATH environment variable when it is set.
+// It accepts both uppercase and lowercase variants for compatibility with existing conventions.
+func WritablePath() string {
+	for _, key := range []string{"WRITABLE_PATH", "writable_path"} {
+		if value, ok := os.LookupEnv(key); ok {
+			trimmed := strings.TrimSpace(value)
+			if trimmed != "" {
+				return filepath.Clean(trimmed)
+			}
+		}
+	}
+	return ""
+}

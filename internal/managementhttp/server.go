@@ -14,6 +14,7 @@ import (
 	cpasdkauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
 	cpacoreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cpaconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
 	log "github.com/sirupsen/logrus"
 )
@@ -106,6 +107,39 @@ type BuildResult struct {
 	AuthManager *cpacoreauth.Manager
 }
 
+func serveManagementControlPanel(cfg *cpaconfig.Config, configFilePath string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c == nil {
+			return
+		}
+		if cfg == nil || cfg.RemoteManagement.DisableControlPanel {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		filePath := managementasset.FilePath(configFilePath)
+		if strings.TrimSpace(filePath) == "" {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+
+		if _, err := os.Stat(filePath); err != nil {
+			if os.IsNotExist(err) {
+				// Control panel bootstrap should not be canceled by client disconnects.
+				if !managementasset.EnsureLatestManagementHTML(context.Background(), managementasset.StaticDir(configFilePath), cfg.ProxyURL, cfg.RemoteManagement.PanelGitHubRepository) {
+					c.AbortWithStatus(http.StatusNotFound)
+					return
+				}
+			} else {
+				log.WithError(err).Error("failed to stat management control panel asset")
+				c.AbortWithStatus(http.StatusInternalServerError)
+				return
+			}
+		}
+
+		c.File(filePath)
+	}
+}
+
 func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 	configFilePath = strings.TrimSpace(configFilePath)
 	if configFilePath == "" {
@@ -149,6 +183,8 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 
 	engine := gin.New()
 	engine.Use(gin.Recovery())
+
+	engine.GET("/management.html", serveManagementControlPanel(cfg, configFilePath))
 
 	mgmt := engine.Group("/v0/management")
 	mgmt.Use(refreshAndAvailabilityMiddleware(configFilePath, handler, authManager, tokenStore), handler.Middleware())

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -78,5 +79,17 @@ func SetupBaseLogger() {
 		log.SetOutput(os.Stdout)
 		log.SetReportCaller(true)
 		log.SetFormatter(&LogFormatter{})
+
+		// Redirect Gin debug prints (route registration, warnings) into logrus,
+		// so startup logs share the same format as the rest of the application.
+		gin.DefaultWriter = log.StandardLogger().Writer()
+		gin.DefaultErrorWriter = log.StandardLogger().WriterLevel(log.ErrorLevel)
+		gin.DebugPrintRouteFunc = func(httpMethod, absolutePath, handlerName string, nuHandlers int) {
+			log.StandardLogger().Infof("%-6s %-25s --> %s (%d handlers)", httpMethod, absolutePath, handlerName, nuHandlers)
+		}
+		gin.DebugPrintFunc = func(format string, values ...interface{}) {
+			format = strings.TrimRight(format, "\r\n")
+			log.StandardLogger().Infof(format, values...)
+		}
 	})
 }

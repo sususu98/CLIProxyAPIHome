@@ -17,6 +17,7 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	homeerrors "github.com/router-for-me/CLIProxyAPIHome/internal/errors"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
@@ -112,6 +113,8 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 
 	registry.StartModelsUpdater(runCtx)
 	r.registerModelRefreshCallback()
+	managementasset.SetCurrentConfig(r.cfg)
+	managementasset.StartAutoUpdater(context.Background(), configPath)
 
 	if errLoad := r.loadAuths(runCtx); errLoad != nil {
 		return errLoad
