@@ -478,7 +478,7 @@ func (m *Manager) executionModelCandidates(auth *Auth, routeModel string) []stri
 }
 
 func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
-	if a == nil || a.Disabled {
+	if a == nil {
 		return false
 	}
 	if !a.NextRefreshAfter.IsZero() && now.Before(a.NextRefreshAfter) {
@@ -535,7 +535,7 @@ func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
 func (m *Manager) markRefreshPending(id string, now time.Time) bool {
 	m.mu.Lock()
 	auth, ok := m.auths[id]
-	if !ok || auth == nil || auth.Disabled {
+	if !ok || auth == nil {
 		m.mu.Unlock()
 		return false
 	}
@@ -792,15 +792,6 @@ func (m *Manager) RefreshNow(ctx context.Context, authID string) (*Auth, error) 
 	if target == nil {
 		return nil, fmt.Errorf("auth manager: auth not found")
 	}
-	if target.Disabled {
-		allowDisabled := false
-		if target.Attributes != nil && strings.EqualFold(strings.TrimSpace(target.Attributes["gemini_virtual_primary"]), "true") {
-			allowDisabled = true
-		}
-		if !allowDisabled {
-			return nil, fmt.Errorf("auth manager: auth disabled")
-		}
-	}
 	if cfg == nil {
 		cfg = &internalconfig.Config{}
 	}
@@ -857,7 +848,7 @@ func (m *Manager) refreshAuth(ctx context.Context, authID string) {
 	current := m.auths[authID]
 	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
 	m.mu.RUnlock()
-	if current == nil || current.Disabled {
+	if current == nil {
 		return
 	}
 	if cfg == nil {

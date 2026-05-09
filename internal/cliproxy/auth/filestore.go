@@ -72,6 +72,9 @@ func (s *FileTokenStore) Save(ctx context.Context, auth *Auth) (string, error) {
 
 	switch {
 	case auth.Storage != nil:
+		if auth.Metadata != nil {
+			auth.Metadata["disabled"] = auth.Disabled
+		}
 		if setter, ok := auth.Storage.(metadataSetter); ok {
 			setter.SetMetadata(auth.Metadata)
 		}
