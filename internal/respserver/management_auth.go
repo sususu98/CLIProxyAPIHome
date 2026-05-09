@@ -93,11 +93,13 @@ func (a *managementAuthenticator) AuthenticateManagementKey(clientIP string, loc
 	var (
 		allowRemote bool
 		secretHash  string
+		allowHosts  []string
 	)
 	if a.runtime != nil {
 		if cfg := a.runtime.Config(); cfg != nil {
 			allowRemote = cfg.RemoteManagement.AllowRemote
 			secretHash = cfg.RemoteManagement.SecretKey
+			allowHosts = cfg.AllowHost
 		}
 	}
 	if a.allowRemoteOverride {
@@ -122,6 +124,10 @@ func (a *managementAuthenticator) AuthenticateManagementKey(clientIP string, loc
 
 	if !localClient && !allowRemote {
 		return false, http.StatusForbidden, "remote management disabled"
+	}
+
+	if !isClientHostAllowed(clientIP, allowHosts) {
+		return false, http.StatusForbidden, "client host not allowed"
 	}
 
 	fail := func() {
@@ -173,6 +179,22 @@ func (a *managementAuthenticator) AuthenticateManagementKey(clientIP string, loc
 	return true, 0, ""
 }
 
+func isClientHostAllowed(clientIP string, allowHosts []string) bool {
+	if len(allowHosts) == 0 {
+		return true
+	}
+	clientIP = normalizeHostIP(clientIP)
+	if clientIP == "" {
+		return false
+	}
+	for _, host := range allowHosts {
+		if clientIP == normalizeHostIP(host) {
+			return true
+		}
+	}
+	return false
+}
+
 func resolveRemoteIP(addr net.Addr) (ip string, localClient bool) {
 	if addr == nil {
 		return "", false
@@ -209,6 +231,26 @@ func resolveRemoteIP(addr net.Addr) (ip string, localClient bool) {
 	host = strings.TrimSpace(host)
 	localClient = host == "127.0.0.1" || host == "::1"
 	return host, localClient
+}
+
+func normalizeHostIP(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if raw, _, ok := strings.Cut(host, "%"); ok {
+		host = raw
+	}
+	if parsed := net.ParseIP(host); parsed != nil {
+		if ip4 := parsed.To4(); ip4 != nil {
+			return ip4.String()
+		}
+		return parsed.String()
+	}
+	return strings.TrimSpace(host)
 }
 
 func parseAuthPassword(args []string) (string, bool) {

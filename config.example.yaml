@@ -5,6 +5,13 @@ host: ""
 # Server port
 port: 8327
 
+# RESP client IP allowlist. When this list is empty, clients from any host can connect.
+# When one or more IP addresses are listed, only those client IPs are allowed to connect and AUTH.
+# allow-host:
+#   - "127.0.0.1"
+#   - "192.168.1.10"
+allow-host: []
+
 # TLS settings for HTTPS. When enabled, the server listens with the provided certificate and key.
 tls:
   enable: false

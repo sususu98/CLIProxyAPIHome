@@ -33,6 +33,10 @@ type Config struct {
 	// Port is the network port on which the API server will listen.
 	Port int `yaml:"port" json:"-"`
 
+	// AllowHost limits RESP client connections to the listed IP addresses.
+	// Empty means all client hosts are allowed.
+	AllowHost []string `yaml:"allow-host" json:"-"`
+
 	// TLS config controls HTTPS server settings.
 	TLS TLSConfig `yaml:"tls" json:"tls"`
 

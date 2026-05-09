@@ -94,6 +94,15 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	clientIP, localClient := resolveRemoteIP(conn.RemoteAddr())
+	if s.runtime != nil {
+		if cfg := s.runtime.Config(); cfg != nil && !isClientHostAllowed(clientIP, cfg.AllowHost) {
+			log.Warnf("resp connection rejected from disallowed host %s", clientIP)
+			if errClose := conn.Close(); errClose != nil {
+				log.Errorf("resp disallowed connection close error: %v", errClose)
+			}
+			return
+		}
+	}
 	authed := false
 	reader := bufio.NewReader(conn)
 	writer := newSafeWriter(bufio.NewWriter(conn))
