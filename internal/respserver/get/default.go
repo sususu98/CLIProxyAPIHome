@@ -59,7 +59,10 @@ func handleDefault(ctx context.Context, env dispatch.Env, args []string) dispatc
 		return dispatch.BulkString([]byte(buildErrorJSON(errMarshal.Error())))
 	}
 
-	authIndexTrimmed := strings.TrimSpace(auth.ID)
+	authIndexTrimmed := strings.TrimSpace(auth.EnsureIndex())
+	if authIndexTrimmed == "" {
+		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageAuthNotFound)))
+	}
 	authJSON, errSetAuthIndex := sjson.SetBytes(authJSON, "auth_index", authIndexTrimmed)
 	if errSetAuthIndex != nil {
 		return dispatch.BulkString([]byte(buildErrorJSON(errSetAuthIndex.Error())))

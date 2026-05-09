@@ -45,6 +45,7 @@ type Manager struct {
 
 	mu        sync.RWMutex
 	auths     map[string]*Auth
+	indexAuth map[string]*Auth
 	scheduler *authScheduler
 
 	oauthModelAlias atomic.Value
@@ -61,9 +62,10 @@ func NewManager(store Store, selector Selector, _ any) *Manager {
 		selector = &RoundRobinSelector{}
 	}
 	mgr := &Manager{
-		store:    store,
-		selector: selector,
-		auths:    make(map[string]*Auth),
+		store:     store,
+		selector:  selector,
+		auths:     make(map[string]*Auth),
+		indexAuth: make(map[string]*Auth),
 	}
 	mgr.scheduler = newAuthScheduler(selector)
 	mgr.runtimeConfig.Store(&internalconfig.Config{})
@@ -140,16 +142,23 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 		next.CreatedAt = now
 	}
 	next.UpdatedAt = now
+	next.EnsureIndex()
 
 	m.mu.Lock()
 	if m.auths == nil {
 		m.auths = make(map[string]*Auth)
+	}
+	if m.indexAuth == nil {
+		m.indexAuth = make(map[string]*Auth)
 	}
 	if _, exists := m.auths[next.ID]; exists {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("auth manager: auth already exists")
 	}
 	m.auths[next.ID] = next
+	if idx := strings.TrimSpace(next.Index); idx != "" {
+		m.indexAuth[idx] = next
+	}
 	m.mu.Unlock()
 
 	m.scheduler.upsertAuth(next)
@@ -173,10 +182,18 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	}
 
 	m.mu.Lock()
-	_, ok := m.auths[id]
+	auth, ok := m.auths[id]
 	if !ok {
 		m.mu.Unlock()
 		return fmt.Errorf("auth manager: auth not found")
+	}
+	if auth != nil {
+		idx := strings.TrimSpace(auth.Index)
+		if idx != "" {
+			if cur, ok := m.indexAuth[idx]; ok && cur != nil && cur.ID == auth.ID {
+				delete(m.indexAuth, idx)
+			}
+		}
 	}
 	delete(m.auths, id)
 	loop := m.refreshLoop
@@ -224,7 +241,23 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 		next.CreatedAt = current.CreatedAt
 	}
 	next.UpdatedAt = now
+	next.EnsureIndex()
+	prevIndex := ""
+	if current != nil {
+		prevIndex = strings.TrimSpace(current.Index)
+	}
+	newIndex := strings.TrimSpace(next.Index)
 	m.auths[next.ID] = next
+	if m.indexAuth != nil {
+		if prevIndex != "" && prevIndex != newIndex {
+			if cur, ok := m.indexAuth[prevIndex]; ok && cur != nil && cur.ID == next.ID {
+				delete(m.indexAuth, prevIndex)
+			}
+		}
+		if newIndex != "" {
+			m.indexAuth[newIndex] = next
+		}
+	}
 	m.mu.Unlock()
 
 	m.scheduler.upsertAuth(next)
@@ -283,6 +316,23 @@ func (m *Manager) GetByID(id string) (*Auth, bool) {
 	}
 	m.mu.RLock()
 	a := m.auths[id]
+	m.mu.RUnlock()
+	if a == nil {
+		return nil, false
+	}
+	return a.Clone(), true
+}
+
+func (m *Manager) GetByIndex(index string) (*Auth, bool) {
+	if m == nil {
+		return nil, false
+	}
+	index = strings.TrimSpace(index)
+	if index == "" {
+		return nil, false
+	}
+	m.mu.RLock()
+	a := m.indexAuth[index]
 	m.mu.RUnlock()
 	if a == nil {
 		return nil, false
@@ -762,27 +812,35 @@ func (m *Manager) StopAutoRefresh() {
 
 // RefreshNow forces a best-effort credential refresh for the given auth.
 // It updates the in-memory record and persists it when enabled.
-func (m *Manager) RefreshNow(ctx context.Context, authID string) (*Auth, error) {
+func (m *Manager) RefreshNow(ctx context.Context, authIndex string) (*Auth, error) {
 	if m == nil {
 		return nil, fmt.Errorf("auth manager: nil manager")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	authID = strings.TrimSpace(authID)
-	if authID == "" {
-		return nil, fmt.Errorf("auth manager: missing auth id")
+	authIndex = strings.TrimSpace(authIndex)
+	if authIndex == "" {
+		return nil, fmt.Errorf("auth manager: missing auth index")
 	}
 
 	m.mu.RLock()
-	requested := m.auths[authID]
-	targetID := authID
+	requested := m.indexAuth[authIndex]
+	targetIndex := authIndex
 	if requested != nil && requested.Attributes != nil {
 		if parent := strings.TrimSpace(requested.Attributes["gemini_virtual_parent"]); parent != "" {
-			targetID = parent
+			if parentAuth := m.auths[parent]; parentAuth != nil {
+				parentIndex := strings.TrimSpace(parentAuth.Index)
+				if parentIndex == "" {
+					parentIndex = strings.TrimSpace(parentAuth.EnsureIndex())
+				}
+				if parentIndex != "" {
+					targetIndex = parentIndex
+				}
+			}
 		}
 	}
-	target := m.auths[targetID]
+	target := m.indexAuth[targetIndex]
 	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
 	m.mu.RUnlock()
 
@@ -822,8 +880,8 @@ func (m *Manager) RefreshNow(ctx context.Context, authID string) (*Auth, error) 
 	if errUpdate != nil {
 		return nil, errUpdate
 	}
-	if targetID != authID {
-		refreshed, ok := m.GetByID(authID)
+	if targetIndex != authIndex {
+		refreshed, ok := m.GetByIndex(authIndex)
 		if !ok || refreshed == nil {
 			return nil, fmt.Errorf("auth manager: auth not found")
 		}
