@@ -48,7 +48,7 @@ Dispatch request:
 Input JSON format:
 
 ```json
-{"type":"auth","model":"<requested-model>","session_id":"<optional-session-id>","headers":{"authorization":"Bearer ...","x-api-key":"..."}}
+{"type":"auth","model":"<requested-model>","count":1,"session_id":"<optional-session-id>","headers":{"authorization":"Bearer ...","x-api-key":"..."}}
 ```
 
 Return (RESP bulk string, JSON):
@@ -60,11 +60,13 @@ Return (RESP bulk string, JSON):
 
 Notes:
 
+- `count` starts at `1` for the first credential request in one CPA request. Home rejects the request when `count - 2 >= request-retry`.
 - Returned `auth` is sanitized for downstream CPA nodes: `refresh_token` and Vertex `service_account` are removed.
 
 ### 3) `LPRUSH usage <json>` (also accepts `LPUSH`)
 
 Accepts a usage record JSON blob and appends it to `./logs/usage.log` (one JSON per line).
+If the payload includes a non-200 `fail.status_code`, Home updates the matching auth/model cooldown state by `auth_index`.
 
 - Returns: integer `1`
 

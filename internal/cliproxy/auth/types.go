@@ -376,7 +376,8 @@ func (a *Auth) ProxyInfo() string {
 	return "via proxy"
 }
 
-// DisableCoolingOverride returns the auth-file scoped disable_cooling override when present.
+// DisableCoolingOverride returns the auth-scoped disable_cooling override when present.
+// This override is true-only: false is treated as unset so the global flag can still apply.
 // The value is read from metadata key "disable_cooling" (or legacy "disable-cooling").
 func (a *Auth) DisableCoolingOverride() (bool, bool) {
 	if a == nil || a.Metadata == nil {
@@ -384,11 +385,17 @@ func (a *Auth) DisableCoolingOverride() (bool, bool) {
 	}
 	if val, ok := a.Metadata["disable_cooling"]; ok {
 		if parsed, okParse := parseBoolAny(val); okParse {
+			if !parsed {
+				return false, false
+			}
 			return parsed, true
 		}
 	}
 	if val, ok := a.Metadata["disable-cooling"]; ok {
 		if parsed, okParse := parseBoolAny(val); okParse {
+			if !parsed {
+				return false, false
+			}
 			return parsed, true
 		}
 	}

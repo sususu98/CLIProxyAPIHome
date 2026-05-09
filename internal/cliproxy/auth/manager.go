@@ -276,6 +276,9 @@ func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 		return nil
 	}
 	if auth.Attributes != nil {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(auth.Attributes["source"])), "config:") {
+			return nil
+		}
 		if strings.EqualFold(strings.TrimSpace(auth.Attributes["runtime_only"]), "true") {
 			return nil
 		}

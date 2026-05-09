@@ -91,6 +91,7 @@ func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*hom
 		reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageMissingModel)))
 		return nil, "", &reply
 	}
+	count := dispatchCount(jsonArg)
 
 	headers := parseHeaders(jsonArg)
 	sessionID := strings.TrimSpace(gjson.Get(jsonArg, "session_id").String())
@@ -111,6 +112,11 @@ func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*hom
 		return nil, "", &reply
 	}
 
+	if dispatchRetryExceeded(env.Runtime, count) {
+		reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.TypeRequestRetryExceeded + ": " + homeerrors.MessageRequestRetryExceeded)))
+		return nil, "", &reply
+	}
+
 	result, errDispatch := env.Runtime.Dispatch(ctx, model, headers)
 	if errDispatch != nil {
 		reply := dispatch.BulkString([]byte(buildErrorJSON(errDispatch.Error())))
@@ -122,6 +128,29 @@ func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*hom
 		userAPIKey = authRes.Principal
 	}
 	return result, userAPIKey, nil
+}
+
+func dispatchCount(jsonArg string) int {
+	count := int(gjson.Get(jsonArg, "count").Int())
+	if count <= 0 {
+		return 1
+	}
+	return count
+}
+
+func dispatchRetryExceeded(rt *home.Runtime, count int) bool {
+	if count <= 1 || rt == nil {
+		return false
+	}
+	cfg := rt.Config()
+	if cfg == nil {
+		return false
+	}
+	requestRetry := cfg.RequestRetry
+	if requestRetry < 0 {
+		requestRetry = 0
+	}
+	return count-2 >= requestRetry
 }
 
 func parseHeaders(jsonArg string) http.Header {

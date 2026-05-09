@@ -16,9 +16,6 @@ import (
 var usageLogMu sync.Mutex
 
 func handleUsage(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
-	_ = ctx
-	_ = env
-
 	if len(args) != 3 {
 		return dispatch.Err("wrong number of arguments for 'lprush' command")
 	}
@@ -30,6 +27,11 @@ func handleUsage(ctx context.Context, env dispatch.Env, args []string) dispatch.
 	payload := strings.TrimSpace(args[2])
 	if payload == "" || !gjson.Valid(payload) {
 		return dispatch.Err("invalid usage json")
+	}
+
+	// Always update scheduler state before writing the usage log so cooldowns are applied even if log persistence fails.
+	if env.Runtime != nil {
+		env.Runtime.RecordUsagePayload(ctx, payload)
 	}
 
 	if errAppend := appendUsageLog(payload); errAppend != nil {
