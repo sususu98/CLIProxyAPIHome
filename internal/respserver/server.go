@@ -199,7 +199,8 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 		reply := dispatch.Err("registry not ready")
 		if s.registry != nil {
 			reply = s.registry.Execute(ctx, dispatch.Env{
-				Runtime: s.runtime,
+				Runtime:  s.runtime,
+				ClientIP: clientIP,
 				Conn: &dispatch.ConnEnv{
 					SubscribeConfigYAML: func() (int64, error) {
 						if s.runtime == nil {

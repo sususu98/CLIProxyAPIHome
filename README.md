@@ -120,3 +120,21 @@ Whenever the config file content changes, the server pushes a Pub/Sub `message` 
   - `["subscribe","config",1]`
 - Push message (RESP array reply):
   - `["message","config","<config.yaml bytes>"]`
+
+### 8) `RPUSH request-log <json>`
+
+Accepts a request log payload and writes the `request_log` content into `./logs/` as a standalone `.log` file.
+
+Input JSON format:
+
+```json
+{"headers":{...http headers...},"request_log":"<request-log-data>"}
+```
+
+Notes:
+
+- The output filename follows CPA's request-log naming style, but with a client IP prefix:
+  - Example: `203.0.113.10-v1-responses-2026-05-09T120305-a1b2c3d4.log`
+- `request_id` is derived from `headers["x-request-id"]` or `headers["x-cpa-request-id"]` when present; otherwise a random ID is generated.
+
+- Returns: integer `1`

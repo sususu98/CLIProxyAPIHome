@@ -13,6 +13,10 @@ import (
 type Env struct {
 	Runtime *home.Runtime
 	Conn    *ConnEnv
+
+	// ClientIP is the remote TCP client's IP address as resolved by the RESP server.
+	// It can be empty when the address cannot be resolved.
+	ClientIP string
 }
 
 type ConnEnv struct {
