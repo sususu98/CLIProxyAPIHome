@@ -91,7 +91,21 @@ Return (RESP bulk string, JSON):
 
 ### 6) `GET config`
 
-Returns the full raw YAML config file content.
+Returns the YAML config content filtered for downstream CPA nodes.
+
+The following keys are removed before the payload is returned:
+
+- `remote-management`
+- `api-keys`
+- `auth-dir`
+- `tls`
+- `gemini-api-key`
+- `codex-api-key`
+- `claude-api-key`
+- `openai-compatibility`
+- `vertex-api-key`
+- `oauth-model-alias`
+- `oauth-excluded-models`
 
 Return (RESP bulk string, YAML):
 
@@ -100,7 +114,7 @@ Return (RESP bulk string, YAML):
 ### 7) `SUBSCRIBE config`
 
 Subscribes the current TCP connection to config file changes.
-Whenever the config file content changes, the server pushes a Pub/Sub `message` with the full raw YAML config (RESP array reply).
+Whenever the config file content changes, the server pushes a Pub/Sub `message` with the filtered YAML config (RESP array reply).
 
 - Subscribe confirmation (RESP array reply):
   - `["subscribe","config",1]`
