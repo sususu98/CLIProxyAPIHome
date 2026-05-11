@@ -67,7 +67,7 @@ type AuthRecord struct {
 	UUID             string          `gorm:"column:uuid;primaryKey;type:uuid"`
 	AuthJSON         JSONB           `gorm:"column:auth_json;type:jsonb;not null"`
 	Version          int64           `gorm:"column:version;not null;default:1"`
-	ID               string          `gorm:"column:id"`
+	ID               string          `gorm:"column:id;index:idx_auth_active_order,priority:2"`
 	Index            string          `gorm:"column:index"`
 	Provider         string          `gorm:"column:provider"`
 	Label            string          `gorm:"column:label"`
@@ -84,7 +84,7 @@ type AuthRecord struct {
 	UpdatedAt        time.Time       `gorm:"column:updated_at"`
 	LastRefreshedAt  *time.Time      `gorm:"column:last_refreshed_at"`
 	NextRefreshAfter *time.Time      `gorm:"column:next_refresh_after"`
-	DeletedAt        gorm.DeletedAt  `gorm:"column:deleted_at;index"`
+	DeletedAt        gorm.DeletedAt  `gorm:"column:deleted_at;index;index:idx_auth_active_order,priority:1"`
 }
 
 func (AuthRecord) TableName() string {
@@ -104,12 +104,12 @@ func (ConfigRecord) TableName() string {
 }
 
 type ClusterNodeRecord struct {
-	IP         string    `gorm:"column:ip;primaryKey"`
-	Port       int       `gorm:"column:port;primaryKey"`
-	SecretHash string    `gorm:"column:secret_hash"`
-	IsMaster   bool      `gorm:"column:is_master"`
-	StartedAt  time.Time `gorm:"column:started_at"`
-	LastSeenAt time.Time `gorm:"column:last_seen_at"`
+	IP         string    `gorm:"column:ip;primaryKey;index:idx_cluster_auth_lookup,priority:1;index:idx_cluster_live_nodes,priority:3;index:idx_cluster_master_nodes,priority:4"`
+	Port       int       `gorm:"column:port;primaryKey;index:idx_cluster_auth_lookup,priority:5;index:idx_cluster_live_nodes,priority:4;index:idx_cluster_master_nodes,priority:5"`
+	SecretHash string    `gorm:"column:secret_hash;index:idx_cluster_auth_lookup,priority:2"`
+	IsMaster   bool      `gorm:"column:is_master;index:idx_cluster_master_nodes,priority:1"`
+	StartedAt  time.Time `gorm:"column:started_at;index:idx_cluster_auth_lookup,priority:4;index:idx_cluster_live_nodes,priority:2;index:idx_cluster_master_nodes,priority:3"`
+	LastSeenAt time.Time `gorm:"column:last_seen_at;index:idx_cluster_auth_lookup,priority:3;index:idx_cluster_live_nodes,priority:1;index:idx_cluster_master_nodes,priority:2"`
 }
 
 func (ClusterNodeRecord) TableName() string {
