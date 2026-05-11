@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const defaultConfigPath = "cluster.yaml"
+const DefaultConfigPath = "cluster.yaml"
 
 type Config struct {
 	PGSQL PGSQLConfig `yaml:"pgsql"`
@@ -72,7 +72,7 @@ func (d *yamlDuration) UnmarshalYAML(value *yaml.Node) error {
 func LoadConfigOptional(path string) (*Config, bool, error) {
 	configPath := strings.TrimSpace(path)
 	if configPath == "" {
-		configPath = defaultConfigPath
+		configPath = DefaultConfigPath
 	}
 
 	content, errRead := os.ReadFile(configPath)
