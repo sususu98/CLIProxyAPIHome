@@ -92,7 +92,7 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "invalid body", errRead)
 		return
 	}
-	name, errStore := h.storeOAuthPayload(c, body)
+	name, errStore := h.storeOAuthPayload(c, body, "")
 	if errStore != nil {
 		respondError(c, http.StatusBadRequest, "upload_failed", errStore)
 		return
@@ -232,7 +232,7 @@ func (h *Handler) PostOAuthCallback(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "invalid body", errRead)
 		return
 	}
-	name, errStore := h.storeOAuthPayload(c, body)
+	name, errStore := h.storeOAuthPayload(c, body, "")
 	if errStore != nil {
 		respondError(c, http.StatusBadRequest, "oauth_callback_failed", errStore)
 		return
@@ -258,10 +258,10 @@ func (h *Handler) storeUploadedOAuth(c *gin.Context, header *multipart.FileHeade
 	if errRead != nil {
 		return "", errRead
 	}
-	return h.storeOAuthPayload(c, data)
+	return h.storeOAuthPayload(c, data, header.Filename)
 }
 
-func (h *Handler) storeOAuthPayload(c *gin.Context, raw []byte) (string, error) {
+func (h *Handler) storeOAuthPayload(c *gin.Context, raw []byte, originalFilename string) (string, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
 		return "", fmt.Errorf("empty credential json")
@@ -273,7 +273,7 @@ func (h *Handler) storeOAuthPayload(c *gin.Context, raw []byte) (string, error) 
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 
-	auths := h.synthesizeOAuthPayload(updatedRaw, fileUUID)
+	auths := h.synthesizeOAuthPayload(updatedRaw, fileUUID, originalFilename)
 	if len(auths) == 0 {
 		return "", fmt.Errorf("unsupported credential json")
 	}
@@ -286,7 +286,7 @@ func (h *Handler) storeOAuthPayload(c *gin.Context, raw []byte) (string, error) 
 	return fileUUID + ".json", nil
 }
 
-func (h *Handler) synthesizeOAuthPayload(raw []byte, fileUUID string) []*coreauth.Auth {
+func (h *Handler) synthesizeOAuthPayload(raw []byte, fileUUID string, originalFilename string) []*coreauth.Auth {
 	cfg := h.runtime.Config()
 	authPath := fileUUID + ".json"
 	legacyUUIDs := make(map[string]string)
@@ -318,7 +318,9 @@ func (h *Handler) synthesizeOAuthPayload(raw []byte, fileUUID string) []*coreaut
 		legacyUUIDs[legacyID] = fileUUID
 		return fileUUID
 	}
-	return synthesizer.SynthesizeAuthFile(sctx, authPath, raw)
+	auths := synthesizer.SynthesizeAuthFile(sctx, authPath, raw)
+	cluster.ApplyOriginalAuthFileName(auths, originalFilename)
+	return auths
 }
 
 func (h *Handler) replaceOAuthPayloadAuths(ctx context.Context, fileUUID string, auths []*coreauth.Auth) error {
@@ -445,6 +447,15 @@ func findOAuthAuthInList(auths []*coreauth.Auth, identifier authIdentifier) *cor
 		if identifier.ID != "" && (auth.ID == identifier.ID || auth.Index == identifier.ID) {
 			return auth
 		}
+	}
+	if identifier.Name != "" {
+		for _, auth := range filtered {
+			if authFileName(auth) == identifier.Name && !isVirtualOAuthAuth(auth) {
+				return auth
+			}
+		}
+	}
+	for _, auth := range filtered {
 		if identifier.Name != "" && authFileName(auth) == identifier.Name {
 			return auth
 		}
@@ -461,6 +472,16 @@ func isOAuthAuth(auth *coreauth.Auth) bool {
 	}
 	typeValue := stringFromAny(auth.Metadata["type"])
 	return typeValue != ""
+}
+
+func isVirtualOAuthAuth(auth *coreauth.Auth) bool {
+	if auth == nil {
+		return false
+	}
+	if auth.Metadata != nil && boolFromAny(auth.Metadata["virtual"]) {
+		return true
+	}
+	return auth.Attributes != nil && strings.EqualFold(auth.Attributes["runtime_only"], "true")
 }
 
 func authFileEntry(auth *coreauth.Auth) gin.H {

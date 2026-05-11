@@ -212,6 +212,7 @@ func bootstrapAuthFiles(ctx context.Context, repo *Repository, cfg *appconfig.Co
 		}
 
 		auths := synthesizer.SynthesizeAuthFile(sctx, fullPath, updatedPayload)
+		ApplyOriginalAuthFileName(auths, entry.Name())
 		for _, auth := range auths {
 			if auth == nil {
 				continue
