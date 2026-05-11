@@ -47,7 +47,7 @@ func AutoMigrate(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("database connection is nil")
 	}
-	return db.AutoMigrate(&AuthRecord{}, &ConfigRecord{}, &ClusterNodeRecord{}, &ClusterEventRecord{})
+	return db.AutoMigrate(&AuthRecord{}, &ConfigRecord{}, &ClusterNodeRecord{}, &ClusterEventRecord{}, &UsageRecord{})
 }
 
 func (c PGSQLConfig) DSN() (string, error) {

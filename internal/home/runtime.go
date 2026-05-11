@@ -57,6 +57,10 @@ type ClusterAdapter interface {
 	LoadConfigYAML(ctx context.Context) ([]byte, error)
 }
 
+type clusterUsageStore interface {
+	StoreUsagePayload(ctx context.Context, payload string) error
+}
+
 func NewRuntime(cfg *config.Config) (*Runtime, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("home runtime: config is nil")
@@ -273,6 +277,17 @@ func (r *Runtime) RefreshClusterAuthIndex(ctx context.Context, uuid string) erro
 		return nil
 	}
 	return refresher.RefreshAuthIndex(ctx, uuid)
+}
+
+func (r *Runtime) PersistClusterUsagePayload(ctx context.Context, payload string) (bool, error) {
+	if r == nil || r.clusterAdapter == nil || !r.clusterAdapter.Enabled() {
+		return false, nil
+	}
+	store, ok := r.clusterAdapter.(clusterUsageStore)
+	if !ok || store == nil {
+		return true, fmt.Errorf("home runtime: cluster usage store is unavailable")
+	}
+	return true, store.StoreUsagePayload(ctx, payload)
 }
 
 func BuildRefreshPayload(updated *coreauth.Auth) ([]byte, error) {

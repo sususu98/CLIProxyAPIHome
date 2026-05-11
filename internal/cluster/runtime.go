@@ -75,6 +75,14 @@ func (a *RuntimeAdapter) LoadConfigYAML(ctx context.Context) ([]byte, error) {
 	return payload, nil
 }
 
+func (a *RuntimeAdapter) StoreUsagePayload(ctx context.Context, payload string) error {
+	if !a.Enabled() {
+		return fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	_, errAppend := a.repo.AppendUsage(ctx, payload)
+	return errAppend
+}
+
 func (a *RuntimeAdapter) List(ctx context.Context) ([]*coreauth.Auth, error) {
 	if !a.Enabled() {
 		return nil, fmt.Errorf("cluster runtime adapter is disabled")
