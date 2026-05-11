@@ -37,6 +37,31 @@ type DisbandResult struct {
 	OpenAICompatibility int
 }
 
+// CredentialConfigCounts reports how many auth-backed config entries were restored.
+type CredentialConfigCounts struct {
+	GeminiKeys          int
+	VertexKeys          int
+	CodexKeys           int
+	ClaudeKeys          int
+	OpenAICompatibility int
+}
+
+// ApplyCredentialConfigToRoot restores auth-backed config keys into a config root.
+func ApplyCredentialConfigToRoot(root map[string]any, auths []*coreauth.Auth) CredentialConfigCounts {
+	if root == nil {
+		return CredentialConfigCounts{}
+	}
+	result := &DisbandResult{}
+	disbandApplyCredentialConfig(root, auths, result)
+	return CredentialConfigCounts{
+		GeminiKeys:          result.GeminiKeys,
+		VertexKeys:          result.VertexKeys,
+		CodexKeys:           result.CodexKeys,
+		ClaudeKeys:          result.ClaudeKeys,
+		OpenAICompatibility: result.OpenAICompatibility,
+	}
+}
+
 type disbandModelPair struct {
 	Name     string
 	Alias    string

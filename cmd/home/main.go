@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -149,6 +150,9 @@ func run() int {
 				nextConfig, payload, errConfig := repo.LoadConfigAsRuntimeConfig(eventCtx)
 				if errConfig != nil {
 					return errConfig
+				}
+				if reflect.DeepEqual(rt.Config(), nextConfig) {
+					return nil
 				}
 				if errApply := rt.ApplyConfigFromCluster(eventCtx, nextConfig); errApply != nil {
 					return errApply

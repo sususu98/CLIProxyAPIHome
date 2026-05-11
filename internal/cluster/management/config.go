@@ -33,7 +33,16 @@ func (h *Handler) GetConfig(c *gin.Context) {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 
-	cfg, _, errConfig := h.currentConfig(ctx)
+	root, errRoot := h.configRoot(ctx)
+	if errRoot != nil {
+		respondError(c, http.StatusInternalServerError, "config_load_failed", errRoot)
+		return
+	}
+	if errCredential := h.applyCredentialConfig(ctx, root); errCredential != nil {
+		respondError(c, http.StatusInternalServerError, "auth_load_failed", errCredential)
+		return
+	}
+	cfg, errConfig := configFromRoot(root)
 	if errConfig != nil {
 		respondError(c, http.StatusInternalServerError, "config_load_failed", errConfig)
 		return
@@ -48,6 +57,10 @@ func (h *Handler) GetConfigYAML(c *gin.Context) {
 	root, errSnapshot := h.configRoot(ctx)
 	if errSnapshot != nil {
 		respondError(c, http.StatusInternalServerError, "config_load_failed", errSnapshot)
+		return
+	}
+	if errCredential := h.applyCredentialConfig(ctx, root); errCredential != nil {
+		respondError(c, http.StatusInternalServerError, "auth_load_failed", errCredential)
 		return
 	}
 	data, errMarshal := yaml.Marshal(root)
@@ -173,6 +186,21 @@ func (h *Handler) configRoot(ctx context.Context) (map[string]any, error) {
 		return nil, errSnapshot
 	}
 	return cluster.ConfigRootFromSnapshot(snapshot)
+}
+
+func (h *Handler) applyCredentialConfig(ctx context.Context, root map[string]any) error {
+	if h == nil || h.repo == nil {
+		return fmt.Errorf("cluster management repository is nil")
+	}
+	if root == nil {
+		return fmt.Errorf("config root is nil")
+	}
+	auths, errAuths := h.repo.ListAuths(ctx)
+	if errAuths != nil {
+		return errAuths
+	}
+	cluster.ApplyCredentialConfigToRoot(root, auths)
+	return nil
 }
 
 func configRootFromYAML(data []byte) (map[string]any, error) {

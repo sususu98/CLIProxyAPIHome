@@ -385,6 +385,7 @@ func (r *Repository) ReplaceConfigSnapshot(ctx context.Context, values map[strin
 		}
 
 		seen := make(map[string]struct{}, len(clean))
+		eventVersion := int64(0)
 		for key, rawJSON := range clean {
 			seen[key] = struct{}{}
 			record := ConfigRecord{}
@@ -404,8 +405,8 @@ func (r *Repository) ReplaceConfigSnapshot(ctx context.Context, values map[strin
 					return errSave
 				}
 			}
-			if errEvent := appendEvent(tx, "config", "upsert", key, record.Version); errEvent != nil {
-				return errEvent
+			if record.Version > eventVersion {
+				eventVersion = record.Version
 			}
 		}
 
@@ -417,11 +418,14 @@ func (r *Repository) ReplaceConfigSnapshot(ctx context.Context, values map[strin
 			if errDelete := tx.Delete(&ConfigRecord{}, "key = ?", record.Key).Error; errDelete != nil {
 				return errDelete
 			}
-			if errEvent := appendEvent(tx, "config", "delete", record.Key, nextVersion); errEvent != nil {
-				return errEvent
+			if nextVersion > eventVersion {
+				eventVersion = nextVersion
 			}
 		}
-		return nil
+		if eventVersion == 0 {
+			eventVersion = 1
+		}
+		return appendEvent(tx, "config", "replace", "config", eventVersion)
 	})
 }
 
