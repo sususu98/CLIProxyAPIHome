@@ -62,6 +62,7 @@ func (h *Handler) RegisterRoutes(group *gin.RouterGroup) {
 	group.DELETE("/auth-files", h.DeleteAuthFile)
 	group.PATCH("/auth-files/status", h.PatchAuthFileStatus)
 	group.PATCH("/auth-files/fields", h.PatchAuthFileFields)
+	group.POST("/api-call", h.APICall)
 	group.POST("/oauth-callback", h.PostOAuthCallback)
 }
 

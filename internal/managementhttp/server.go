@@ -158,6 +158,7 @@ func WithClusterManagement(opt ClusterManagementOption) RouteOption {
 		r.Set(http.MethodDelete, "/auth-files", handler.DeleteAuthFile)
 		r.Set(http.MethodPatch, "/auth-files/status", handler.PatchAuthFileStatus)
 		r.Set(http.MethodPatch, "/auth-files/fields", handler.PatchAuthFileFields)
+		r.Set(http.MethodPost, "/api-call", handler.APICall)
 		r.Set(http.MethodPost, "/oauth-callback", handler.PostOAuthCallback)
 	}
 }

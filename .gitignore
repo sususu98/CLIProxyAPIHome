@@ -2,5 +2,6 @@ docs/
 logs/
 static/
 config.yaml
+cluster.yaml
 .env
 AGENTS.md
