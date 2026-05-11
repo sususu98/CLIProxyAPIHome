@@ -35,6 +35,12 @@ type RefreshEvaluator interface {
 	ShouldRefresh(now time.Time, auth *Auth) bool
 }
 
+type FullAuthResolver interface {
+	GetFullAuth(ctx context.Context, uuid string) (*Auth, error)
+}
+
+var ErrFullAuthNotFound = errors.New("full auth not found")
+
 // Manager orchestrates auth lifecycle, selection, and persistence for CLIProxyAPIHome.
 //
 // This is intentionally narrower than CPA's full execution manager: it only supports
@@ -51,7 +57,8 @@ type Manager struct {
 	oauthModelAlias atomic.Value
 	runtimeConfig   atomic.Value
 
-	rtProvider RoundTripperProvider
+	rtProvider   RoundTripperProvider
+	fullResolver FullAuthResolver
 
 	refreshCancel context.CancelFunc
 	refreshLoop   *authAutoRefreshLoop
@@ -91,6 +98,24 @@ func (m *Manager) roundTripperFor(auth *Auth) http.RoundTripper {
 		return nil
 	}
 	return p.RoundTripperFor(auth)
+}
+
+func (m *Manager) SetFullAuthResolver(resolver FullAuthResolver) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.fullResolver = resolver
+	m.mu.Unlock()
+}
+
+func (m *Manager) SetStore(store Store) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.store = store
+	m.mu.Unlock()
 }
 
 func (m *Manager) SetConfig(cfg *internalconfig.Config) {
@@ -426,7 +451,15 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 			}
 			tried[auth.ID] = struct{}{}
 
-			models := m.executionModelCandidates(auth, routeModel)
+			fullAuth, okFull, errFull := m.resolveFullDispatchAuth(ctx, auth)
+			if errFull != nil {
+				return nil, errFull
+			}
+			if !okFull {
+				continue
+			}
+
+			models := m.executionModelCandidates(fullAuth, routeModel)
 			if len(models) == 0 {
 				continue
 			}
@@ -435,7 +468,7 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 				upstream = routeModel
 			}
 			return &DispatchDecision{
-				Auth:          auth.Clone(),
+				Auth:          fullAuth.Clone(),
 				Provider:      providerKey,
 				UpstreamModel: upstream,
 				PooledModels:  false,
@@ -493,7 +526,15 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 		}
 		tried[auth.ID] = struct{}{}
 
-		models := m.executionModelCandidates(auth, routeModel)
+		fullAuth, okFull, errFull := m.resolveFullDispatchAuth(ctx, auth)
+		if errFull != nil {
+			return nil, errFull
+		}
+		if !okFull {
+			continue
+		}
+
+		models := m.executionModelCandidates(fullAuth, routeModel)
 		if len(models) == 0 {
 			continue
 		}
@@ -501,17 +542,77 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 		if upstream == "" {
 			upstream = routeModel
 		}
-		providerKey := strings.ToLower(strings.TrimSpace(auth.Provider))
+		providerKey := strings.ToLower(strings.TrimSpace(fullAuth.Provider))
 		if providerKey == "" {
 			providerKey = providerForSelector
 		}
 		return &DispatchDecision{
-			Auth:          auth.Clone(),
+			Auth:          fullAuth.Clone(),
 			Provider:      providerKey,
 			UpstreamModel: upstream,
 			PooledModels:  false,
 		}, nil
 	}
+}
+
+func (m *Manager) resolveFullDispatchAuth(ctx context.Context, auth *Auth) (*Auth, bool, error) {
+	if auth == nil {
+		return nil, false, nil
+	}
+	m.mu.RLock()
+	resolver := m.fullResolver
+	m.mu.RUnlock()
+	if resolver == nil {
+		return auth, true, nil
+	}
+
+	uuid := strings.TrimSpace(auth.ID)
+	if uuid == "" {
+		return nil, false, nil
+	}
+	fullAuth, errFull := resolver.GetFullAuth(ctx, uuid)
+	if errFull != nil {
+		if errors.Is(errFull, ErrFullAuthNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, errFull
+	}
+	if fullAuth == nil || fullAuth.Disabled || fullAuth.Status == StatusDisabled {
+		return nil, false, nil
+	}
+	fullAuth.ID = uuid
+	fullAuth.Index = uuid
+	return fullAuth, true, nil
+}
+
+func (m *Manager) resolveFullRefreshAuth(ctx context.Context, auth *Auth) (*Auth, bool, error) {
+	if auth == nil {
+		return nil, false, nil
+	}
+	m.mu.RLock()
+	resolver := m.fullResolver
+	m.mu.RUnlock()
+	if resolver == nil {
+		return auth, true, nil
+	}
+
+	uuid := strings.TrimSpace(auth.ID)
+	if uuid == "" {
+		return nil, false, nil
+	}
+	fullAuth, errFull := resolver.GetFullAuth(ctx, uuid)
+	if errFull != nil {
+		if errors.Is(errFull, ErrFullAuthNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, errFull
+	}
+	if fullAuth == nil || fullAuth.Disabled || fullAuth.Status == StatusDisabled {
+		return nil, false, nil
+	}
+	fullAuth.ID = uuid
+	fullAuth.Index = uuid
+	return fullAuth, true, nil
 }
 
 func (m *Manager) executionModelCandidates(auth *Auth, routeModel string) []string {
@@ -771,6 +872,9 @@ func (m *Manager) StartAutoRefresh(parent context.Context, interval time.Duratio
 	if m == nil {
 		return
 	}
+	if parent == nil {
+		parent = context.Background()
+	}
 	if interval <= 0 {
 		interval = refreshCheckInterval
 	}
@@ -797,6 +901,14 @@ func (m *Manager) StartAutoRefresh(parent context.Context, interval time.Duratio
 }
 
 func (m *Manager) StopAutoRefresh() {
+	m.stopAutoRefresh(false)
+}
+
+func (m *Manager) Shutdown() {
+	m.stopAutoRefresh(true)
+}
+
+func (m *Manager) stopAutoRefresh(stopSelector bool) {
 	if m == nil {
 		return
 	}
@@ -807,6 +919,9 @@ func (m *Manager) StopAutoRefresh() {
 	m.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if !stopSelector {
+		return
 	}
 	if stoppable, ok := m.selector.(StoppableSelector); ok {
 		stoppable.Stop()
@@ -853,6 +968,14 @@ func (m *Manager) RefreshNow(ctx context.Context, authIndex string) (*Auth, erro
 	if target == nil {
 		return nil, fmt.Errorf("auth manager: auth not found")
 	}
+	fullTarget, okFull, errFull := m.resolveFullRefreshAuth(ctx, target)
+	if errFull != nil {
+		return nil, errFull
+	}
+	if !okFull {
+		return nil, fmt.Errorf("auth manager: auth not found")
+	}
+	target = fullTarget
 	if cfg == nil {
 		cfg = &internalconfig.Config{}
 	}
@@ -893,6 +1016,49 @@ func (m *Manager) RefreshNow(ctx context.Context, authIndex string) (*Auth, erro
 	return updatedPersisted, nil
 }
 
+// RefreshAuthCredential refreshes a full auth value without updating memory or persistence.
+func (m *Manager) RefreshAuthCredential(ctx context.Context, target *Auth) (*Auth, error) {
+	if m == nil {
+		return nil, fmt.Errorf("auth manager: nil manager")
+	}
+	if target == nil {
+		return nil, fmt.Errorf("auth manager: auth not found")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	m.mu.RLock()
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	m.mu.RUnlock()
+	if cfg == nil {
+		cfg = &internalconfig.Config{}
+	}
+
+	rt := m.roundTripperFor(target)
+	updated, errRefresh := refreshCredential(ctx, cfg, target.Clone(), rt)
+	now := time.Now().UTC()
+	if errRefresh != nil {
+		snapshot := target.Clone()
+		snapshot.NextRefreshAfter = now.Add(refreshFailureBackoff)
+		snapshot.LastError = &Error{Message: errRefresh.Error()}
+		return snapshot, errRefresh
+	}
+	if updated == nil {
+		updated = target.Clone()
+	}
+	if updated.Runtime == nil {
+		updated.Runtime = target.Runtime
+	}
+	updated.LastRefreshedAt = now
+	updated.NextRefreshAfter = time.Time{}
+	updated.LastError = nil
+	if m.shouldRefresh(updated, now) {
+		updated.NextRefreshAfter = now.Add(refreshIneffectiveBackoff)
+	}
+	return updated, nil
+}
+
 func (m *Manager) refreshAuth(ctx context.Context, authID string) {
 	if m == nil {
 		return
@@ -912,6 +1078,15 @@ func (m *Manager) refreshAuth(ctx context.Context, authID string) {
 	if current == nil {
 		return
 	}
+	fullCurrent, okFull, errFull := m.resolveFullRefreshAuth(ctx, current)
+	if errFull != nil {
+		logEntryWithRequestID(ctx).Warnf("auth refresh full auth lookup failed | auth=%s err=%v", authID, errFull)
+		return
+	}
+	if !okFull {
+		return
+	}
+	current = fullCurrent
 	if cfg == nil {
 		cfg = &internalconfig.Config{}
 	}
@@ -928,25 +1103,10 @@ func (m *Manager) refreshAuth(ctx context.Context, authID string) {
 	}
 	if errRefresh != nil {
 		logEntryWithRequestID(ctx).Warnf("auth refresh failed | auth=%s provider=%s err=%v", authID, current.Provider, errRefresh)
-		shouldReschedule := false
-		var schedulerSnapshot *authScheduler
-		var updatedSnapshot *Auth
-		m.mu.Lock()
-		if cur := m.auths[authID]; cur != nil {
-			cur.NextRefreshAfter = now.Add(refreshFailureBackoff)
-			cur.LastError = &Error{Message: errRefresh.Error()}
-			m.auths[authID] = cur
-			shouldReschedule = true
-			schedulerSnapshot = m.scheduler
-			updatedSnapshot = cur.Clone()
-		}
-		m.mu.Unlock()
-		if shouldReschedule && schedulerSnapshot != nil && updatedSnapshot != nil {
-			schedulerSnapshot.upsertAuth(updatedSnapshot)
-		}
-		if shouldReschedule {
-			m.queueRefreshReschedule(authID)
-		}
+		snapshot := current.Clone()
+		snapshot.NextRefreshAfter = now.Add(refreshFailureBackoff)
+		snapshot.LastError = &Error{Message: errRefresh.Error()}
+		_, _ = m.Update(ctx, snapshot)
 		return
 	}
 	if updated == nil {

@@ -112,3 +112,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 	}
 	return nil
 }
+
+func (r *Runtime) ApplyConfigFromCluster(ctx context.Context, cfg *config.Config) error {
+	return r.applyConfigAndReloadAuths(ctx, cfg)
+}

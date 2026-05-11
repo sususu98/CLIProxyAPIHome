@@ -17,7 +17,7 @@ func handleConfig(ctx context.Context, env dispatch.Env, args []string) dispatch
 		return dispatch.Err("wrong number of arguments for 'get' command")
 	}
 
-	data, errRead := env.Runtime.ReadConfigYAML()
+	data, errRead := env.Runtime.ReadConfigYAMLContext(ctx)
 	if errRead != nil {
 		return dispatch.Err(errRead.Error())
 	}

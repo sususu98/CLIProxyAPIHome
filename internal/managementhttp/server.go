@@ -15,10 +15,15 @@ import (
 	cpacoreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cpaconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/buildinfo"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
+	clustermanagement "github.com/router-for-me/CLIProxyAPIHome/internal/cluster/management"
+	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/managementasset"
 	mgmthandlers "github.com/router-for-me/CLIProxyAPIHome/internal/managementhttp/hanlders"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v3"
 )
 
 type RouteKey struct {
@@ -27,7 +32,8 @@ type RouteKey struct {
 }
 
 type RouteRegistry struct {
-	routes map[RouteKey]gin.HandlerFunc
+	routes            map[RouteKey]gin.HandlerFunc
+	clusterManagement *ClusterManagementOption
 }
 
 func newRouteRegistry() *RouteRegistry {
@@ -85,6 +91,12 @@ func (r *RouteRegistry) Register(group *gin.RouterGroup) {
 
 type RouteOption func(*RouteRegistry)
 
+type ClusterManagementOption struct {
+	Enabled    bool
+	Repository *cluster.Repository
+	Runtime    *home.Runtime
+}
+
 func WithRoute(method, path string, handler gin.HandlerFunc) RouteOption {
 	return func(r *RouteRegistry) {
 		if r == nil {
@@ -100,6 +112,53 @@ func WithoutRoute(method, path string) RouteOption {
 			return
 		}
 		r.Delete(method, path)
+	}
+}
+
+func WithClusterManagement(opt ClusterManagementOption) RouteOption {
+	return func(r *RouteRegistry) {
+		if r == nil || !opt.Enabled || opt.Repository == nil || opt.Runtime == nil {
+			return
+		}
+		optCopy := opt
+		r.clusterManagement = &optCopy
+		handler := clustermanagement.NewHandler(opt.Repository, opt.Runtime)
+		r.Set(http.MethodGet, "/config", handler.GetConfig)
+		r.Set(http.MethodGet, "/config.yaml", handler.GetConfigYAML)
+		r.Set(http.MethodPut, "/config.yaml", handler.PutConfigYAML)
+		for _, route := range clustermanagement.ConfigRootRoutes() {
+			r.Set(http.MethodGet, route, handler.GetConfigRoot(route))
+			r.Set(http.MethodPut, route, handler.PutConfigRoot(route))
+			r.Set(http.MethodPatch, route, handler.PutConfigRoot(route))
+			r.Set(http.MethodDelete, route, handler.DeleteConfigRoot(route))
+		}
+		r.Set(http.MethodGet, "/gemini-api-key", handler.GetGeminiKeys)
+		r.Set(http.MethodPut, "/gemini-api-key", handler.PutGeminiKeys)
+		r.Set(http.MethodPatch, "/gemini-api-key", handler.PatchGeminiKey)
+		r.Set(http.MethodDelete, "/gemini-api-key", handler.DeleteGeminiKey)
+		r.Set(http.MethodGet, "/vertex-api-key", handler.GetVertexCompatKeys)
+		r.Set(http.MethodPut, "/vertex-api-key", handler.PutVertexCompatKeys)
+		r.Set(http.MethodPatch, "/vertex-api-key", handler.PatchVertexCompatKey)
+		r.Set(http.MethodDelete, "/vertex-api-key", handler.DeleteVertexCompatKey)
+		r.Set(http.MethodGet, "/codex-api-key", handler.GetCodexKeys)
+		r.Set(http.MethodPut, "/codex-api-key", handler.PutCodexKeys)
+		r.Set(http.MethodPatch, "/codex-api-key", handler.PatchCodexKey)
+		r.Set(http.MethodDelete, "/codex-api-key", handler.DeleteCodexKey)
+		r.Set(http.MethodGet, "/claude-api-key", handler.GetClaudeKeys)
+		r.Set(http.MethodPut, "/claude-api-key", handler.PutClaudeKeys)
+		r.Set(http.MethodPatch, "/claude-api-key", handler.PatchClaudeKey)
+		r.Set(http.MethodDelete, "/claude-api-key", handler.DeleteClaudeKey)
+		r.Set(http.MethodGet, "/openai-compatibility", handler.GetOpenAICompat)
+		r.Set(http.MethodPut, "/openai-compatibility", handler.PutOpenAICompat)
+		r.Set(http.MethodPatch, "/openai-compatibility", handler.PatchOpenAICompat)
+		r.Set(http.MethodDelete, "/openai-compatibility", handler.DeleteOpenAICompat)
+		r.Set(http.MethodGet, "/auth-files", handler.ListAuthFiles)
+		r.Set(http.MethodGet, "/auth-files/download", handler.DownloadAuthFile)
+		r.Set(http.MethodPost, "/auth-files", handler.UploadAuthFile)
+		r.Set(http.MethodDelete, "/auth-files", handler.DeleteAuthFile)
+		r.Set(http.MethodPatch, "/auth-files/status", handler.PatchAuthFileStatus)
+		r.Set(http.MethodPatch, "/auth-files/fields", handler.PatchAuthFileFields)
+		r.Set(http.MethodPost, "/oauth-callback", handler.PostOAuthCallback)
 	}
 }
 
@@ -142,15 +201,42 @@ func serveManagementControlPanel(cfg *cpaconfig.Config, configFilePath string) g
 	}
 }
 
+func serveManagementControlPanelFromRuntime(opt *ClusterManagementOption, configFilePath string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if opt == nil || !opt.Enabled || opt.Runtime == nil {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		handler := serveManagementControlPanel(cpaConfigFromHomeConfig(opt.Runtime.Config()), configFilePath)
+		handler(c)
+	}
+}
+
 func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 	configFilePath = strings.TrimSpace(configFilePath)
 	if configFilePath == "" {
 		return nil, fmt.Errorf("management http: config file path is empty")
 	}
 
-	cfg, errLoad := cpaconfig.LoadConfigOptional(configFilePath, false)
-	if errLoad != nil {
-		return nil, fmt.Errorf("management http: load config: %w", errLoad)
+	preReg := newRouteRegistry()
+	for i := range opts {
+		if opts[i] == nil {
+			continue
+		}
+		opts[i](preReg)
+	}
+	clusterOpt := preReg.clusterManagement
+	clusterEnabled := clusterOpt != nil && clusterOpt.Enabled && clusterOpt.Repository != nil && clusterOpt.Runtime != nil
+
+	var cfg *cpaconfig.Config
+	if clusterEnabled {
+		cfg = cpaConfigFromHomeConfig(clusterOpt.Runtime.Config())
+	} else {
+		loadedConfig, errLoad := cpaconfig.LoadConfigOptional(configFilePath, false)
+		if errLoad != nil {
+			return nil, fmt.Errorf("management http: load config: %w", errLoad)
+		}
+		cfg = loadedConfig
 	}
 	if cfg == nil {
 		cfg = &cpaconfig.Config{}
@@ -176,8 +262,10 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 	authManager := cpacoreauth.NewManager(tokenStore, nil, nil)
 	authManager.SetConfig(cfg)
 	authManager.SetOAuthModelAlias(cfg.OAuthModelAlias)
-	if errAuthLoad := authManager.Load(context.Background()); errAuthLoad != nil {
-		return nil, fmt.Errorf("management http: load auths: %w", errAuthLoad)
+	if !clusterEnabled {
+		if errAuthLoad := authManager.Load(context.Background()); errAuthLoad != nil {
+			return nil, fmt.Errorf("management http: load auths: %w", errAuthLoad)
+		}
 	}
 
 	handler := cpasdkapi.NewHandler(cfg, configFilePath, authManager)
@@ -186,21 +274,36 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 	engine := gin.New()
 	engine.Use(gin.Recovery())
 
-	engine.GET("/management.html", serveManagementControlPanel(cfg, configFilePath))
+	if clusterEnabled {
+		engine.GET("/management.html", serveManagementControlPanelFromRuntime(clusterOpt, configFilePath))
+	} else {
+		engine.GET("/management.html", serveManagementControlPanel(cfg, configFilePath))
+	}
 
 	mgmt := engine.Group("/v0/management")
-	mgmt.Use(
-		withBuildInfoHeaders(),
-		refreshAndAvailabilityMiddleware(configFilePath, handler, authManager, tokenStore),
-		handler.Middleware(),
-	)
 
 	reg := defaultRoutes(handler)
+	if clusterEnabled {
+		reg = clusterSafeRoutes(handler)
+	}
 	for i := range opts {
 		if opts[i] == nil {
 			continue
 		}
 		opts[i](reg)
+	}
+	if clusterEnabled {
+		mgmt.Use(
+			withBuildInfoHeaders(),
+			clusterAvailabilityMiddleware(clusterOpt, handler),
+			handler.Middleware(),
+		)
+	} else {
+		mgmt.Use(
+			withBuildInfoHeaders(),
+			refreshAndAvailabilityMiddleware(configFilePath, handler, authManager, tokenStore),
+			handler.Middleware(),
+		)
 	}
 	reg.Register(mgmt)
 
@@ -283,6 +386,50 @@ func refreshAndAvailabilityMiddleware(configFilePath string, handler *cpasdkapi.
 
 		c.Next()
 	}
+}
+
+func clusterAvailabilityMiddleware(opt *ClusterManagementOption, handler *cpasdkapi.Handler) gin.HandlerFunc {
+	envSecret, envSecretSet := os.LookupEnv("MANAGEMENT_PASSWORD")
+	envSecret = strings.TrimSpace(envSecret)
+	envManagementSecret := envSecretSet && envSecret != ""
+
+	return func(c *gin.Context) {
+		if c == nil {
+			return
+		}
+		if opt == nil || !opt.Enabled || opt.Repository == nil || opt.Runtime == nil {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		cfg := cpaConfigFromHomeConfig(opt.Runtime.Config())
+		if cfg == nil {
+			cfg = &cpaconfig.Config{}
+		}
+		hasSecret := strings.TrimSpace(cfg.RemoteManagement.SecretKey) != "" || envManagementSecret
+		if !hasSecret {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		if handler != nil {
+			handler.SetConfig(cfg)
+		}
+		c.Next()
+	}
+}
+
+func cpaConfigFromHomeConfig(homeCfg *appconfig.Config) *cpaconfig.Config {
+	if homeCfg == nil {
+		return nil
+	}
+	data, errMarshal := yaml.Marshal(homeCfg)
+	if errMarshal != nil {
+		return &cpaconfig.Config{}
+	}
+	cfg := &cpaconfig.Config{}
+	if errUnmarshal := yaml.Unmarshal(data, cfg); errUnmarshal != nil {
+		return &cpaconfig.Config{}
+	}
+	return cfg
 }
 
 func defaultRoutes(handler *cpasdkapi.Handler) *RouteRegistry {
@@ -441,6 +588,33 @@ func defaultRoutes(handler *cpasdkapi.Handler) *RouteRegistry {
 	r.Set(http.MethodGet, "/antigravity-auth-url", handler.RequestAntigravityToken)
 	r.Set(http.MethodGet, "/kimi-auth-url", handler.RequestKimiToken)
 	r.Set(http.MethodPost, "/oauth-callback", handler.PostOAuthCallback)
+	r.Set(http.MethodGet, "/get-auth-status", handler.GetAuthStatus)
+
+	return r
+}
+
+func clusterSafeRoutes(handler *cpasdkapi.Handler) *RouteRegistry {
+	r := newRouteRegistry()
+	if handler == nil {
+		return r
+	}
+
+	r.Set(http.MethodGet, "/nodes", mgmthandlers.ListNodes)
+	r.Set(http.MethodGet, "/latest-version", handler.GetLatestVersion)
+	r.Set(http.MethodGet, "/api-key-usage", handler.GetAPIKeyUsage)
+	r.Set(http.MethodGet, "/usage-queue", handler.GetUsageQueue)
+	r.Set(http.MethodGet, "/logs", handler.GetLogs)
+	r.Set(http.MethodDelete, "/logs", handler.DeleteLogs)
+	r.Set(http.MethodGet, "/request-error-logs", handler.GetRequestErrorLogs)
+	r.Set(http.MethodGet, "/request-error-logs/:name", handler.DownloadRequestErrorLog)
+	r.Set(http.MethodGet, "/request-log-by-id/:id", handler.GetRequestLogByID)
+	r.Set(http.MethodGet, "/auth-files/models", handler.GetAuthFileModels)
+	r.Set(http.MethodGet, "/model-definitions/:channel", handler.GetStaticModelDefinitions)
+	r.Set(http.MethodGet, "/anthropic-auth-url", handler.RequestAnthropicToken)
+	r.Set(http.MethodGet, "/codex-auth-url", handler.RequestCodexToken)
+	r.Set(http.MethodGet, "/gemini-cli-auth-url", handler.RequestGeminiCLIToken)
+	r.Set(http.MethodGet, "/antigravity-auth-url", handler.RequestAntigravityToken)
+	r.Set(http.MethodGet, "/kimi-auth-url", handler.RequestKimiToken)
 	r.Set(http.MethodGet, "/get-auth-status", handler.GetAuthStatus)
 
 	return r

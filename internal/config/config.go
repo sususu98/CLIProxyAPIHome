@@ -661,18 +661,15 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// 	}
 	// }
 
-	// Hash remote management key if plaintext is detected (nested)
-	// We consider a value to be already hashed if it looks like a bcrypt hash ($2a$, $2b$, or $2y$ prefix).
-	if cfg.RemoteManagement.SecretKey != "" && !looksLikeBcrypt(cfg.RemoteManagement.SecretKey) {
-		hashed, errHash := hashSecret(cfg.RemoteManagement.SecretKey)
-		if errHash != nil {
-			return nil, fmt.Errorf("failed to hash remote management key: %w", errHash)
-		}
-		cfg.RemoteManagement.SecretKey = hashed
-
+	normalizedSecret, secretChanged, errNormalizeSecret := NormalizeRemoteManagementSecret(cfg.RemoteManagement.SecretKey)
+	if errNormalizeSecret != nil {
+		return nil, fmt.Errorf("failed to hash remote management key: %w", errNormalizeSecret)
+	}
+	if secretChanged {
+		cfg.RemoteManagement.SecretKey = normalizedSecret
 		// Persist the hashed value back to the config file to avoid re-hashing on next startup.
 		// Preserve YAML comments and ordering; update only the nested key.
-		_ = SaveConfigPreserveCommentsUpdateNestedScalar(configFile, []string{"remote-management", "secret-key"}, hashed)
+		_ = SaveConfigPreserveCommentsUpdateNestedScalar(configFile, []string{"remote-management", "secret-key"}, normalizedSecret)
 	}
 
 	cfg.RemoteManagement.PanelGitHubRepository = strings.TrimSpace(cfg.RemoteManagement.PanelGitHubRepository)
@@ -972,6 +969,17 @@ func normalizeModelPrefix(prefix string) string {
 // looksLikeBcrypt returns true if the provided string appears to be a bcrypt hash.
 func looksLikeBcrypt(s string) bool {
 	return len(s) > 4 && (s[:4] == "$2a$" || s[:4] == "$2b$" || s[:4] == "$2y$")
+}
+
+func NormalizeRemoteManagementSecret(secret string) (string, bool, error) {
+	if secret == "" || looksLikeBcrypt(secret) {
+		return secret, false, nil
+	}
+	hashed, errHash := hashSecret(secret)
+	if errHash != nil {
+		return "", false, errHash
+	}
+	return hashed, true, nil
 }
 
 // NormalizeHeaders trims header keys and values and removes empty pairs.

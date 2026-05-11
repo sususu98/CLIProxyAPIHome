@@ -2,11 +2,9 @@ package get
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 
 	homeerrors "github.com/router-for-me/CLIProxyAPIHome/internal/errors"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -37,41 +35,14 @@ func handleDefault(ctx context.Context, env dispatch.Env, args []string) dispatc
 		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageMissingAuthIndex)))
 	}
 
-	core := env.Runtime.CoreManager()
-	if core == nil {
-		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageRuntimeNotReady)))
-	}
-
-	updated, errRefresh := core.RefreshNow(ctx, authIndex)
+	payload, errRefresh := env.Runtime.RefreshNow(ctx, authIndex)
 	if errRefresh != nil {
 		return dispatch.BulkString([]byte(buildErrorJSON(errRefresh.Error())))
 	}
-	if updated == nil {
+	if len(payload) == 0 {
 		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageAuthNotFound)))
 	}
-
-	auth := home.SanitizeAuthForDownstream(updated)
-	if auth == nil {
-		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageAuthNotFound)))
-	}
-	authJSON, errMarshal := json.Marshal(auth)
-	if errMarshal != nil {
-		return dispatch.BulkString([]byte(buildErrorJSON(errMarshal.Error())))
-	}
-
-	authIndexTrimmed := strings.TrimSpace(auth.EnsureIndex())
-	if authIndexTrimmed == "" {
-		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageAuthNotFound)))
-	}
-	authJSON, errSetAuthIndex := sjson.SetBytes(authJSON, "auth_index", authIndexTrimmed)
-	if errSetAuthIndex != nil {
-		return dispatch.BulkString([]byte(buildErrorJSON(errSetAuthIndex.Error())))
-	}
-
-	out := []byte("{}")
-	out, _ = sjson.SetBytes(out, "auth_index", authIndexTrimmed)
-	out, _ = sjson.SetRawBytes(out, "auth", authJSON)
-	return dispatch.BulkString(out)
+	return dispatch.BulkString(payload)
 }
 
 func buildErrorJSON(message string) string {

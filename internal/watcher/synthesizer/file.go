@@ -175,11 +175,16 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 				ApplyAuthExcludedModelsMeta(v, cfg, perAccountExcluded, "oauth")
 			}
 			out := make([]*coreauth.Auth, 0, 1+len(virtuals))
+			applyClusterUUID(ctx, a)
 			out = append(out, a)
-			out = append(out, virtuals...)
+			for _, v := range virtuals {
+				applyClusterUUID(ctx, v)
+				out = append(out, v)
+			}
 			return out
 		}
 	}
+	applyClusterUUID(ctx, a)
 	return []*coreauth.Auth{a}
 }
 

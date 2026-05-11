@@ -1,6 +1,7 @@
 package home
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -9,7 +10,66 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 )
 
+const (
+	homeConfigModelsMetadataKey = "home_config_models"
+)
+
 type ModelInfo = registry.ModelInfo
+
+func modelInfosFromAuthMetadata(a *coreauth.Auth, key string) []*ModelInfo {
+	if a == nil || len(a.Metadata) == 0 {
+		return nil
+	}
+	raw, ok := a.Metadata[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	data, errMarshal := json.Marshal(raw)
+	if errMarshal != nil {
+		return nil
+	}
+	var items []map[string]any
+	if errUnmarshal := json.Unmarshal(data, &items); errUnmarshal != nil {
+		return nil
+	}
+	out := make([]*ModelInfo, 0, len(items))
+	for _, item := range items {
+		if len(item) == 0 {
+			continue
+		}
+		rawItem, errMarshalItem := json.Marshal(item)
+		if errMarshalItem != nil {
+			continue
+		}
+		var model ModelInfo
+		if errUnmarshalItem := json.Unmarshal(rawItem, &model); errUnmarshalItem != nil {
+			continue
+		}
+		if strings.TrimSpace(model.ID) == "" {
+			continue
+		}
+		if model.Object == "" {
+			model.Object = "model"
+		}
+		if model.Created == 0 {
+			model.Created = time.Now().Unix()
+		}
+		model.UserDefined = boolFromMetadataValue(item["user_defined"])
+		out = append(out, &model)
+	}
+	return out
+}
+
+func boolFromMetadataValue(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true") || strings.TrimSpace(typed) == "1"
+	default:
+		return false
+	}
+}
 
 func openAICompatInfoFromAuth(a *coreauth.Auth) (providerKey string, compatName string, ok bool) {
 	if a == nil {
@@ -91,12 +151,15 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 			excluded = strings.Split(val, ",")
 		}
 	}
+	configModels := modelInfosFromAuthMetadata(a, homeConfigModelsMetadataKey)
 
 	var models []*ModelInfo
 	switch provider {
 	case "gemini":
 		models = registry.GetGeminiModels()
-		if entry := r.resolveConfigGeminiKey(cfg, a); entry != nil {
+		if len(configModels) > 0 {
+			models = configModels
+		} else if entry := r.resolveConfigGeminiKey(cfg, a); entry != nil {
 			if len(entry.Models) > 0 {
 				models = buildGeminiConfigModels(entry)
 			}
@@ -107,7 +170,9 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 		models = applyExcludedModels(models, excluded)
 	case "vertex":
 		models = registry.GetGeminiVertexModels()
-		if entry := r.resolveConfigVertexCompatKey(cfg, a); entry != nil {
+		if len(configModels) > 0 {
+			models = configModels
+		} else if entry := r.resolveConfigVertexCompatKey(cfg, a); entry != nil {
 			if len(entry.Models) > 0 {
 				models = buildVertexCompatConfigModels(entry)
 			}
@@ -127,7 +192,9 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 		models = applyExcludedModels(models, excluded)
 	case "claude":
 		models = registry.GetClaudeModels()
-		if entry := r.resolveConfigClaudeKey(cfg, a); entry != nil {
+		if len(configModels) > 0 {
+			models = configModels
+		} else if entry := r.resolveConfigClaudeKey(cfg, a); entry != nil {
 			if len(entry.Models) > 0 {
 				models = buildClaudeConfigModels(entry)
 			}
@@ -153,7 +220,9 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 		default:
 			models = registry.GetCodexProModels()
 		}
-		if entry := r.resolveConfigCodexKey(cfg, a); entry != nil {
+		if len(configModels) > 0 {
+			models = configModels
+		} else if entry := r.resolveConfigCodexKey(cfg, a); entry != nil {
 			if len(entry.Models) > 0 {
 				models = buildCodexConfigModels(entry)
 			}
@@ -166,6 +235,23 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 		models = registry.GetKimiModels()
 		models = applyExcludedModels(models, excluded)
 	default:
+		if len(configModels) > 0 {
+			providerKey := provider
+			if compatDetected {
+				if compatProviderKey != "" {
+					providerKey = compatProviderKey
+				}
+				if strings.EqualFold(providerKey, "openai-compatibility") && compatDisplayName != "" {
+					providerKey = strings.ToLower(compatDisplayName)
+				}
+			}
+			if providerKey == "" {
+				providerKey = "openai-compatibility"
+			}
+			forcePrefix := cfg != nil && cfg.ForceModelPrefix
+			r.registerResolvedModelsForAuth(a, providerKey, applyModelPrefixes(configModels, a.Prefix, forcePrefix))
+			return
+		}
 		if cfg != nil {
 			providerKey := provider
 			compatName := strings.TrimSpace(a.Provider)

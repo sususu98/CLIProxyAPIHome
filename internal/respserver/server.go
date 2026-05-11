@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
@@ -23,6 +24,7 @@ type Server struct {
 	runtime  *home.Runtime
 	registry *dispatch.Registry
 	auth     *managementAuthenticator
+	cluster  *cluster.RESPHandler
 }
 
 func New(addr string, runtime *home.Runtime) *Server {
@@ -32,6 +34,13 @@ func New(addr string, runtime *home.Runtime) *Server {
 		registry: buildRegistry(),
 		auth:     newManagementAuthenticator(runtime),
 	}
+}
+
+func (s *Server) SetClusterHandler(handler *cluster.RESPHandler) {
+	if s == nil {
+		return
+	}
+	s.cluster = handler
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -137,6 +146,20 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 		}
 
 		cmd := strings.ToUpper(strings.TrimSpace(args[0]))
+
+		if cmd == clusterCommand {
+			if s.cluster == nil {
+				_ = writer.WriteRedisError("ERR cluster disabled")
+				continue
+			}
+			payload, errCluster := s.cluster.Handle(ctx, args, clientIP)
+			if errCluster != nil {
+				_ = writer.WriteRedisError("ERR " + errCluster.Error())
+				continue
+			}
+			_ = writer.WriteRedisBulkString(payload)
+			continue
+		}
 
 		if cmd == "PING" {
 			switch len(args) {

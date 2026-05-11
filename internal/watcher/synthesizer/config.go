@@ -1,13 +1,19 @@
 package synthesizer
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
+	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/diff"
 )
+
+const homeConfigModelsMetadataKey = "home_config_models"
 
 // ConfigSynthesizer generates Auth entries from configuration API keys.
 // It handles Gemini, Claude, Codex, OpenAI-compat, and Vertex-compat providers.
@@ -64,6 +70,7 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeys(ctx *SynthesisContext) []*corea
 		if entry.DisableCooling {
 			metadata["disable_cooling"] = true
 		}
+		addConfigModelsToMetadata(metadata, buildConfigModels(entry.Models, "google", "gemini", now))
 		if entry.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(entry.Priority)
 		}
@@ -90,6 +97,7 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeys(ctx *SynthesisContext) []*corea
 		if len(a.Metadata) == 0 {
 			a.Metadata = nil
 		}
+		applyClusterUUID(ctx, a)
 		out = append(out, a)
 	}
 	return out
@@ -119,6 +127,7 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 		if ck.DisableCooling {
 			metadata["disable_cooling"] = true
 		}
+		addConfigModelsToMetadata(metadata, buildConfigModels(ck.Models, "anthropic", "claude", now))
 		if ck.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(ck.Priority)
 		}
@@ -146,6 +155,7 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 		if len(a.Metadata) == 0 {
 			a.Metadata = nil
 		}
+		applyClusterUUID(ctx, a)
 		out = append(out, a)
 	}
 	return out
@@ -174,6 +184,7 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 		if ck.DisableCooling {
 			metadata["disable_cooling"] = true
 		}
+		addConfigModelsToMetadata(metadata, registry.WithCodexBuiltins(buildConfigModels(ck.Models, "openai", "openai", now)))
 		if ck.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(ck.Priority)
 		}
@@ -204,6 +215,7 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 		if len(a.Metadata) == 0 {
 			a.Metadata = nil
 		}
+		applyClusterUUID(ctx, a)
 		out = append(out, a)
 	}
 	return out
@@ -247,6 +259,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			if disableCooling {
 				metadata["disable_cooling"] = true
 			}
+			addConfigModelsToMetadata(metadata, buildOpenAICompatibilityModels(compat.Models, compat.Name, now))
 			if compat.Priority != 0 {
 				attrs["priority"] = strconv.Itoa(compat.Priority)
 			}
@@ -272,6 +285,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			if len(a.Metadata) == 0 {
 				a.Metadata = nil
 			}
+			applyClusterUUID(ctx, a)
 			out = append(out, a)
 			createdEntries++
 		}
@@ -289,6 +303,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			if disableCooling {
 				metadata["disable_cooling"] = true
 			}
+			addConfigModelsToMetadata(metadata, buildOpenAICompatibilityModels(compat.Models, compat.Name, now))
 			if compat.Priority != 0 {
 				attrs["priority"] = strconv.Itoa(compat.Priority)
 			}
@@ -310,6 +325,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			if len(a.Metadata) == 0 {
 				a.Metadata = nil
 			}
+			applyClusterUUID(ctx, a)
 			out = append(out, a)
 		}
 	}
@@ -338,6 +354,8 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 			"base_url":     base,
 			"provider_key": providerName,
 		}
+		metadata := map[string]any{}
+		addConfigModelsToMetadata(metadata, buildConfigModels(compat.Models, "google", "vertex", now))
 		if compat.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(compat.Priority)
 		}
@@ -356,11 +374,145 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 			Status:     coreauth.StatusActive,
 			ProxyURL:   proxyURL,
 			Attributes: attrs,
+			Metadata:   metadata,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
 		ApplyAuthExcludedModelsMeta(a, cfg, compat.ExcludedModels, "apikey")
+		if len(a.Metadata) == 0 {
+			a.Metadata = nil
+		}
+		applyClusterUUID(ctx, a)
 		out = append(out, a)
+	}
+	return out
+}
+
+type modelEntry interface {
+	GetName() string
+	GetAlias() string
+}
+
+func buildConfigModels[T modelEntry](models []T, ownedBy, modelType string, now time.Time) []*registry.ModelInfo {
+	if len(models) == 0 {
+		return nil
+	}
+	created := now.Unix()
+	if created == 0 {
+		created = time.Now().Unix()
+	}
+	out := make([]*registry.ModelInfo, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for i := range models {
+		model := models[i]
+		name := strings.TrimSpace(model.GetName())
+		alias := strings.TrimSpace(model.GetAlias())
+		if alias == "" {
+			alias = name
+		}
+		if alias == "" {
+			continue
+		}
+		key := strings.ToLower(alias)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		display := name
+		if display == "" {
+			display = alias
+		}
+		info := &registry.ModelInfo{
+			ID:          alias,
+			Object:      "model",
+			Created:     created,
+			OwnedBy:     ownedBy,
+			Type:        modelType,
+			DisplayName: display,
+			UserDefined: true,
+		}
+		if name != "" {
+			if upstream := registry.LookupStaticModelInfo(name); upstream != nil && upstream.Thinking != nil {
+				info.Thinking = upstream.Thinking
+			}
+		}
+		out = append(out, info)
+	}
+	return out
+}
+
+func buildOpenAICompatibilityModels(models []appconfig.OpenAICompatibilityModel, compatName string, now time.Time) []*registry.ModelInfo {
+	if len(models) == 0 {
+		return nil
+	}
+	created := now.Unix()
+	if created == 0 {
+		created = time.Now().Unix()
+	}
+	out := make([]*registry.ModelInfo, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for i := range models {
+		model := models[i]
+		modelID := strings.TrimSpace(model.Alias)
+		if modelID == "" {
+			modelID = strings.TrimSpace(model.Name)
+		}
+		if modelID == "" {
+			continue
+		}
+		key := strings.ToLower(modelID)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		thinking := model.Thinking
+		if thinking == nil {
+			thinking = &registry.ThinkingSupport{Levels: []string{"low", "medium", "high"}}
+		}
+		out = append(out, &registry.ModelInfo{
+			ID:          modelID,
+			Object:      "model",
+			Created:     created,
+			OwnedBy:     compatName,
+			Type:        "openai-compatibility",
+			DisplayName: modelID,
+			UserDefined: false,
+			Thinking:    thinking,
+		})
+	}
+	return out
+}
+
+func addConfigModelsToMetadata(metadata map[string]any, models []*registry.ModelInfo) {
+	if metadata == nil || len(models) == 0 {
+		return
+	}
+	payload := modelInfoMetadataPayload(models)
+	if len(payload) == 0 {
+		return
+	}
+	metadata[homeConfigModelsMetadataKey] = payload
+}
+
+func modelInfoMetadataPayload(models []*registry.ModelInfo) []map[string]any {
+	if len(models) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(models))
+	for _, model := range models {
+		if model == nil || strings.TrimSpace(model.ID) == "" {
+			continue
+		}
+		raw, errMarshal := json.Marshal(model)
+		if errMarshal != nil {
+			continue
+		}
+		var item map[string]any
+		if errUnmarshal := json.Unmarshal(raw, &item); errUnmarshal != nil {
+			continue
+		}
+		item["user_defined"] = model.UserDefined
+		out = append(out, item)
 	}
 	return out
 }

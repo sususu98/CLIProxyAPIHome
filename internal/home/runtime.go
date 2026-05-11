@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 type Runtime struct {
@@ -36,12 +38,23 @@ type Runtime struct {
 	nextConfigSubID uint64
 	configSubs      map[uint64]func(payload []byte) error
 
-	accessManager *access.Manager
-	coreManager   *coreauth.Manager
+	accessManager  *access.Manager
+	coreManager    *coreauth.Manager
+	clusterAdapter ClusterAdapter
+	clusterRefresh func(context.Context, string) ([]byte, error)
+	originalStore  coreauth.Store
 
 	cancel context.CancelFunc
 
 	fileWatcher interface{ Stop() error }
+}
+
+type ClusterAdapter interface {
+	Enabled() bool
+	LoadAuthIndex(ctx context.Context) error
+	ListMinimalAuths() []*coreauth.Auth
+	GetFullAuth(ctx context.Context, uuid string) (*coreauth.Auth, error)
+	LoadConfigYAML(ctx context.Context) ([]byte, error)
 }
 
 func NewRuntime(cfg *config.Config) (*Runtime, error) {
@@ -77,7 +90,33 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 		authDir:       cfg.AuthDir,
 		accessManager: accessManager,
 		coreManager:   coreManager,
+		originalStore: store,
 	}, nil
+}
+
+func (r *Runtime) SetClusterAdapter(adapter ClusterAdapter) {
+	if r == nil {
+		return
+	}
+	r.clusterAdapter = adapter
+	if r.coreManager != nil {
+		if adapter != nil && adapter.Enabled() {
+			r.coreManager.SetFullAuthResolver(adapter)
+			if store, ok := adapter.(coreauth.Store); ok {
+				r.coreManager.SetStore(store)
+			}
+		} else {
+			r.coreManager.SetFullAuthResolver(nil)
+			r.coreManager.SetStore(r.originalStore)
+		}
+	}
+}
+
+func (r *Runtime) SetClusterRefreshHandler(handler func(context.Context, string) ([]byte, error)) {
+	if r == nil {
+		return
+	}
+	r.clusterRefresh = handler
 }
 
 func (r *Runtime) Start(ctx context.Context, configPath string) error {
@@ -120,14 +159,19 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 		return errLoad
 	}
 
-	if r.coreManager != nil {
-		interval := 15 * time.Minute
-		r.coreManager.StartAutoRefresh(context.Background(), interval)
-		log.Infof("core auth auto-refresh started (interval=%s)", interval)
+	clusterMode := r.clusterAutoRefreshGated()
+	if clusterMode {
+		log.Infof("core auth auto-refresh waiting for cluster master")
+	} else {
+		r.StartAutoRefresh(context.Background())
 	}
 
-	if errWatch := r.startFileWatcher(runCtx, configPath); errWatch != nil {
-		return errWatch
+	if clusterMode {
+		log.Infof("hot reload file watcher disabled in cluster mode")
+	} else {
+		if errWatch := r.startFileWatcher(runCtx, configPath); errWatch != nil {
+			return errWatch
+		}
 	}
 
 	return nil
@@ -145,9 +189,33 @@ func (r *Runtime) Stop() {
 		_ = r.fileWatcher.Stop()
 		r.fileWatcher = nil
 	}
+	r.StopAutoRefresh()
 	if r.coreManager != nil {
-		r.coreManager.StopAutoRefresh()
+		r.coreManager.Shutdown()
 	}
+}
+
+func (r *Runtime) StartAutoRefresh(ctx context.Context) {
+	if r == nil || r.coreManager == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	interval := 15 * time.Minute
+	r.coreManager.StartAutoRefresh(ctx, interval)
+	log.Infof("core auth auto-refresh started (interval=%s)", interval)
+}
+
+func (r *Runtime) StopAutoRefresh() {
+	if r == nil || r.coreManager == nil {
+		return
+	}
+	r.coreManager.StopAutoRefresh()
+}
+
+func (r *Runtime) clusterAutoRefreshGated() bool {
+	return r != nil && r.clusterAdapter != nil && r.clusterAdapter.Enabled()
 }
 
 func (r *Runtime) Config() *config.Config {
@@ -166,6 +234,75 @@ func (r *Runtime) CoreManager() *coreauth.Manager {
 	return r.coreManager
 }
 
+func (r *Runtime) RefreshNow(ctx context.Context, authIndex string) ([]byte, error) {
+	if r == nil {
+		return nil, fmt.Errorf("home runtime: runtime is nil")
+	}
+	if r.clusterRefresh != nil {
+		return r.clusterRefresh(ctx, authIndex)
+	}
+	return r.RefreshNowLocal(ctx, authIndex)
+}
+
+func (r *Runtime) RefreshNowLocal(ctx context.Context, authIndex string) ([]byte, error) {
+	if r == nil || r.coreManager == nil {
+		return nil, fmt.Errorf("home runtime: runtime not ready")
+	}
+	updated, errRefresh := r.coreManager.RefreshNow(ctx, authIndex)
+	if errRefresh != nil {
+		return nil, errRefresh
+	}
+	return BuildRefreshPayload(updated)
+}
+
+func (r *Runtime) UpdateAuthInMemory(ctx context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+	if r == nil || r.coreManager == nil {
+		return nil, fmt.Errorf("home runtime: runtime not ready")
+	}
+	return r.coreManager.Update(coreauth.WithSkipPersist(ctx), auth)
+}
+
+func (r *Runtime) RefreshClusterAuthIndex(ctx context.Context, uuid string) error {
+	if r == nil || r.clusterAdapter == nil {
+		return nil
+	}
+	refresher, ok := r.clusterAdapter.(interface {
+		RefreshAuthIndex(context.Context, string) error
+	})
+	if !ok || refresher == nil {
+		return nil
+	}
+	return refresher.RefreshAuthIndex(ctx, uuid)
+}
+
+func BuildRefreshPayload(updated *coreauth.Auth) ([]byte, error) {
+	if updated == nil {
+		return nil, fmt.Errorf("auth manager: auth not found")
+	}
+	auth := SanitizeAuthForDownstream(updated)
+	if auth == nil {
+		return nil, fmt.Errorf("auth manager: auth not found")
+	}
+	authJSON, errMarshal := json.Marshal(auth)
+	if errMarshal != nil {
+		return nil, errMarshal
+	}
+
+	authIndex := strings.TrimSpace(auth.EnsureIndex())
+	if authIndex == "" {
+		return nil, fmt.Errorf("auth manager: auth not found")
+	}
+	authJSON, errSetAuthIndex := sjson.SetBytes(authJSON, "auth_index", authIndex)
+	if errSetAuthIndex != nil {
+		return nil, errSetAuthIndex
+	}
+
+	out := []byte("{}")
+	out, _ = sjson.SetBytes(out, "auth_index", authIndex)
+	out, _ = sjson.SetRawBytes(out, "auth", authJSON)
+	return out, nil
+}
+
 func (r *Runtime) AccessManager() *access.Manager {
 	if r == nil {
 		return nil
@@ -177,9 +314,16 @@ func (r *Runtime) Authenticate(ctx context.Context, headers http.Header) (*acces
 	return r.authenticateRequest(ctx, headers)
 }
 
+func (r *Runtime) ReloadAuths(ctx context.Context) error {
+	return r.loadAuths(coreauth.WithSkipPersist(ctx))
+}
+
 func (r *Runtime) loadAuths(ctx context.Context) error {
 	if r == nil || r.coreManager == nil {
 		return nil
+	}
+	if r.clusterAdapter != nil && r.clusterAdapter.Enabled() {
+		return r.loadClusterAuths(ctx, r.clusterAdapter)
 	}
 
 	r.cfgMu.RLock()

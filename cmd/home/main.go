@@ -11,9 +11,11 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/logging"
@@ -25,6 +27,10 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	logging.SetupBaseLogger()
 
 	var configPath string
@@ -33,57 +39,191 @@ func main() {
 	flag.StringVar(&addr, "addr", "", "Override RESP listen address (host:port)")
 	flag.Parse()
 
-	cfg, errLoad := config.LoadConfigOptional(configPath, false)
-	if errLoad != nil {
-		log.Errorf("failed to load config %s: %v", configPath, errLoad)
-		os.Exit(1)
-	}
-
-	currentLevel := log.GetLevel()
-	if cfg.Debug {
-		log.SetLevel(log.DebugLevel)
-	} else {
-		log.SetLevel(log.InfoLevel)
-	}
-	if nextLevel := log.GetLevel(); nextLevel != currentLevel {
-		log.Infof("log level changed from %s to %s (debug=%t)", currentLevel, nextLevel, cfg.Debug)
-	}
-
-	rt, errRuntime := home.NewRuntime(cfg)
-	if errRuntime != nil {
-		log.Errorf("failed to init runtime: %v", errRuntime)
-		os.Exit(1)
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	defer rt.Stop()
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
 
-	if errStart := rt.Start(ctx, configPath); errStart != nil {
-		log.Errorf("failed to start runtime: %v", errStart)
-		os.Exit(1)
+	clusterCfg, clusterExists, errClusterCfg := cluster.LoadConfigOptional("")
+	if errClusterCfg != nil {
+		log.Errorf("failed to load cluster config: %v", errClusterCfg)
+		return 1
 	}
 
-	if strings.TrimSpace(addr) == "" {
-		host := strings.TrimSpace(cfg.Host)
-		port := cfg.Port
-		if host == "" {
-			addr = ":" + strconv.Itoa(port)
-		} else {
-			addr = fmt.Sprintf("%s:%d", host, port)
+	var cfg *config.Config
+	var rt *home.Runtime
+	var coordinator *cluster.Coordinator
+	var clusterRepo *cluster.Repository
+	var clusterStartedAt time.Time
+	var clusterClientAddr string
+	var clusterAdapter *cluster.RuntimeAdapter
+	var coordinatorErrCh <-chan error
+	var eventWatcher *cluster.EventWatcher
+	var eventWatcherErrCh <-chan error
+	var clusterRESPHandler *cluster.RESPHandler
+	if clusterExists {
+		startedAt := time.Now().UTC()
+		clusterStartedAt = startedAt
+		clusterDB, errClusterOpen := cluster.Open(runCtx, clusterCfg.PGSQL)
+		if errClusterOpen != nil {
+			log.Errorf("failed to open cluster database: %v", errClusterOpen)
+			return 1
+		}
+		sqlDB, errSQLDB := clusterDB.DB()
+		if errSQLDB != nil {
+			log.Errorf("failed to get cluster sql db: %v", errSQLDB)
+			return 1
+		}
+		defer func() {
+			if errCloseSQL := sqlDB.Close(); errCloseSQL != nil {
+				log.Warnf("failed to close cluster sql db: %v", errCloseSQL)
+			}
+		}()
+		if errMigrate := cluster.AutoMigrate(clusterDB); errMigrate != nil {
+			log.Errorf("failed to migrate cluster database: %v", errMigrate)
+			return 1
+		}
+		clientAddr, errClientAddr := cluster.ClientAddr(runCtx, clusterDB)
+		if errClientAddr != nil {
+			log.Errorf("failed to get cluster client address: %v", errClientAddr)
+			return 1
+		}
+		clusterClientAddr = clientAddr
+		localCfg, errLocalConfig := loadLocalConfigForCluster(configPath)
+		if errLocalConfig != nil {
+			log.Errorf("failed to load local config %s: %v", configPath, errLocalConfig)
+			return 1
+		}
+		localAuthDir := ""
+		if localCfg != nil {
+			localAuthDir = localCfg.AuthDir
+		}
+
+		repo := cluster.NewRepository(clusterDB)
+		clusterRepo = repo
+		if errBootstrap := cluster.Bootstrap(runCtx, cluster.BootstrapOptions{
+			ConfigPath: configPath,
+			AuthDir:    localAuthDir,
+			Config:     localCfg,
+			Repository: repo,
+			Now:        startedAt,
+		}); errBootstrap != nil {
+			log.Errorf("failed to bootstrap cluster database: %v", errBootstrap)
+			return 1
+		}
+
+		runtimeCfg, _, errRuntimeConfig := repo.LoadConfigAsRuntimeConfig(runCtx)
+		if errRuntimeConfig != nil {
+			log.Errorf("failed to load cluster runtime config: %v", errRuntimeConfig)
+			return 1
+		}
+		cfg = runtimeCfg
+		applyLogLevel(cfg)
+
+		var errRuntime error
+		rt, errRuntime = home.NewRuntime(cfg)
+		if errRuntime != nil {
+			log.Errorf("failed to init runtime: %v", errRuntime)
+			return 1
+		}
+
+		adapter := cluster.NewRuntimeAdapter(repo)
+		clusterAdapter = adapter
+		rt.SetClusterAdapter(adapter)
+		lastSeenID, errMaxEventID := repo.MaxEventID(runCtx)
+		if errMaxEventID != nil {
+			log.Errorf("failed to get cluster max event id: %v", errMaxEventID)
+			return 1
+		}
+		eventWatcher = cluster.NewEventWatcherFrom(repo, clusterCfg.Node.EventPollInterval, lastSeenID, func(eventCtx context.Context, event cluster.ClusterEventRecord) error {
+			if strings.EqualFold(strings.TrimSpace(event.Scope), "config") {
+				nextConfig, payload, errConfig := repo.LoadConfigAsRuntimeConfig(eventCtx)
+				if errConfig != nil {
+					return errConfig
+				}
+				if errApply := rt.ApplyConfigFromCluster(eventCtx, nextConfig); errApply != nil {
+					return errApply
+				}
+				rt.PublishConfigYAML(payload)
+				return nil
+			}
+			if errApplyEvent := adapter.ApplyEvent(eventCtx, event); errApplyEvent != nil {
+				return errApplyEvent
+			}
+			return rt.ReloadAuths(eventCtx)
+		})
+	} else {
+		loadedConfig, errLoad := config.LoadConfigOptional(configPath, false)
+		if errLoad != nil {
+			log.Errorf("failed to load config %s: %v", configPath, errLoad)
+			return 1
+		}
+		cfg = loadedConfig
+		applyLogLevel(cfg)
+
+		var errRuntime error
+		rt, errRuntime = home.NewRuntime(cfg)
+		if errRuntime != nil {
+			log.Errorf("failed to init runtime: %v", errRuntime)
+			return 1
+		}
+	}
+	if rt == nil {
+		log.Errorf("failed to init runtime")
+		return 1
+	}
+	defer rt.Stop()
+
+	listenAddr, listenPort, errListenAddr := resolveListenAddress(addr, cfg, clusterCfg, clusterExists)
+	if errListenAddr != nil {
+		log.Errorf("failed to resolve listen address: %v", errListenAddr)
+		return 1
+	}
+	addr = listenAddr
+
+	if clusterRepo != nil {
+		coordinator = cluster.NewCoordinator(clusterRepo, cluster.NodeIdentity{
+			IP:        clusterClientAddr,
+			Port:      listenPort,
+			StartedAt: clusterStartedAt,
+		}, cluster.CoordinatorOptions{
+			HeartbeatInterval: clusterCfg.Node.HeartbeatInterval,
+			HeartbeatTimeout:  clusterCfg.Node.HeartbeatTimeout,
+		})
+		refreshController := cluster.NewRefreshController(coordinator, rt, clusterRepo)
+		coordinator.SetOnMasterChanged(refreshController.OnMasterChanged)
+		rt.SetClusterRefreshHandler(refreshController.RefreshNow)
+		clusterRESPHandler = cluster.NewRESPHandler(coordinator, refreshController, clusterRepo)
+		if clusterAdapter == nil {
+			log.Errorf("failed to init cluster runtime adapter")
+			return 1
 		}
 	}
 
+	if errStart := rt.Start(runCtx, configPath); errStart != nil {
+		log.Errorf("failed to start runtime: %v", errStart)
+		return 1
+	}
+
 	respSrv := respserver.New(addr, rt)
+	respSrv.SetClusterHandler(clusterRESPHandler)
 
 	cfgPath := strings.TrimSpace(rt.ConfigPath())
 	if cfgPath == "" {
 		cfgPath = strings.TrimSpace(configPath)
 	}
-	mgmtBuild, errMgmt := managementhttp.Build(cfgPath)
+	mgmtOpts := make([]managementhttp.RouteOption, 0, 1)
+	if clusterRepo != nil {
+		mgmtOpts = append(mgmtOpts, managementhttp.WithClusterManagement(managementhttp.ClusterManagementOption{
+			Enabled:    true,
+			Repository: clusterRepo,
+			Runtime:    rt,
+		}))
+	}
+	mgmtBuild, errMgmt := managementhttp.Build(cfgPath, mgmtOpts...)
 	if errMgmt != nil {
 		log.Errorf("failed to init management http: %v", errMgmt)
-		os.Exit(1)
+		return 1
 	}
 
 	httpSrv := &http.Server{
@@ -95,7 +235,7 @@ func main() {
 	baseListener, errListen := net.Listen("tcp", addr)
 	if errListen != nil {
 		log.Errorf("failed to listen on %s: %v", addr, errListen)
-		os.Exit(1)
+		return 1
 	}
 
 	if cfg.TLS.Enable {
@@ -104,13 +244,13 @@ func main() {
 		if certPath == "" || keyPath == "" {
 			log.Errorf("failed to start HTTPS server: tls.cert or tls.key is empty")
 			_ = baseListener.Close()
-			os.Exit(1)
+			return 1
 		}
 		certPair, errLoad := tls.LoadX509KeyPair(certPath, keyPath)
 		if errLoad != nil {
 			log.Errorf("failed to start HTTPS server: %v", errLoad)
 			_ = baseListener.Close()
-			os.Exit(1)
+			return 1
 		}
 		tlsConfig := &tls.Config{
 			Certificates: []tls.Certificate{certPair},
@@ -124,54 +264,205 @@ func main() {
 	}
 
 	httpListener := protocolmux.NewListener(baseListener.Addr(), 1024)
+	var shutdownOnce sync.Once
+	shutdownServers := func() {
+		shutdownOnce.Do(func() {
+			cancelRun()
+			_ = httpListener.Close()
+			_ = baseListener.Close()
+			shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancelShutdown()
+			_ = httpSrv.Shutdown(shutdownCtx)
+		})
+	}
 
 	httpErrCh := make(chan error, 1)
 	acceptErrCh := make(chan error, 1)
+
+	if coordinator != nil {
+		errCh := make(chan error, 1)
+		coordinatorErrCh = errCh
+		go func() {
+			if errCoordinator := coordinator.Start(runCtx); errCoordinator != nil {
+				errCh <- errCoordinator
+			}
+		}()
+	}
+	if eventWatcher != nil {
+		errCh := make(chan error, 1)
+		eventWatcherErrCh = errCh
+		go func() {
+			if errWatcher := eventWatcher.Start(runCtx); errWatcher != nil {
+				errCh <- errWatcher
+			}
+		}()
+	}
 
 	go func() {
 		httpErrCh <- httpSrv.Serve(httpListener)
 	}()
 	go func() {
-		acceptErrCh <- protocolmux.Serve(ctx, baseListener, httpListener, func(conn net.Conn) {
-			go respSrv.HandleConn(ctx, conn)
+		acceptErrCh <- protocolmux.Serve(runCtx, baseListener, httpListener, func(conn net.Conn) {
+			go respSrv.HandleConn(runCtx, conn)
 		}, nil)
 	}()
 
 	go func() {
 		<-ctx.Done()
-		_ = httpListener.Close()
-		_ = baseListener.Close()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpSrv.Shutdown(shutdownCtx)
+		shutdownServers()
 	}()
 
 	select {
 	case errServe := <-httpErrCh:
 		errServe = protocolmux.NormalizeServeError(errServe)
-		errAccept := <-acceptErrCh
-		errAccept = protocolmux.NormalizeServeError(errAccept)
+		shutdownServers()
+		errAccept := collectServeError(acceptErrCh, 2*time.Second)
 		if errServe != nil {
 			log.Errorf("http server error: %v", errServe)
-			os.Exit(1)
+			return 1
 		}
 		if errAccept != nil {
 			log.Errorf("listener accept error: %v", errAccept)
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	case errAccept := <-acceptErrCh:
 		errAccept = protocolmux.NormalizeServeError(errAccept)
-		errServe := <-httpErrCh
-		errServe = protocolmux.NormalizeServeError(errServe)
+		shutdownServers()
+		errServe := collectServeError(httpErrCh, 2*time.Second)
 		if errAccept != nil {
 			log.Errorf("listener accept error: %v", errAccept)
-			os.Exit(1)
+			return 1
 		}
 		if errServe != nil {
 			log.Errorf("http server error: %v", errServe)
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
+	case errCoordinator := <-coordinatorErrCh:
+		shutdownServers()
+		errServe := collectServeError(httpErrCh, 2*time.Second)
+		errAccept := collectServeError(acceptErrCh, 2*time.Second)
+		if errCoordinator != nil {
+			log.Errorf("cluster coordinator error: %v", errCoordinator)
+			return 1
+		}
+		if errServe != nil {
+			log.Errorf("http server error: %v", errServe)
+			return 1
+		}
+		if errAccept != nil {
+			log.Errorf("listener accept error: %v", errAccept)
+			return 1
+		}
+		return 0
+	case errWatcher := <-eventWatcherErrCh:
+		shutdownServers()
+		errServe := collectServeError(httpErrCh, 2*time.Second)
+		errAccept := collectServeError(acceptErrCh, 2*time.Second)
+		if errWatcher != nil {
+			log.Errorf("cluster event watcher error: %v", errWatcher)
+			return 1
+		}
+		if errServe != nil {
+			log.Errorf("http server error: %v", errServe)
+			return 1
+		}
+		if errAccept != nil {
+			log.Errorf("listener accept error: %v", errAccept)
+			return 1
+		}
+		return 0
 	}
+}
+
+func resolveListenAddress(addr string, cfg *config.Config, clusterCfg *cluster.Config, clusterEnabled bool) (string, int, error) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		host := ""
+		port := 0
+		if cfg != nil {
+			host = strings.TrimSpace(cfg.Host)
+			port = cfg.Port
+		}
+		if clusterEnabled {
+			if clusterCfg == nil {
+				return "", 0, fmt.Errorf("cluster config is nil")
+			}
+			port = clusterCfg.Node.Port
+		}
+		if host == "" {
+			addr = ":" + strconv.Itoa(port)
+		} else {
+			addr = fmt.Sprintf("%s:%d", host, port)
+		}
+	}
+
+	port, errPort := listenPortFromAddress(addr)
+	if clusterEnabled {
+		if errPort != nil {
+			return "", 0, errPort
+		}
+		if port <= 0 {
+			return "", 0, fmt.Errorf("cluster listen port must be greater than 0")
+		}
+	}
+	return addr, port, nil
+}
+
+func listenPortFromAddress(addr string) (int, error) {
+	_, portValue, errSplitHostPort := net.SplitHostPort(addr)
+	if errSplitHostPort != nil {
+		return 0, errSplitHostPort
+	}
+	port, errPort := strconv.Atoi(strings.TrimSpace(portValue))
+	if errPort != nil {
+		return 0, errPort
+	}
+	return port, nil
+}
+
+func collectServeError(ch <-chan error, timeout time.Duration) error {
+	if ch == nil {
+		return nil
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case errServe := <-ch:
+		return protocolmux.NormalizeServeError(errServe)
+	case <-timer.C:
+		return nil
+	}
+}
+
+func applyLogLevel(cfg *config.Config) {
+	currentLevel := log.GetLevel()
+	debugEnabled := cfg != nil && cfg.Debug
+	if debugEnabled {
+		log.SetLevel(log.DebugLevel)
+	} else {
+		log.SetLevel(log.InfoLevel)
+	}
+	if nextLevel := log.GetLevel(); nextLevel != currentLevel {
+		log.Infof("log level changed from %s to %s (debug=%t)", currentLevel, nextLevel, debugEnabled)
+	}
+}
+
+func loadLocalConfigForCluster(configPath string) (*config.Config, error) {
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" {
+		configPath = "config.yaml"
+	}
+	info, errStat := os.Stat(configPath)
+	if os.IsNotExist(errStat) {
+		return nil, nil
+	}
+	if errStat != nil {
+		return nil, errStat
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("config path is a directory")
+	}
+	return config.LoadConfigOptional(configPath, false)
 }

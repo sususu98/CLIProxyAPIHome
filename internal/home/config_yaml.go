@@ -2,6 +2,7 @@ package home
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -20,8 +21,26 @@ func (r *Runtime) ConfigPath() string {
 }
 
 func (r *Runtime) ReadConfigYAML() ([]byte, error) {
+	return r.ReadConfigYAMLContext(context.Background())
+}
+
+func (r *Runtime) ReadConfigYAMLContext(ctx context.Context) ([]byte, error) {
 	if r == nil {
 		return nil, fmt.Errorf("home runtime: runtime is nil")
+	}
+	if r.clusterAdapter != nil && r.clusterAdapter.Enabled() {
+		data, errRead := r.clusterAdapter.LoadConfigYAML(ctx)
+		if errRead != nil {
+			return nil, errRead
+		}
+		if len(data) == 0 {
+			return nil, fmt.Errorf("home runtime: config is empty")
+		}
+		filtered, errFilter := sanitizeConfigYAMLForDownstream(data)
+		if errFilter != nil {
+			return nil, errFilter
+		}
+		return filtered, nil
 	}
 	path := r.ConfigPath()
 	if path == "" {

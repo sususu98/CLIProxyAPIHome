@@ -9,6 +9,8 @@ import (
 	respsubscribe "github.com/router-for-me/CLIProxyAPIHome/internal/respserver/subscribe"
 )
 
+const clusterCommand = "CLUSTER"
+
 func buildRegistry() *dispatch.Registry {
 	reg := dispatch.NewRegistry()
 	respset.Register(reg)

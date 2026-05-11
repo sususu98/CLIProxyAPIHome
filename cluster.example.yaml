@@ -1,0 +1,15 @@
+# CLIProxyAPIHome cluster mode configuration.
+# This file enables PGSQL-backed cluster mode when copied to cluster.yaml.
+pgsql:
+  host: "127.0.0.1"
+  port: 5432
+  user: "cliproxy"
+  password: "secret"
+  database: "cliproxy_home"
+  sslmode: "disable"
+
+node:
+  port: 8317
+  heartbeat-interval: "5s"
+  heartbeat-timeout: "20s"
+  event-poll-interval: "3s"

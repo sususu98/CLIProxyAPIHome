@@ -36,15 +36,13 @@ func SanitizeAuthForDownstream(auth *coreauth.Auth) *coreauth.Auth {
 		delete(out.Attributes, "service_account")
 	}
 
-	if out.Metadata == nil {
-		return out
+	if out.Metadata != nil {
+		delete(out.Metadata, "refresh_token")
+		delete(out.Metadata, "service_account")
+		delete(out.Metadata, homeConfigModelsMetadataKey)
+		removeRefreshTokenFromNestedMap(out.Metadata, "token")
+		removeRefreshTokenFromNestedMap(out.Metadata, "Token")
 	}
-
-	delete(out.Metadata, "refresh_token")
-	delete(out.Metadata, "service_account")
-
-	removeRefreshTokenFromNestedMap(out.Metadata, "token")
-	removeRefreshTokenFromNestedMap(out.Metadata, "Token")
 
 	return out
 }

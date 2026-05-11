@@ -52,6 +52,47 @@ func (r *Runtime) applyCoreAuthAddOrUpdate(ctx context.Context, auth *coreauth.A
 	r.coreManager.RefreshSchedulerEntry(auth.ID)
 }
 
+func (r *Runtime) loadClusterAuths(ctx context.Context, adapter ClusterAdapter) error {
+	if r == nil || r.coreManager == nil || adapter == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if errLoadIndex := adapter.LoadAuthIndex(ctx); errLoadIndex != nil {
+		return errLoadIndex
+	}
+
+	auths := adapter.ListMinimalAuths()
+	desired := make(map[string]*coreauth.Auth, len(auths))
+	ctxSkipPersist := coreauth.WithSkipPersist(ctx)
+	for _, auth := range auths {
+		if auth == nil || strings.TrimSpace(auth.ID) == "" {
+			continue
+		}
+		auth.ID = strings.TrimSpace(auth.ID)
+		auth.Index = auth.ID
+		desired[auth.ID] = auth
+		r.applyCoreAuthAddOrUpdate(ctxSkipPersist, auth)
+	}
+
+	removed := 0
+	current := r.coreManager.List()
+	for _, auth := range current {
+		if auth == nil || strings.TrimSpace(auth.ID) == "" {
+			continue
+		}
+		if _, ok := desired[auth.ID]; ok {
+			continue
+		}
+		r.applyCoreAuthRemove(ctxSkipPersist, auth.ID)
+		removed++
+	}
+
+	log.Infof("loaded cluster auth index (auths=%d removed=%d)", len(desired), removed)
+	return nil
+}
+
 func (r *Runtime) registerModelRefreshCallback() {
 	registry.SetModelRefreshCallback(func(changedProviders []string) {
 		if r == nil || r.coreManager == nil || len(changedProviders) == 0 {
