@@ -129,6 +129,22 @@ func (ClusterEventRecord) TableName() string {
 	return "cluster_events"
 }
 
+type OAuthSessionRecord struct {
+	State       string     `gorm:"column:state;primaryKey"`
+	Provider    string     `gorm:"column:provider;index"`
+	Status      string     `gorm:"column:status"`
+	Error       string     `gorm:"column:error"`
+	Data        JSONB      `gorm:"column:data;type:jsonb"`
+	CreatedAt   time.Time  `gorm:"column:created_at"`
+	UpdatedAt   time.Time  `gorm:"column:updated_at"`
+	ExpiresAt   time.Time  `gorm:"column:expires_at;index"`
+	CompletedAt *time.Time `gorm:"column:completed_at"`
+}
+
+func (OAuthSessionRecord) TableName() string {
+	return "oauth_sessions"
+}
+
 type AuthIndex struct {
 	UUID        string
 	ID          string

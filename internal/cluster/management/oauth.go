@@ -145,47 +145,55 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 }
 
 func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
-	var body map[string]any
-	if errBindJSON := c.ShouldBindJSON(&body); errBindJSON != nil {
-		respondError(c, http.StatusBadRequest, "invalid body", errBindJSON)
+	var req struct {
+		Name     string `json:"name"`
+		Disabled *bool  `json:"disabled"`
+	}
+	if errBindJSON := c.ShouldBindJSON(&req); errBindJSON != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
-	disabled, errDisabled := requiredBoolField(body, "disabled")
-	if errDisabled != nil {
-		respondError(c, http.StatusBadRequest, "invalid body", errDisabled)
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
 		return
 	}
+	if req.Disabled == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "disabled is required"})
+		return
+	}
+
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
-	auth, errAuth := h.findOAuthAuth(ctx, authIdentifierFromBodyAndRequest(c, body))
+	auth, errAuth := h.findOAuthAuth(ctx, authIdentifier{ID: name, Name: name})
 	if errAuth != nil {
 		respondError(c, http.StatusInternalServerError, "auth_load_failed", errAuth)
 		return
 	}
 	if auth == nil {
-		respondError(c, http.StatusNotFound, "not_found", nil)
+		c.JSON(http.StatusNotFound, gin.H{"error": "auth file not found"})
 		return
 	}
+	disabled := *req.Disabled
 	auth.Disabled = disabled
 	if disabled {
 		auth.Status = coreauth.StatusDisabled
+		auth.StatusMessage = "disabled via management API"
 	} else {
 		auth.Status = coreauth.StatusActive
+		auth.StatusMessage = ""
 	}
-	if auth.Metadata == nil {
-		auth.Metadata = make(map[string]any)
-	}
-	auth.Metadata["disabled"] = disabled
-	auth.UpdatedAt = time.Now().UTC()
+	auth.UpdatedAt = time.Now()
 	if _, errUpsert := h.repo.UpsertAuth(ctx, auth, "update"); errUpsert != nil {
-		respondError(c, http.StatusInternalServerError, "write_failed", errUpsert)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", errUpsert)})
 		return
 	}
 	if errRefresh := h.refreshAuths(ctx); errRefresh != nil {
-		respondError(c, http.StatusInternalServerError, "reload_failed", errRefresh)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", errRefresh)})
 		return
 	}
-	respondOK(c)
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "disabled": disabled})
 }
 
 func (h *Handler) PatchAuthFileFields(c *gin.Context) {
@@ -227,17 +235,7 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 }
 
 func (h *Handler) PostOAuthCallback(c *gin.Context) {
-	body, errRead := io.ReadAll(c.Request.Body)
-	if errRead != nil {
-		respondError(c, http.StatusBadRequest, "invalid body", errRead)
-		return
-	}
-	name, errStore := h.storeOAuthPayload(c, body, "")
-	if errStore != nil {
-		respondError(c, http.StatusBadRequest, "oauth_callback_failed", errStore)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "name": name})
+	h.handleOAuthCallback(c)
 }
 
 func (h *Handler) storeUploadedOAuth(c *gin.Context, header *multipart.FileHeader) (string, error) {
@@ -262,6 +260,12 @@ func (h *Handler) storeUploadedOAuth(c *gin.Context, header *multipart.FileHeade
 }
 
 func (h *Handler) storeOAuthPayload(c *gin.Context, raw []byte, originalFilename string) (string, error) {
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	return h.storeOAuthPayloadWithContext(ctx, raw, originalFilename)
+}
+
+func (h *Handler) storeOAuthPayloadWithContext(ctx context.Context, raw []byte, originalFilename string) (string, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
 		return "", fmt.Errorf("empty credential json")
@@ -270,8 +274,6 @@ func (h *Handler) storeOAuthPayload(c *gin.Context, raw []byte, originalFilename
 	if errUUID != nil {
 		return "", errUUID
 	}
-	ctx, cancel := h.requestContext(c)
-	defer cancel()
 
 	auths := h.synthesizeOAuthPayload(updatedRaw, fileUUID, originalFilename)
 	if len(auths) == 0 {

@@ -1,0 +1,182 @@
+package cluster
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"gorm.io/gorm"
+)
+
+const OAuthSessionTTL = 20 * time.Minute
+
+func NewOAuthSessionRecord(provider, state string, data map[string]any, now time.Time) (*OAuthSessionRecord, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	state = strings.TrimSpace(state)
+	if provider == "" {
+		return nil, fmt.Errorf("oauth provider is required")
+	}
+	if state == "" {
+		return nil, fmt.Errorf("oauth state is required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	rawData, errMarshal := json.Marshal(data)
+	if errMarshal != nil {
+		return nil, errMarshal
+	}
+	return &OAuthSessionRecord{
+		State:     state,
+		Provider:  provider,
+		Data:      JSONB(rawData),
+		CreatedAt: now,
+		UpdatedAt: now,
+		ExpiresAt: now.Add(OAuthSessionTTL),
+	}, nil
+}
+
+func OAuthSessionData(record *OAuthSessionRecord) (map[string]any, error) {
+	if record == nil || len(record.Data) == 0 {
+		return nil, nil
+	}
+	var data map[string]any
+	if errUnmarshal := json.Unmarshal([]byte(record.Data), &data); errUnmarshal != nil {
+		return nil, errUnmarshal
+	}
+	return data, nil
+}
+
+func (r *Repository) UpsertOAuthSession(ctx context.Context, record *OAuthSessionRecord) error {
+	db, errDB := r.database()
+	if errDB != nil {
+		return errDB
+	}
+	if record == nil {
+		return fmt.Errorf("oauth session record is nil")
+	}
+	if strings.TrimSpace(record.State) == "" {
+		return fmt.Errorf("oauth state is required")
+	}
+	if record.CreatedAt.IsZero() {
+		record.CreatedAt = time.Now().UTC()
+	}
+	record.UpdatedAt = time.Now().UTC()
+	if record.ExpiresAt.IsZero() {
+		record.ExpiresAt = record.UpdatedAt.Add(OAuthSessionTTL)
+	}
+	return db.WithContext(contextOrBackground(ctx)).Save(record).Error
+}
+
+func (r *Repository) GetOAuthSession(ctx context.Context, state string) (*OAuthSessionRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return nil, fmt.Errorf("oauth state is required")
+	}
+	record := &OAuthSessionRecord{}
+	errFirst := db.WithContext(contextOrBackground(ctx)).Where("state = ?", state).First(record).Error
+	if errors.Is(errFirst, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if errFirst != nil {
+		return nil, errFirst
+	}
+	if !record.ExpiresAt.IsZero() && time.Now().UTC().After(record.ExpiresAt) && record.Status == "" {
+		record.Status = "error"
+		record.Error = "OAuth flow timed out"
+		record.UpdatedAt = time.Now().UTC()
+		if errSave := db.WithContext(contextOrBackground(ctx)).Save(record).Error; errSave != nil {
+			return nil, errSave
+		}
+	}
+	return record, nil
+}
+
+func (r *Repository) MergeOAuthSessionData(ctx context.Context, state string, values map[string]any) error {
+	db, errDB := r.database()
+	if errDB != nil {
+		return errDB
+	}
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return fmt.Errorf("oauth state is required")
+	}
+	record, errRecord := r.GetOAuthSession(ctx, state)
+	if errRecord != nil {
+		return errRecord
+	}
+	if record == nil {
+		return fmt.Errorf("oauth session not found")
+	}
+	data, errData := OAuthSessionData(record)
+	if errData != nil {
+		return errData
+	}
+	if data == nil {
+		data = make(map[string]any, len(values))
+	}
+	for key, value := range values {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if value == nil {
+			delete(data, key)
+			continue
+		}
+		data[key] = value
+	}
+	rawData, errMarshal := json.Marshal(data)
+	if errMarshal != nil {
+		return errMarshal
+	}
+	record.Data = JSONB(rawData)
+	record.UpdatedAt = time.Now().UTC()
+	return db.WithContext(contextOrBackground(ctx)).Save(record).Error
+}
+
+func (r *Repository) CompleteOAuthSession(ctx context.Context, state string) error {
+	db, errDB := r.database()
+	if errDB != nil {
+		return errDB
+	}
+	now := time.Now().UTC()
+	return db.WithContext(contextOrBackground(ctx)).
+		Model(&OAuthSessionRecord{}).
+		Where("state = ?", strings.TrimSpace(state)).
+		Updates(map[string]any{
+			"status":       "complete",
+			"error":        "",
+			"updated_at":   now,
+			"expires_at":   now.Add(OAuthSessionTTL),
+			"completed_at": &now,
+		}).Error
+}
+
+func (r *Repository) SetOAuthSessionError(ctx context.Context, state string, message string) error {
+	db, errDB := r.database()
+	if errDB != nil {
+		return errDB
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "Authentication failed"
+	}
+	now := time.Now().UTC()
+	return db.WithContext(contextOrBackground(ctx)).
+		Model(&OAuthSessionRecord{}).
+		Where("state = ?", strings.TrimSpace(state)).
+		Updates(map[string]any{
+			"status":     "error",
+			"error":      message,
+			"updated_at": now,
+			"expires_at": now.Add(OAuthSessionTTL),
+		}).Error
+}
