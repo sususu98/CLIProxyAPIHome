@@ -27,6 +27,7 @@ func NewStableIDGenerator() *StableIDGenerator {
 // Next generates a stable ID based on the kind and parts.
 // Returns the full ID (kind:hash) and the short hash portion.
 func (g *StableIDGenerator) Next(kind string, parts ...string) (string, string) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if g == nil {
 		return kind + ":000000000000", "000000000000"
 	}

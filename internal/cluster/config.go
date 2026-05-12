@@ -48,6 +48,7 @@ type rawNode struct {
 
 type yamlDuration time.Duration
 
+// UnmarshalYAML decodes a yaml.
 func (d *yamlDuration) UnmarshalYAML(value *yaml.Node) error {
 	if value == nil || strings.TrimSpace(value.Value) == "" {
 		*d = 0
@@ -69,7 +70,9 @@ func (d *yamlDuration) UnmarshalYAML(value *yaml.Node) error {
 	return fmt.Errorf("invalid duration %q", value.Value)
 }
 
+// LoadConfigOptional loads a config optional.
 func LoadConfigOptional(path string) (*Config, bool, error) {
+	// Normalize source data before building the derived payload.
 	configPath := strings.TrimSpace(path)
 	if configPath == "" {
 		configPath = DefaultConfigPath
@@ -105,6 +108,7 @@ func LoadConfigOptional(path string) (*Config, bool, error) {
 	return cfg, true, nil
 }
 
+// applyDefaults applies a defaults.
 func (c *Config) applyDefaults() {
 	if c.PGSQL.Port == 0 {
 		c.PGSQL.Port = 5432
@@ -126,6 +130,7 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// Validate validates validate.
 func (c *Config) Validate() error {
 	if errValidatePGSQL := c.PGSQL.Validate(); errValidatePGSQL != nil {
 		return errValidatePGSQL
@@ -145,6 +150,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// Validate validates validate.
 func (c PGSQLConfig) Validate() error {
 	if strings.TrimSpace(c.Host) == "" {
 		return fmt.Errorf("pgsql.host is required")
@@ -164,6 +170,7 @@ func (c PGSQLConfig) Validate() error {
 	return nil
 }
 
+// isUnixSocketHost reports whether unix socket host.
 func isUnixSocketHost(host string) bool {
 	trimmedHost := strings.TrimSpace(host)
 	return strings.Contains(trimmedHost, "/") || strings.HasPrefix(trimmedHost, ".")

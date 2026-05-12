@@ -24,6 +24,7 @@ type AuthError struct {
 	Cause      error
 }
 
+// Error returns the error message.
 func (e *AuthError) Error() string {
 	if e == nil {
 		return ""
@@ -38,6 +39,7 @@ func (e *AuthError) Error() string {
 	return message
 }
 
+// Unwrap returns the wrapped error cause.
 func (e *AuthError) Unwrap() error {
 	if e == nil {
 		return nil
@@ -53,6 +55,7 @@ func (e *AuthError) HTTPStatusCode() int {
 	return e.StatusCode
 }
 
+// newAuthError creates an auth error.
 func newAuthError(code AuthErrorCode, message string, statusCode int, cause error) *AuthError {
 	return &AuthError{
 		Code:       code,
@@ -62,18 +65,22 @@ func newAuthError(code AuthErrorCode, message string, statusCode int, cause erro
 	}
 }
 
+// NewNoCredentialsError creates a new no credentials error.
 func NewNoCredentialsError() *AuthError {
 	return newAuthError(AuthErrorCodeNoCredentials, "Missing API key", http.StatusUnauthorized, nil)
 }
 
+// NewInvalidCredentialError creates a new invalid credential error.
 func NewInvalidCredentialError() *AuthError {
 	return newAuthError(AuthErrorCodeInvalidCredential, "Invalid API key", http.StatusUnauthorized, nil)
 }
 
+// NewNotHandledError creates a new not handled error.
 func NewNotHandledError() *AuthError {
 	return newAuthError(AuthErrorCodeNotHandled, "authentication provider did not handle request", 0, nil)
 }
 
+// NewInternalAuthError creates a new internal auth error.
 func NewInternalAuthError(message string, cause error) *AuthError {
 	normalizedMessage := strings.TrimSpace(message)
 	if normalizedMessage == "" {
@@ -82,6 +89,7 @@ func NewInternalAuthError(message string, cause error) *AuthError {
 	return newAuthError(AuthErrorCodeInternal, normalizedMessage, http.StatusInternalServerError, cause)
 }
 
+// IsAuthErrorCode reports whether is auth error code.
 func IsAuthErrorCode(authErr *AuthError, code AuthErrorCode) bool {
 	if authErr == nil {
 		return false

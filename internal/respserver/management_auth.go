@@ -36,6 +36,7 @@ type managementAuthenticator struct {
 	envSecret           string
 }
 
+// newManagementAuthenticator creates a management authenticator.
 func newManagementAuthenticator(runtime *home.Runtime) *managementAuthenticator {
 	envSecret, _ := os.LookupEnv("MANAGEMENT_PASSWORD")
 	envSecret = strings.TrimSpace(envSecret)
@@ -179,6 +180,7 @@ func (a *managementAuthenticator) AuthenticateManagementKey(clientIP string, loc
 	return true, 0, ""
 }
 
+// isClientHostAllowed reports whether client host allowed.
 func isClientHostAllowed(clientIP string, allowHosts []string) bool {
 	if len(allowHosts) == 0 {
 		return true
@@ -195,7 +197,9 @@ func isClientHostAllowed(clientIP string, allowHosts []string) bool {
 	return false
 }
 
+// resolveRemoteIP resolves a remote ip.
 func resolveRemoteIP(addr net.Addr) (ip string, localClient bool) {
+	// Validate request inputs before mutating persisted state.
 	if addr == nil {
 		return "", false
 	}
@@ -233,6 +237,7 @@ func resolveRemoteIP(addr net.Addr) (ip string, localClient bool) {
 	return host, localClient
 }
 
+// normalizeHostIP normalizes a host ip.
 func normalizeHostIP(host string) string {
 	host = strings.TrimSpace(host)
 	if host == "" {
@@ -253,6 +258,7 @@ func normalizeHostIP(host string) string {
 	return strings.TrimSpace(host)
 }
 
+// parseAuthPassword parses an auth password.
 func parseAuthPassword(args []string) (string, bool) {
 	switch len(args) {
 	case 2:

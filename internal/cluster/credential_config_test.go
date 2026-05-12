@@ -7,7 +7,9 @@ import (
 	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
 )
 
+// TestApplyCredentialConfigToRootHydratesAPIKeyAuths verifies test apply credential config to root hydrates api key auths behavior.
 func TestApplyCredentialConfigToRootHydratesAPIKeyAuths(t *testing.T) {
+	// Normalize source data before building the derived payload.
 	root := map[string]any{"debug": true}
 	auths := []*coreauth.Auth{
 		testConfigAPIKeyAuth("gemini-id", "gemini", "config:gemini[token]", "gemini-key"),
@@ -43,6 +45,7 @@ func TestApplyCredentialConfigToRootHydratesAPIKeyAuths(t *testing.T) {
 	}
 }
 
+// testConfigAPIKeyAuth handles a test config api key auth.
 func testConfigAPIKeyAuth(id, provider, source, apiKey string) *coreauth.Auth {
 	return &coreauth.Auth{
 		ID:       id,

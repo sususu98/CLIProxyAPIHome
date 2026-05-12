@@ -10,6 +10,7 @@ import (
 // SanitizeAuthForDownstream removes refresh-capable credentials from the auth payload
 // before it is returned to downstream CPA nodes.
 func SanitizeAuthForDownstream(auth *coreauth.Auth) *coreauth.Auth {
+	// Normalize auth state before updating runtime indexes.
 	if auth == nil {
 		return nil
 	}
@@ -47,7 +48,9 @@ func SanitizeAuthForDownstream(auth *coreauth.Auth) *coreauth.Auth {
 	return out
 }
 
+// removeRefreshTokenFromNestedMap converts remove refresh token from nested map.
 func removeRefreshTokenFromNestedMap(meta map[string]any, key string) {
+	// Resolve credential context before calling upstream OAuth services.
 	if meta == nil {
 		return
 	}

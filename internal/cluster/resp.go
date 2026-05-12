@@ -21,6 +21,7 @@ type RESPHandler struct {
 	repo        *Repository
 }
 
+// NewRESPHandler creates a new resp handler.
 func NewRESPHandler(coordinator *Coordinator, refresh *RefreshController, repo *Repository) *RESPHandler {
 	return &RESPHandler{
 		coordinator: coordinator,
@@ -29,7 +30,9 @@ func NewRESPHandler(coordinator *Coordinator, refresh *RefreshController, repo *
 	}
 }
 
+// Handle handles handle.
 func (h *RESPHandler) Handle(ctx context.Context, args []string, remoteIP string) ([]byte, error) {
+	// Validate request inputs before mutating persisted state.
 	if h == nil {
 		return nil, fmt.Errorf("cluster resp: handler is nil")
 	}
@@ -76,7 +79,9 @@ func (h *RESPHandler) Handle(ctx context.Context, args []string, remoteIP string
 	}
 }
 
+// authorizeNode authorizes a node.
 func (h *RESPHandler) authorizeNode(ctx context.Context, remoteIP string, secret string) (*ClusterNodeRecord, error) {
+	// Normalize auth state before updating runtime indexes.
 	if h == nil || h.repo == nil {
 		return nil, fmt.Errorf("cluster resp: repository is nil")
 	}
@@ -103,7 +108,9 @@ func (h *RESPHandler) authorizeNode(ctx context.Context, remoteIP string, secret
 	return node, nil
 }
 
+// nodePayload handles a node payload.
 func (h *RESPHandler) nodePayload(ctx context.Context) ([]byte, error) {
+	// Validate input data before converting it into runtime state.
 	var master *ClusterNodeRecord
 	if h.coordinator != nil {
 		currentMaster, errMaster := h.coordinator.CurrentMaster(ctx)
@@ -131,7 +138,9 @@ func (h *RESPHandler) nodePayload(ctx context.Context) ([]byte, error) {
 	return json.Marshal(payload)
 }
 
+// ForwardRefreshToMaster converts forward refresh to master.
 func ForwardRefreshToMaster(ctx context.Context, master *ClusterNodeRecord, authUUID string, secret string) ([]byte, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -171,6 +180,7 @@ func ForwardRefreshToMaster(ctx context.Context, master *ClusterNodeRecord, auth
 	return readRESPBulk(bufio.NewReader(conn))
 }
 
+// encodeRESPArray encodes a resp array.
 func encodeRESPArray(args ...string) []byte {
 	var buf bytes.Buffer
 	buf.WriteString("*")
@@ -186,7 +196,9 @@ func encodeRESPArray(args ...string) []byte {
 	return buf.Bytes()
 }
 
+// readRESPBulk reads a resp bulk.
 func readRESPBulk(reader *bufio.Reader) ([]byte, error) {
+	// Validate input data before converting it into runtime state.
 	prefix, errRead := reader.ReadByte()
 	if errRead != nil {
 		return nil, errRead

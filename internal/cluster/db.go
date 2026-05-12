@@ -10,7 +10,9 @@ import (
 	"gorm.io/gorm"
 )
 
+// Open opens the resource.
 func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -39,10 +41,12 @@ func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
 	return db, nil
 }
 
+// ClientAddr handles a client addr.
 func ClientAddr(ctx context.Context, db *gorm.DB) (string, error) {
 	return clientAddr(ctx, db)
 }
 
+// AutoMigrate handles an auto migrate.
 func AutoMigrate(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("database connection is nil")
@@ -50,6 +54,7 @@ func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(&AuthRecord{}, &ConfigRecord{}, &ClusterNodeRecord{}, &ClusterEventRecord{}, &UsageRecord{}, &OAuthSessionRecord{})
 }
 
+// DSN returns the PostgreSQL connection string.
 func (c PGSQLConfig) DSN() (string, error) {
 	if c.Password == "" && c.Passowrd != "" {
 		c.Password = c.Passowrd
@@ -72,6 +77,7 @@ func (c PGSQLConfig) DSN() (string, error) {
 	return strings.Join(parts, " "), nil
 }
 
+// clientAddr handles a client addr.
 func clientAddr(ctx context.Context, db *gorm.DB) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -90,6 +96,7 @@ func clientAddr(ctx context.Context, db *gorm.DB) (string, error) {
 	return addr, nil
 }
 
+// quoteDSNValue handles a quote dsn value.
 func quoteDSNValue(value string) string {
 	if value == "" {
 		return "''"

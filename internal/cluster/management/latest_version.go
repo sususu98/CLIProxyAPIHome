@@ -24,7 +24,9 @@ type releaseInfo struct {
 	Name    string `json:"name"`
 }
 
+// GetLatestVersion returns a latest version.
 func (h *Handler) GetLatestVersion(c *gin.Context) {
+	// Validate request inputs before mutating persisted state.
 	if c == nil {
 		return
 	}

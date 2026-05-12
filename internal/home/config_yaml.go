@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ConfigPath handles a config path.
 func (r *Runtime) ConfigPath() string {
 	if r == nil {
 		return ""
@@ -20,11 +21,14 @@ func (r *Runtime) ConfigPath() string {
 	return strings.TrimSpace(r.configPath)
 }
 
+// ReadConfigYAML loads read config yaml.
 func (r *Runtime) ReadConfigYAML() ([]byte, error) {
 	return r.ReadConfigYAMLContext(context.Background())
 }
 
+// ReadConfigYAMLContext loads read config yaml context.
 func (r *Runtime) ReadConfigYAMLContext(ctx context.Context) ([]byte, error) {
+	// Normalize source data before building the derived payload.
 	if r == nil {
 		return nil, fmt.Errorf("home runtime: runtime is nil")
 	}
@@ -60,7 +64,9 @@ func (r *Runtime) ReadConfigYAMLContext(ctx context.Context) ([]byte, error) {
 	return filtered, nil
 }
 
+// SubscribeConfigYAML handles a subscribe config yaml.
 func (r *Runtime) SubscribeConfigYAML(subscriber func(payload []byte) error) (unsubscribe func()) {
+	// Normalize source data before building the derived payload.
 	if r == nil || subscriber == nil {
 		return func() {}
 	}
@@ -84,7 +90,9 @@ func (r *Runtime) SubscribeConfigYAML(subscriber func(payload []byte) error) (un
 	}
 }
 
+// PublishConfigYAML handles a publish config yaml.
 func (r *Runtime) PublishConfigYAML(payload []byte) {
+	// Normalize source data before building the derived payload.
 	if r == nil || len(payload) == 0 {
 		return
 	}
@@ -113,7 +121,9 @@ func (r *Runtime) PublishConfigYAML(payload []byte) {
 	}
 }
 
+// sanitizeConfigYAMLForDownstream sanitizes a config yaml for downstream.
 func sanitizeConfigYAMLForDownstream(payload []byte) ([]byte, error) {
+	// Normalize source data before building the derived payload.
 	if len(payload) == 0 {
 		return nil, fmt.Errorf("home runtime: config is empty")
 	}
@@ -160,7 +170,9 @@ func sanitizeConfigYAMLForDownstream(payload []byte) ([]byte, error) {
 	return out, nil
 }
 
+// removeConfigKeysForDownstream removes a config keys for downstream.
 func removeConfigKeysForDownstream(node *yaml.Node, keys []string) {
+	// Normalize source data before building the derived payload.
 	if node == nil || node.Kind != yaml.MappingNode || len(keys) == 0 {
 		return
 	}
@@ -193,6 +205,7 @@ func removeConfigKeysForDownstream(node *yaml.Node, keys []string) {
 	node.Content = next
 }
 
+// stripYAMLComments handles a strip yaml comments.
 func stripYAMLComments(node *yaml.Node) {
 	if node == nil {
 		return

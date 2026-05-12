@@ -33,6 +33,7 @@ type provider struct {
 	keys map[string]struct{}
 }
 
+// newProvider creates a provider.
 func newProvider(name string, keys []string) *provider {
 	providerName := strings.TrimSpace(name)
 	if providerName == "" {
@@ -45,6 +46,7 @@ func newProvider(name string, keys []string) *provider {
 	return &provider{name: providerName, keys: keySet}
 }
 
+// Identifier returns the provider identifier.
 func (p *provider) Identifier() string {
 	if p == nil || p.name == "" {
 		return access.DefaultAccessProviderName
@@ -52,7 +54,9 @@ func (p *provider) Identifier() string {
 	return p.name
 }
 
+// Authenticate validates request credentials and returns the access result.
 func (p *provider) Authenticate(_ context.Context, r *http.Request) (*access.Result, *access.AuthError) {
+	// Normalize auth state before updating runtime indexes.
 	if p == nil {
 		return nil, access.NewNotHandledError()
 	}
@@ -103,6 +107,7 @@ func (p *provider) Authenticate(_ context.Context, r *http.Request) (*access.Res
 	return nil, access.NewInvalidCredentialError()
 }
 
+// extractBearerToken extracts a bearer token.
 func extractBearerToken(header string) string {
 	if header == "" {
 		return ""
@@ -117,6 +122,7 @@ func extractBearerToken(header string) string {
 	return strings.TrimSpace(parts[1])
 }
 
+// normalizeKeys normalizes a keys.
 func normalizeKeys(keys []string) []string {
 	if len(keys) == 0 {
 		return nil

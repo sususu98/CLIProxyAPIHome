@@ -56,6 +56,7 @@ func SummarizeOAuthExcludedModels(entries map[string][]string) map[string]Exclud
 
 // DiffOAuthExcludedModelChanges compares OAuth excluded models maps.
 func DiffOAuthExcludedModelChanges(oldMap, newMap map[string][]string) ([]string, []string) {
+	// Resolve credential context before calling upstream OAuth services.
 	oldSummary := SummarizeOAuthExcludedModels(oldMap)
 	newSummary := SummarizeOAuthExcludedModels(newMap)
 	keys := make(map[string]struct{}, len(oldSummary)+len(newSummary))
@@ -94,6 +95,7 @@ type AmpModelMappingsSummary struct {
 
 // SummarizeAmpModelMappings hashes Amp model mappings for change detection.
 func SummarizeAmpModelMappings(mappings []config.AmpModelMapping) AmpModelMappingsSummary {
+	// Normalize source data before building the derived payload.
 	if len(mappings) == 0 {
 		return AmpModelMappingsSummary{}
 	}

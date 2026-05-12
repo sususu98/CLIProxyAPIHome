@@ -39,7 +39,10 @@ type VertexCompatKey struct {
 	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
 }
 
-func (k VertexCompatKey) GetAPIKey() string  { return k.APIKey }
+// GetAPIKey returns an api key.
+func (k VertexCompatKey) GetAPIKey() string { return k.APIKey }
+
+// GetBaseURL returns a base url.
 func (k VertexCompatKey) GetBaseURL() string { return k.BaseURL }
 
 // VertexCompatModel represents a model configuration for Vertex compatibility,
@@ -52,7 +55,10 @@ type VertexCompatModel struct {
 	Alias string `yaml:"alias" json:"alias"`
 }
 
-func (m VertexCompatModel) GetName() string  { return m.Name }
+// GetName returns a name.
+func (m VertexCompatModel) GetName() string { return m.Name }
+
+// GetAlias returns an alias.
 func (m VertexCompatModel) GetAlias() string { return m.Alias }
 
 // SanitizeVertexCompatKeys deduplicates and normalizes Vertex-compatible API key credentials.

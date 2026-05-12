@@ -127,6 +127,7 @@ func (c *SessionCache) Stop() {
 	}
 }
 
+// cleanupLoop removes expired or stale entries.
 func (c *SessionCache) cleanupLoop() {
 	ticker := time.NewTicker(c.ttl / 2)
 	defer ticker.Stop()
@@ -140,6 +141,7 @@ func (c *SessionCache) cleanupLoop() {
 	}
 }
 
+// cleanup removes expired or stale entries.
 func (c *SessionCache) cleanup() {
 	now := time.Now()
 	c.mu.Lock()

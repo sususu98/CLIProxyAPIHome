@@ -37,32 +37,38 @@ type refreshHTTPError struct {
 	retryable bool
 }
 
+// Error returns the error message.
 func (e *refreshHTTPError) Error() string {
 	return fmt.Sprintf("token refresh failed with status %d: %s", e.status, e.message)
 }
 
+// Retryable reports whether the error can be retried.
 func (e *refreshHTTPError) Retryable() bool {
 	return e != nil && e.retryable
 }
 
+// claudeRefreshBlockedUntil handles a claude refresh blocked until.
 func claudeRefreshBlockedUntil(refreshToken string) time.Time {
 	claudeRefreshMu.Lock()
 	defer claudeRefreshMu.Unlock()
 	return claudeRefreshBlock[refreshToken]
 }
 
+// setClaudeRefreshBlockedUntil sets a claude refresh blocked until.
 func setClaudeRefreshBlockedUntil(refreshToken string, until time.Time) {
 	claudeRefreshMu.Lock()
 	defer claudeRefreshMu.Unlock()
 	claudeRefreshBlock[refreshToken] = until
 }
 
+// clearClaudeRefreshBlockedUntil clears a claude refresh blocked until.
 func clearClaudeRefreshBlockedUntil(refreshToken string) {
 	claudeRefreshMu.Lock()
 	defer claudeRefreshMu.Unlock()
 	delete(claudeRefreshBlock, refreshToken)
 }
 
+// clampClaudeRefreshBackoff handles a clamp claude refresh backoff.
 func clampClaudeRefreshBackoff(d time.Duration) time.Duration {
 	if d < claudeRefreshMinBackoff {
 		return claudeRefreshMinBackoff
@@ -73,6 +79,7 @@ func clampClaudeRefreshBackoff(d time.Duration) time.Duration {
 	return d
 }
 
+// parseClaudeRetryAfter parses a claude retry after.
 func parseClaudeRetryAfter(resp *http.Response) time.Duration {
 	if resp == nil {
 		return claudeRefreshMinBackoff
@@ -93,6 +100,7 @@ func parseClaudeRetryAfter(resp *http.Response) time.Duration {
 	return claudeRefreshMinBackoff
 }
 
+// isClaudeRefreshRetryable reports whether claude refresh retryable.
 func isClaudeRefreshRetryable(err error) bool {
 	var httpErr *refreshHTTPError
 	if errors.As(err, &httpErr) {
@@ -120,6 +128,7 @@ type ClaudeAuth struct {
 	httpClient *http.Client
 }
 
+// NewClaudeAuth creates a new claude auth.
 func NewClaudeAuth(cfg *config.Config) *ClaudeAuth {
 	return NewClaudeAuthWithProxyURL(cfg, "")
 }
@@ -148,6 +157,7 @@ func NewClaudeAuthWithProxyURL(cfg *config.Config, proxyURL string) *ClaudeAuth 
 
 // RefreshTokens refreshes access token via refresh token.
 func (o *ClaudeAuth) RefreshTokens(ctx context.Context, refreshToken string) (*ClaudeTokenData, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if refreshToken == "" {
 		return nil, fmt.Errorf("refresh token is required")
 	}
@@ -175,7 +185,9 @@ func (o *ClaudeAuth) RefreshTokens(ctx context.Context, refreshToken string) (*C
 	return tokenData, nil
 }
 
+// refreshTokensSingleFlight converts refresh tokens single flight.
 func (o *ClaudeAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken string) (*ClaudeTokenData, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if blockedUntil := claudeRefreshBlockedUntil(refreshToken); blockedUntil.After(time.Now()) {
 		return nil, &refreshHTTPError{
 			status:    http.StatusTooManyRequests,
@@ -247,7 +259,9 @@ func (o *ClaudeAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken
 	}, nil
 }
 
+// RefreshTokensWithRetry refreshes refresh tokens with retry.
 func (o *ClaudeAuth) RefreshTokensWithRetry(ctx context.Context, refreshToken string, maxRetries int) (*ClaudeTokenData, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	var lastErr error
 
 	for attempt := 0; attempt < maxRetries; attempt++ {

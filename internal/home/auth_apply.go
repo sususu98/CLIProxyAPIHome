@@ -11,7 +11,9 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// applyCoreAuthAddOrUpdate applies a core auth add or update.
 func (r *Runtime) applyCoreAuthAddOrUpdate(ctx context.Context, auth *coreauth.Auth) {
+	// Normalize auth state before updating runtime indexes.
 	if r == nil || r.coreManager == nil || auth == nil || auth.ID == "" {
 		return
 	}
@@ -52,7 +54,9 @@ func (r *Runtime) applyCoreAuthAddOrUpdate(ctx context.Context, auth *coreauth.A
 	r.coreManager.RefreshSchedulerEntry(auth.ID)
 }
 
+// loadClusterAuths loads a cluster auths.
 func (r *Runtime) loadClusterAuths(ctx context.Context, adapter ClusterAdapter) error {
+	// Normalize auth state before updating runtime indexes.
 	if r == nil || r.coreManager == nil || adapter == nil {
 		return nil
 	}
@@ -93,7 +97,9 @@ func (r *Runtime) loadClusterAuths(ctx context.Context, adapter ClusterAdapter) 
 	return nil
 }
 
+// registerModelRefreshCallback handles a register model refresh callback.
 func (r *Runtime) registerModelRefreshCallback() {
+	// Resolve credential context before calling upstream OAuth services.
 	registry.SetModelRefreshCallback(func(changedProviders []string) {
 		if r == nil || r.coreManager == nil || len(changedProviders) == 0 {
 			return
@@ -126,6 +132,7 @@ func (r *Runtime) registerModelRefreshCallback() {
 	})
 }
 
+// applyCoreAuthRemove applies a core auth remove.
 func (r *Runtime) applyCoreAuthRemove(ctx context.Context, authID string) {
 	if r == nil || r.coreManager == nil {
 		return
@@ -158,7 +165,9 @@ func (r *Runtime) applyCoreAuthRemove(ctx context.Context, authID string) {
 	}
 }
 
+// availableProviderKeys handles an available provider keys.
 func (r *Runtime) availableProviderKeys() []string {
+	// Build the candidate view before applying availability rules.
 	if r == nil || r.coreManager == nil {
 		return nil
 	}
@@ -183,7 +192,9 @@ func (r *Runtime) availableProviderKeys() []string {
 	return out
 }
 
+// extractAccessToken extracts an access token.
 func extractAccessToken(auth *coreauth.Auth) string {
+	// Resolve credential context before calling upstream OAuth services.
 	if auth == nil {
 		return ""
 	}
@@ -227,6 +238,7 @@ func extractAccessToken(auth *coreauth.Auth) string {
 	return ""
 }
 
+// nowUTC handles a now utc.
 func nowUTC() time.Time {
 	return time.Now().UTC()
 }

@@ -24,6 +24,7 @@ func ApplyOriginalAuthFileName(auths []*coreauth.Auth, filename string) {
 	}
 }
 
+// normalizeOriginalAuthFileName normalizes an original auth file name.
 func normalizeOriginalAuthFileName(filename string) string {
 	filename = strings.TrimSpace(filename)
 	if filename == "" {

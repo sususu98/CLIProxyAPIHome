@@ -43,6 +43,7 @@ func (m *Manager) Providers() []Provider {
 
 // Authenticate evaluates providers until one succeeds.
 func (m *Manager) Authenticate(ctx context.Context, r *http.Request) (*Result, *AuthError) {
+	// Normalize auth state before updating runtime indexes.
 	if m == nil {
 		return nil, nil
 	}

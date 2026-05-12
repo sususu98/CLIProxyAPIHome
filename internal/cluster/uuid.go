@@ -13,7 +13,9 @@ import (
 
 var clusterUUIDNamespace = []byte("0f6c4f02-df9f-4d8d-a383-0c6e4b7a9d43")
 
+// EnsureOAuthPayloadUUID validates ensure o auth payload uuid.
 func EnsureOAuthPayloadUUID(raw []byte) ([]byte, string, bool, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	var payload map[string]any
 	if errUnmarshal := json.Unmarshal(raw, &payload); errUnmarshal != nil {
 		return nil, "", false, errUnmarshal
@@ -50,6 +52,7 @@ func EnsureOAuthPayloadUUID(raw []byte) ([]byte, string, bool, error) {
 	return updatedRaw, generatedUUID, true, nil
 }
 
+// DeterministicAPIKeyUUID handles a deterministic api key uuid.
 func DeterministicAPIKeyUUID(provider, baseURL, apiKeyHash, compatName, providerKey string) string {
 	input := strings.Join([]string{
 		canonicalLower(provider),
@@ -61,11 +64,13 @@ func DeterministicAPIKeyUUID(provider, baseURL, apiKeyHash, compatName, provider
 	return deterministicUUID(input)
 }
 
+// DeterministicVirtualUUID handles a deterministic virtual uuid.
 func DeterministicVirtualUUID(parentUUID, projectID string) string {
 	input := strings.Join([]string{strings.TrimSpace(parentUUID), strings.TrimSpace(projectID)}, "\x00")
 	return deterministicUUID(input)
 }
 
+// NormalizeClusterAuth normalizes a cluster auth.
 func NormalizeClusterAuth(auth *coreauth.Auth, uuidValue string) {
 	if auth == nil {
 		return
@@ -85,6 +90,7 @@ func NormalizeClusterAuth(auth *coreauth.Auth, uuidValue string) {
 	}
 }
 
+// APIKeyHash handles an api key hash.
 func APIKeyHash(apiKey string) string {
 	trimmedKey := strings.TrimSpace(apiKey)
 	if trimmedKey == "" {
@@ -94,10 +100,12 @@ func APIKeyHash(apiKey string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// canonicalLower handles a canonical lower.
 func canonicalLower(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
+// randomUUID handles a random uuid.
 func randomUUID() (string, error) {
 	var raw [16]byte
 	if _, errReadFull := rand.Read(raw[:]); errReadFull != nil {
@@ -108,6 +116,7 @@ func randomUUID() (string, error) {
 	return formatUUID(raw[:]), nil
 }
 
+// deterministicUUID handles a deterministic uuid.
 func deterministicUUID(input string) string {
 	seed := append([]byte{}, clusterUUIDNamespace...)
 	seed = append(seed, 0)
@@ -119,6 +128,7 @@ func deterministicUUID(input string) string {
 	return formatUUID(raw)
 }
 
+// formatUUID formats an uuid.
 func formatUUID(raw []byte) string {
 	dst := make([]byte, 36)
 	hex.Encode(dst[0:8], raw[0:4])
@@ -133,6 +143,7 @@ func formatUUID(raw []byte) string {
 	return string(dst)
 }
 
+// isValidUUID reports whether valid uuid.
 func isValidUUID(value string) bool {
 	if len(value) != 36 {
 		return false
@@ -152,6 +163,7 @@ func isValidUUID(value string) bool {
 	return true
 }
 
+// isHexChar reports whether hex char.
 func isHexChar(char rune) bool {
 	return (char >= '0' && char <= '9') ||
 		(char >= 'a' && char <= 'f') ||

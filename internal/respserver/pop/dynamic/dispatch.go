@@ -18,6 +18,7 @@ const (
 	typeAuth = "auth"
 )
 
+// Register wires package handlers into the provided registry.
 func Register(reg *dispatch.Registry) {
 	if reg == nil {
 		return
@@ -26,7 +27,9 @@ func Register(reg *dispatch.Registry) {
 	_ = reg.SetDynamicDefault("RPOP", handleAuth)
 }
 
+// handleAuth handles an auth.
 func handleAuth(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
+	// Validate request inputs before mutating persisted state.
 	result, userAPIKey, errReply := dispatchRequest(ctx, env, args)
 	if errReply != nil {
 		return *errReply
@@ -66,7 +69,9 @@ func handleAuth(ctx context.Context, env dispatch.Env, args []string) dispatch.R
 	return dispatch.BulkString(out)
 }
 
+// dispatchRequest handles a dispatch request.
 func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*home.DispatchResult, string, *dispatch.Reply) {
+	// Build the candidate view before applying availability rules.
 	if env.Runtime == nil {
 		reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageRuntimeNotReady)))
 		return nil, "", &reply
@@ -130,6 +135,7 @@ func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*hom
 	return result, userAPIKey, nil
 }
 
+// dispatchCount handles a dispatch count.
 func dispatchCount(jsonArg string) int {
 	count := int(gjson.Get(jsonArg, "count").Int())
 	if count <= 0 {
@@ -138,6 +144,7 @@ func dispatchCount(jsonArg string) int {
 	return count
 }
 
+// dispatchRetryExceeded handles a dispatch retry exceeded.
 func dispatchRetryExceeded(rt *home.Runtime, count int) bool {
 	if count <= 1 || rt == nil {
 		return false
@@ -153,7 +160,9 @@ func dispatchRetryExceeded(rt *home.Runtime, count int) bool {
 	return count-2 >= requestRetry
 }
 
+// parseHeaders parses a headers.
 func parseHeaders(jsonArg string) http.Header {
+	// Decode the wire frame before dispatching command handling.
 	headersObj := gjson.Get(jsonArg, "headers")
 	headers := http.Header{}
 	if !headersObj.Exists() || !headersObj.IsObject() {
@@ -193,6 +202,7 @@ func parseHeaders(jsonArg string) http.Header {
 	return headers
 }
 
+// buildErrorJSON builds an error json.
 func buildErrorJSON(message string) string {
 	errorType, errorMessage := homeerrors.SplitRedisErrorMessage(message)
 	out := "{}"

@@ -45,6 +45,7 @@ type Reply struct {
 	Array        []Reply
 }
 
+// SimpleString builds a dispatch reply.
 func SimpleString(value string) Reply {
 	return Reply{
 		Kind:         ReplyKindSimpleString,
@@ -52,6 +53,7 @@ func SimpleString(value string) Reply {
 	}
 }
 
+// BulkString builds a dispatch reply.
 func BulkString(payload []byte) Reply {
 	return Reply{
 		Kind:       ReplyKindBulkString,
@@ -59,6 +61,7 @@ func BulkString(payload []byte) Reply {
 	}
 }
 
+// Integer builds a dispatch reply.
 func Integer(value int64) Reply {
 	return Reply{
 		Kind:    ReplyKindInteger,
@@ -66,6 +69,7 @@ func Integer(value int64) Reply {
 	}
 }
 
+// Array builds a dispatch reply.
 func Array(elements ...Reply) Reply {
 	return Reply{
 		Kind:  ReplyKindArray,
@@ -73,6 +77,7 @@ func Array(elements ...Reply) Reply {
 	}
 }
 
+// RedisError builds a dispatch reply.
 func RedisError(message string) Reply {
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -84,6 +89,7 @@ func RedisError(message string) Reply {
 	}
 }
 
+// Err builds a dispatch reply.
 func Err(message string) Reply {
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -121,6 +127,7 @@ type dynamicHandlers struct {
 	extractJSONFunc func(args []string) (string, bool)
 }
 
+// NewRegistry creates a new registry.
 func NewRegistry() *Registry {
 	return &Registry{
 		directHandlers:        map[string]map[string]Handler{},
@@ -129,6 +136,7 @@ func NewRegistry() *Registry {
 	}
 }
 
+// RegisterDirect handles a register direct.
 func (r *Registry) RegisterDirect(command string, key string, handler Handler) error {
 	if r == nil {
 		return fmt.Errorf("registry is nil")
@@ -152,6 +160,7 @@ func (r *Registry) RegisterDirect(command string, key string, handler Handler) e
 	return nil
 }
 
+// SetDirectDefault sets a direct default.
 func (r *Registry) SetDirectDefault(command string, handler Handler) error {
 	if r == nil {
 		return fmt.Errorf("registry is nil")
@@ -168,7 +177,9 @@ func (r *Registry) SetDirectDefault(command string, handler Handler) error {
 	return nil
 }
 
+// RegisterDynamic handles a register dynamic.
 func (r *Registry) RegisterDynamic(command string, typeValue string, handler Handler) error {
+	// Decode the wire frame before dispatching command handling.
 	if r == nil {
 		return fmt.Errorf("registry is nil")
 	}
@@ -198,7 +209,9 @@ func (r *Registry) RegisterDynamic(command string, typeValue string, handler Han
 	return nil
 }
 
+// SetDynamicDefault sets a dynamic default.
 func (r *Registry) SetDynamicDefault(command string, handler Handler) error {
+	// Decode the wire frame before dispatching command handling.
 	if r == nil {
 		return fmt.Errorf("registry is nil")
 	}
@@ -224,7 +237,9 @@ func (r *Registry) SetDynamicDefault(command string, handler Handler) error {
 	return nil
 }
 
+// Execute handles an execute.
 func (r *Registry) Execute(ctx context.Context, env Env, args []string) Reply {
+	// Decode the wire frame before dispatching command handling.
 	if r == nil {
 		return Err("registry not ready")
 	}
@@ -278,7 +293,9 @@ func (r *Registry) Execute(ctx context.Context, env Env, args []string) Reply {
 	return RedisError(fmt.Sprintf("ERR unknown command '%s'", strings.ToLower(command)))
 }
 
+// Routes handles a routes.
 func (r *Registry) Routes() []Route {
+	// Decode the wire frame before dispatching command handling.
 	if r == nil {
 		return nil
 	}
@@ -337,6 +354,7 @@ func (r *Registry) Routes() []Route {
 	return routes
 }
 
+// ExtractJSONArgument extracts a json argument.
 func ExtractJSONArgument(args []string, jsonIndex int) (string, bool) {
 	if len(args) == 2 && jsonIndex == 1 {
 		return args[1], true
@@ -347,6 +365,7 @@ func ExtractJSONArgument(args []string, jsonIndex int) (string, bool) {
 	return "", false
 }
 
+// extractTypeFromJSON derives extract type from json.
 func extractTypeFromJSON(jsonArg string) string {
 	jsonArg = strings.TrimSpace(jsonArg)
 	if jsonArg == "" || !gjson.Valid(jsonArg) {
@@ -355,14 +374,17 @@ func extractTypeFromJSON(jsonArg string) string {
 	return gjson.Get(jsonArg, "type").String()
 }
 
+// normalizeCommand normalizes a command.
 func normalizeCommand(value string) string {
 	return strings.ToUpper(strings.TrimSpace(value))
 }
 
+// normalizeKey normalizes a key.
 func normalizeKey(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
+// normalizeType normalizes a type.
 func normalizeType(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }

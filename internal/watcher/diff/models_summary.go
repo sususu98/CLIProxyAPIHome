@@ -94,6 +94,7 @@ func SummarizeCodexModels(models []config.CodexModel) CodexModelsSummary {
 
 // SummarizeVertexModels hashes Vertex-compatible model aliases for change detection.
 func SummarizeVertexModels(models []config.VertexCompatModel) VertexModelsSummary {
+	// Normalize source data before building the derived payload.
 	if len(models) == 0 {
 		return VertexModelsSummary{}
 	}

@@ -15,11 +15,14 @@ type defaultRoundTripperProvider struct {
 	cache map[string]http.RoundTripper
 }
 
+// newDefaultRoundTripperProvider creates a default round tripper provider.
 func newDefaultRoundTripperProvider() *defaultRoundTripperProvider {
 	return &defaultRoundTripperProvider{cache: make(map[string]http.RoundTripper)}
 }
 
+// RoundTripperFor returns a round tripper for.
 func (p *defaultRoundTripperProvider) RoundTripperFor(auth *coreauth.Auth) http.RoundTripper {
+	// Keep validation before state changes so failures leave existing data intact.
 	if p == nil || auth == nil {
 		return nil
 	}

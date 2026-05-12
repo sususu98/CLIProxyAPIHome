@@ -22,13 +22,16 @@ type nodeEntry struct {
 	count       int
 }
 
+// NewRegistry creates a new registry.
 func NewRegistry() *Registry {
 	return &Registry{
 		nodes: make(map[string]nodeEntry),
 	}
 }
 
+// Add adds the value.
 func (r *Registry) Add(ip string, connectedAt time.Time) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if r == nil {
 		return
 	}
@@ -56,7 +59,9 @@ func (r *Registry) Add(ip string, connectedAt time.Time) {
 	r.mu.Unlock()
 }
 
+// Remove removes the value.
 func (r *Registry) Remove(ip string) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if r == nil {
 		return
 	}
@@ -80,7 +85,9 @@ func (r *Registry) Remove(ip string) {
 	r.mu.Unlock()
 }
 
+// List returns the available entries.
 func (r *Registry) List() []Node {
+	// Keep validation before state changes so failures leave existing data intact.
 	if r == nil {
 		return nil
 	}

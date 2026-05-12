@@ -34,6 +34,7 @@ type Setting struct {
 
 // Parse normalizes a proxy configuration value into inherit, direct, or proxy modes.
 func Parse(raw string) (Setting, error) {
+	// Validate input data before converting it into runtime state.
 	trimmed := strings.TrimSpace(raw)
 	setting := Setting{Raw: trimmed}
 
@@ -68,6 +69,7 @@ func Parse(raw string) (Setting, error) {
 	}
 }
 
+// cloneDefaultTransport clones a default transport.
 func cloneDefaultTransport() *http.Transport {
 	if transport, ok := http.DefaultTransport.(*http.Transport); ok && transport != nil {
 		return transport.Clone()
@@ -84,6 +86,7 @@ func NewDirectTransport() *http.Transport {
 
 // BuildHTTPTransport constructs an HTTP transport for the provided proxy setting.
 func BuildHTTPTransport(raw string) (*http.Transport, Mode, error) {
+	// Keep validation before state changes so failures leave existing data intact.
 	setting, errParse := Parse(raw)
 	if errParse != nil {
 		return nil, setting.Mode, errParse

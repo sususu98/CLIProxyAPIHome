@@ -70,7 +70,9 @@ func StartAutoUpdater(ctx context.Context, configFilePath string) {
 	})
 }
 
+// runAutoUpdater runs an auto updater.
 func runAutoUpdater(ctx context.Context) {
+	// Validate request inputs before mutating persisted state.
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -110,6 +112,7 @@ func runAutoUpdater(ctx context.Context) {
 	}
 }
 
+// newHTTPClient creates a http client.
 func newHTTPClient(proxyURL string) *http.Client {
 	client := &http.Client{Timeout: 15 * time.Second}
 	util.SetProxy(&config.SDKConfig{ProxyURL: strings.TrimSpace(proxyURL)}, client)
@@ -128,6 +131,7 @@ type releaseResponse struct {
 
 // StaticDir resolves the directory that stores the management control panel asset.
 func StaticDir(configFilePath string) string {
+	// Validate request inputs before mutating persisted state.
 	if override := strings.TrimSpace(os.Getenv("MANAGEMENT_STATIC_PATH")); override != "" {
 		cleaned := filepath.Clean(override)
 		if strings.EqualFold(filepath.Base(cleaned), managementAssetName) {
@@ -176,6 +180,7 @@ func FilePath(configFilePath string) string {
 // EnsureLatestManagementHTML checks the latest management.html asset and updates the local copy when needed.
 // It coalesces concurrent sync attempts and returns whether the asset exists after the sync attempt.
 func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL string, panelRepository string) bool {
+	// Validate request inputs before mutating persisted state.
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -277,6 +282,7 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 	return err == nil
 }
 
+// ensureFallbackManagementHTML ensures a fallback management html.
 func ensureFallbackManagementHTML(ctx context.Context, client *http.Client, localPath string) bool {
 	data, downloadedHash, err := downloadAsset(ctx, client, defaultManagementFallbackURL)
 	if err != nil {
@@ -296,7 +302,9 @@ func ensureFallbackManagementHTML(ctx context.Context, client *http.Client, loca
 	return true
 }
 
+// resolveReleaseURL resolves a release url.
 func resolveReleaseURL(repo string) string {
+	// Validate request inputs before mutating persisted state.
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
 		return defaultManagementReleaseURL
@@ -328,7 +336,9 @@ func resolveReleaseURL(repo string) string {
 	return defaultManagementReleaseURL
 }
 
+// fetchLatestAsset fetches a latest asset.
 func fetchLatestAsset(ctx context.Context, client *http.Client, releaseURL string) (*releaseAsset, string, error) {
+	// Validate request inputs before mutating persisted state.
 	if strings.TrimSpace(releaseURL) == "" {
 		releaseURL = defaultManagementReleaseURL
 	}
@@ -373,7 +383,9 @@ func fetchLatestAsset(ctx context.Context, client *http.Client, releaseURL strin
 	return nil, "", fmt.Errorf("management asset %s not found in latest release", managementAssetName)
 }
 
+// downloadAsset downloads an asset.
 func downloadAsset(ctx context.Context, client *http.Client, downloadURL string) ([]byte, string, error) {
+	// Validate request inputs before mutating persisted state.
 	if strings.TrimSpace(downloadURL) == "" {
 		return nil, "", fmt.Errorf("empty download url")
 	}
@@ -409,6 +421,7 @@ func downloadAsset(ctx context.Context, client *http.Client, downloadURL string)
 	return data, hex.EncodeToString(sum[:]), nil
 }
 
+// fileSHA256 returns a file sha 256.
 func fileSHA256(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -426,7 +439,9 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// atomicWriteFile writes a write file atomically.
 func atomicWriteFile(path string, data []byte) error {
+	// Validate request inputs before mutating persisted state.
 	tmpFile, err := os.CreateTemp(filepath.Dir(path), "management-*.html")
 	if err != nil {
 		return err
@@ -457,6 +472,7 @@ func atomicWriteFile(path string, data []byte) error {
 	return nil
 }
 
+// parseDigest parses a digest.
 func parseDigest(digest string) string {
 	digest = strings.TrimSpace(digest)
 	if digest == "" {

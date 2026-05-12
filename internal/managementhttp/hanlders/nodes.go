@@ -7,6 +7,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
 )
 
+// ListNodes returns a nodes.
 func ListNodes(c *gin.Context) {
 	if c == nil {
 		return

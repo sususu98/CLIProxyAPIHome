@@ -17,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ConfigRootRoutes handles a config root routes.
 func ConfigRootRoutes() []string {
 	routes := make([]string, 0, len(configRootKeys()))
 	for _, key := range configRootKeys() {
@@ -29,6 +30,7 @@ func ConfigRootRoutes() []string {
 	return routes
 }
 
+// GetConfig returns a config.
 func (h *Handler) GetConfig(c *gin.Context) {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
@@ -50,7 +52,9 @@ func (h *Handler) GetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, cfg)
 }
 
+// GetConfigYAML returns a config yaml.
 func (h *Handler) GetConfigYAML(c *gin.Context) {
+	// Normalize source data before building the derived payload.
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 
@@ -74,7 +78,9 @@ func (h *Handler) GetConfigYAML(c *gin.Context) {
 	_, _ = c.Writer.Write(data)
 }
 
+// PutConfigYAML replaces a config yaml.
 func (h *Handler) PutConfigYAML(c *gin.Context) {
+	// Normalize source data before building the derived payload.
 	body, errRead := io.ReadAll(c.Request.Body)
 	if errRead != nil {
 		respondError(c, http.StatusBadRequest, "invalid_yaml", fmt.Errorf("cannot read request body"))
@@ -103,6 +109,7 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "changed": []string{"config"}})
 }
 
+// GetConfigRoot returns a config root.
 func (h *Handler) GetConfigRoot(route string) gin.HandlerFunc {
 	key := strings.Trim(strings.TrimSpace(route), "/")
 	return func(c *gin.Context) {
@@ -118,7 +125,9 @@ func (h *Handler) GetConfigRoot(route string) gin.HandlerFunc {
 	}
 }
 
+// PutConfigRoot replaces a config root.
 func (h *Handler) PutConfigRoot(route string) gin.HandlerFunc {
+	// Normalize source data before building the derived payload.
 	key := strings.Trim(strings.TrimSpace(route), "/")
 	return func(c *gin.Context) {
 		value, errValue := readConfigValue(c, key)
@@ -150,7 +159,9 @@ func (h *Handler) PutConfigRoot(route string) gin.HandlerFunc {
 	}
 }
 
+// DeleteConfigRoot deletes a config root.
 func (h *Handler) DeleteConfigRoot(route string) gin.HandlerFunc {
+	// Normalize source data before building the derived payload.
 	key := strings.Trim(strings.TrimSpace(route), "/")
 	return func(c *gin.Context) {
 		ctx, cancel := h.requestContext(c)
@@ -177,6 +188,7 @@ func (h *Handler) DeleteConfigRoot(route string) gin.HandlerFunc {
 	}
 }
 
+// configRoot handles a config root.
 func (h *Handler) configRoot(ctx context.Context) (map[string]any, error) {
 	if h == nil || h.repo == nil {
 		return nil, fmt.Errorf("cluster management repository is nil")
@@ -188,6 +200,7 @@ func (h *Handler) configRoot(ctx context.Context) (map[string]any, error) {
 	return cluster.ConfigRootFromSnapshot(snapshot)
 }
 
+// applyCredentialConfig applies a credential config.
 func (h *Handler) applyCredentialConfig(ctx context.Context, root map[string]any) error {
 	if h == nil || h.repo == nil {
 		return fmt.Errorf("cluster management repository is nil")
@@ -203,6 +216,7 @@ func (h *Handler) applyCredentialConfig(ctx context.Context, root map[string]any
 	return nil
 }
 
+// configRootFromYAML derives config root from yaml.
 func configRootFromYAML(data []byte) (map[string]any, error) {
 	var root map[string]any
 	if errUnmarshal := yaml.Unmarshal(data, &root); errUnmarshal != nil {
@@ -219,12 +233,15 @@ func configRootFromYAML(data []byte) (map[string]any, error) {
 	return root, nil
 }
 
+// configFromRoot derives config from root.
 func configFromRoot(root map[string]any) (*appconfig.Config, error) {
 	cfg, _, errConfig := cluster.RuntimeConfigFromRoot(root)
 	return cfg, errConfig
 }
 
+// readConfigValue reads a config value.
 func readConfigValue(c *gin.Context, key string) (any, error) {
+	// Normalize source data before building the derived payload.
 	body, errRead := io.ReadAll(c.Request.Body)
 	if errRead != nil {
 		return nil, errRead
@@ -259,6 +276,7 @@ func readConfigValue(c *gin.Context, key string) (any, error) {
 	return value, nil
 }
 
+// configRootKeys handles a config root keys.
 func configRootKeys() []string {
 	cfgType := reflect.TypeOf(appconfig.Config{})
 	keys := make([]string, 0, cfgType.NumField())
@@ -277,6 +295,7 @@ func configRootKeys() []string {
 	return keys
 }
 
+// sdkConfigRootKeys handles a sdk config root keys.
 func sdkConfigRootKeys() []string {
 	cfgType := reflect.TypeOf(appconfig.SDKConfig{})
 	keys := make([]string, 0, cfgType.NumField())
@@ -290,6 +309,7 @@ func sdkConfigRootKeys() []string {
 	return keys
 }
 
+// yamlTagName handles a yaml tag name.
 func yamlTagName(tag string) string {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
@@ -301,6 +321,7 @@ func yamlTagName(tag string) string {
 	return strings.TrimSpace(tag)
 }
 
+// isCredentialConfigKey reports whether credential config key.
 func isCredentialConfigKey(key string) bool {
 	switch strings.TrimSpace(key) {
 	case "auth-dir", "gemini-api-key", "vertex-api-key", "codex-api-key", "claude-api-key", "openai-compatibility":

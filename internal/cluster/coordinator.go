@@ -46,7 +46,9 @@ type NodeIdentity struct {
 	StartedAt time.Time
 }
 
+// NewCoordinator creates a new coordinator.
 func NewCoordinator(repo *Repository, node NodeIdentity, opts CoordinatorOptions) *Coordinator {
+	// Keep validation before state changes so failures leave existing data intact.
 	interval := opts.HeartbeatInterval
 	if interval <= 0 {
 		interval = defaultHeartbeatInterval
@@ -75,7 +77,9 @@ func NewCoordinator(repo *Repository, node NodeIdentity, opts CoordinatorOptions
 	}
 }
 
+// Start starts the process.
 func (c *Coordinator) Start(ctx context.Context) error {
+	// Keep validation before state changes so failures leave existing data intact.
 	if c == nil {
 		return fmt.Errorf("cluster coordinator is nil")
 	}
@@ -112,6 +116,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 }
 
+// IsMaster reports whether is master.
 func (c *Coordinator) IsMaster() bool {
 	if c == nil {
 		return false
@@ -121,6 +126,7 @@ func (c *Coordinator) IsMaster() bool {
 	return c.isMaster
 }
 
+// NodeSecret handles a node secret.
 func (c *Coordinator) NodeSecret() string {
 	if c == nil {
 		return ""
@@ -128,6 +134,7 @@ func (c *Coordinator) NodeSecret() string {
 	return strings.TrimSpace(c.node.Secret)
 }
 
+// SetOnMasterChanged sets an on master changed.
 func (c *Coordinator) SetOnMasterChanged(callback func(bool)) {
 	if c == nil {
 		return
@@ -137,7 +144,9 @@ func (c *Coordinator) SetOnMasterChanged(callback func(bool)) {
 	c.mu.Unlock()
 }
 
+// CurrentMaster returns a current master.
 func (c *Coordinator) CurrentMaster(ctx context.Context) (*ClusterNodeRecord, error) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if c == nil {
 		return nil, fmt.Errorf("cluster coordinator is nil")
 	}
@@ -179,7 +188,9 @@ func (c *Coordinator) CurrentMaster(ctx context.Context) (*ClusterNodeRecord, er
 	return &liveNodes[0], nil
 }
 
+// heartbeatAndElect handles a heartbeat and elect.
 func (c *Coordinator) heartbeatAndElect(ctx context.Context) error {
+	// Keep validation before state changes so failures leave existing data intact.
 	db, errDB := c.repo.database()
 	if errDB != nil {
 		return errDB
@@ -244,6 +255,7 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context) error {
 	return nil
 }
 
+// setMaster sets a master.
 func (c *Coordinator) setMaster(next bool) {
 	c.mu.Lock()
 	changed := !c.masterKnown || c.isMaster != next
@@ -257,6 +269,7 @@ func (c *Coordinator) setMaster(next bool) {
 	}
 }
 
+// sortClusterNodes sorts a cluster nodes.
 func sortClusterNodes(nodes []ClusterNodeRecord) {
 	sort.Slice(nodes, func(i, j int) bool {
 		if !nodes[i].StartedAt.Equal(nodes[j].StartedAt) {
@@ -266,10 +279,12 @@ func sortClusterNodes(nodes []ClusterNodeRecord) {
 	})
 }
 
+// nodeSortKey handles a node sort key.
 func nodeSortKey(node ClusterNodeRecord) string {
 	return fmt.Sprintf("%s:%d", strings.TrimSpace(node.IP), node.Port)
 }
 
+// generateNodeSecret generates a node secret.
 func generateNodeSecret() string {
 	token := make([]byte, 32)
 	if _, errRead := cryptorand.Read(token); errRead == nil {
@@ -279,6 +294,7 @@ func generateNodeSecret() string {
 	return hex.EncodeToString(fallback[:])
 }
 
+// nodeSecretHash handles a node secret hash.
 func nodeSecretHash(secret string) string {
 	secret = strings.TrimSpace(secret)
 	if secret == "" {

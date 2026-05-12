@@ -24,6 +24,7 @@ type authAutoRefreshLoop struct {
 	jobs   chan string
 }
 
+// newAuthAutoRefreshLoop creates an auth auto refresh loop.
 func newAuthAutoRefreshLoop(manager *Manager, interval time.Duration, concurrency int) *authAutoRefreshLoop {
 	if interval <= 0 {
 		interval = refreshCheckInterval
@@ -46,6 +47,7 @@ func newAuthAutoRefreshLoop(manager *Manager, interval time.Duration, concurrenc
 	}
 }
 
+// queueReschedule queues a reschedule.
 func (l *authAutoRefreshLoop) queueReschedule(authID string) {
 	if l == nil || authID == "" {
 		return
@@ -59,6 +61,7 @@ func (l *authAutoRefreshLoop) queueReschedule(authID string) {
 	}
 }
 
+// run drives the background loop until it is stopped.
 func (l *authAutoRefreshLoop) run(ctx context.Context) {
 	if l == nil || l.manager == nil {
 		return
@@ -75,6 +78,7 @@ func (l *authAutoRefreshLoop) run(ctx context.Context) {
 	l.loop(ctx)
 }
 
+// worker processes queued auto-refresh work.
 func (l *authAutoRefreshLoop) worker(ctx context.Context) {
 	for {
 		select {
@@ -90,7 +94,9 @@ func (l *authAutoRefreshLoop) worker(ctx context.Context) {
 	}
 }
 
+// rebuild rebuilds the state.
 func (l *authAutoRefreshLoop) rebuild(now time.Time) {
+	// Keep validation before state changes so failures leave existing data intact.
 	type entry struct {
 		id   string
 		next time.Time
@@ -119,7 +125,9 @@ func (l *authAutoRefreshLoop) rebuild(now time.Time) {
 	l.mu.Unlock()
 }
 
+// loop runs the scheduling loop until the context is canceled.
 func (l *authAutoRefreshLoop) loop(ctx context.Context) {
+	// Keep validation before state changes so failures leave existing data intact.
 	timer := time.NewTimer(time.Hour)
 	if !timer.Stop() {
 		select {
@@ -149,7 +157,9 @@ func (l *authAutoRefreshLoop) loop(ctx context.Context) {
 	}
 }
 
+// resetTimer resets a timer.
 func (l *authAutoRefreshLoop) resetTimer(timer *time.Timer, timerCh *<-chan time.Time, now time.Time) {
+	// Keep validation before state changes so failures leave existing data intact.
 	next, ok := l.peek()
 	if !ok {
 		if !timer.Stop() {
@@ -176,6 +186,7 @@ func (l *authAutoRefreshLoop) resetTimer(timer *time.Timer, timerCh *<-chan time
 	*timerCh = timer.C
 }
 
+// peek returns the next queued item without removing it.
 func (l *authAutoRefreshLoop) peek() (time.Time, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -185,6 +196,7 @@ func (l *authAutoRefreshLoop) peek() (time.Time, bool) {
 	return l.queue[0].next, true
 }
 
+// handleDue handles a due.
 func (l *authAutoRefreshLoop) handleDue(ctx context.Context, now time.Time) {
 	due := l.popDue(now)
 	if len(due) == 0 {
@@ -198,6 +210,7 @@ func (l *authAutoRefreshLoop) handleDue(ctx context.Context, now time.Time) {
 	}
 }
 
+// popDue removes and returns a due.
 func (l *authAutoRefreshLoop) popDue(now time.Time) []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -218,7 +231,9 @@ func (l *authAutoRefreshLoop) popDue(now time.Time) []string {
 	return due
 }
 
+// handleDueAuth handles a due auth.
 func (l *authAutoRefreshLoop) handleDueAuth(ctx context.Context, now time.Time, authID string) {
+	// Validate request inputs before mutating persisted state.
 	if authID == "" {
 		return
 	}
@@ -265,6 +280,7 @@ func (l *authAutoRefreshLoop) handleDueAuth(ctx context.Context, now time.Time, 
 	}
 }
 
+// applyDirty applies a dirty.
 func (l *authAutoRefreshLoop) applyDirty(now time.Time) {
 	dirty := l.drainDirty()
 	if len(dirty) == 0 {
@@ -285,6 +301,7 @@ func (l *authAutoRefreshLoop) applyDirty(now time.Time) {
 	}
 }
 
+// drainDirty drains a dirty.
 func (l *authAutoRefreshLoop) drainDirty() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -299,6 +316,7 @@ func (l *authAutoRefreshLoop) drainDirty() []string {
 	return out
 }
 
+// upsert inserts or updates the record.
 func (l *authAutoRefreshLoop) upsert(authID string, next time.Time) {
 	if authID == "" || next.IsZero() {
 		return
@@ -315,6 +333,7 @@ func (l *authAutoRefreshLoop) upsert(authID string, next time.Time) {
 	l.index[authID] = item
 }
 
+// remove removes the value.
 func (l *authAutoRefreshLoop) remove(authID string) {
 	if authID == "" {
 		return
@@ -329,7 +348,9 @@ func (l *authAutoRefreshLoop) remove(authID string) {
 	delete(l.index, authID)
 }
 
+// nextRefreshCheckAt returns a next refresh check at.
 func nextRefreshCheckAt(now time.Time, auth *Auth, interval time.Duration) (time.Time, bool) {
+	// Resolve credential context before calling upstream OAuth services.
 	if auth == nil {
 		return time.Time{}, false
 	}
@@ -413,18 +434,22 @@ type refreshHeapItem struct {
 
 type refreshMinHeap []*refreshHeapItem
 
+// Len returns the number of items.
 func (h refreshMinHeap) Len() int { return len(h) }
 
+// Less reports whether one item should sort before another.
 func (h refreshMinHeap) Less(i, j int) bool {
 	return h[i].next.Before(h[j].next)
 }
 
+// Swap exchanges two items.
 func (h refreshMinHeap) Swap(i, j int) {
 	h[i], h[j] = h[j], h[i]
 	h[i].index = i
 	h[j].index = j
 }
 
+// Push adds an item.
 func (h *refreshMinHeap) Push(x any) {
 	item, ok := x.(*refreshHeapItem)
 	if !ok || item == nil {
@@ -434,6 +459,7 @@ func (h *refreshMinHeap) Push(x any) {
 	*h = append(*h, item)
 }
 
+// Pop removes and returns the next item.
 func (h *refreshMinHeap) Pop() any {
 	old := *h
 	n := len(old)

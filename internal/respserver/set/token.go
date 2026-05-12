@@ -6,6 +6,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
 )
 
+// handleToken converts handle token.
 func handleToken(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
 	if env.Runtime == nil {
 		return dispatch.Err("runtime not ready")

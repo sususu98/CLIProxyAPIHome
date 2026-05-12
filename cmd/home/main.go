@@ -27,11 +27,14 @@ import (
 	"golang.org/x/net/http2"
 )
 
+// main starts the home command entrypoint.
 func main() {
 	os.Exit(run())
 }
 
+// run executes the home command and returns the process exit code.
 func run() int {
+	// Keep validation before state changes so failures leave existing data intact.
 	logging.SetupBaseLogger()
 
 	var configPath string
@@ -389,7 +392,9 @@ func run() int {
 	}
 }
 
+// resolveListenAddress resolves a listen address.
 func resolveListenAddress(addr string, cfg *config.Config, clusterCfg *cluster.Config, clusterEnabled bool) (string, int, error) {
+	// Keep validation before state changes so failures leave existing data intact.
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
 		host := ""
@@ -423,6 +428,7 @@ func resolveListenAddress(addr string, cfg *config.Config, clusterCfg *cluster.C
 	return addr, port, nil
 }
 
+// listenPortFromAddress derives listen port from address.
 func listenPortFromAddress(addr string) (int, error) {
 	_, portValue, errSplitHostPort := net.SplitHostPort(addr)
 	if errSplitHostPort != nil {
@@ -435,6 +441,7 @@ func listenPortFromAddress(addr string) (int, error) {
 	return port, nil
 }
 
+// collectServeError handles a collect serve error.
 func collectServeError(ch <-chan error, timeout time.Duration) error {
 	if ch == nil {
 		return nil
@@ -449,7 +456,9 @@ func collectServeError(ch <-chan error, timeout time.Duration) error {
 	}
 }
 
+// runDisbandCluster runs a disband cluster.
 func runDisbandCluster(ctx context.Context, clusterCfg *cluster.Config, configPath string) int {
+	// Keep validation before state changes so failures leave existing data intact.
 	if clusterCfg == nil {
 		log.Errorf("failed to disband cluster: cluster config is nil")
 		return 1
@@ -503,7 +512,9 @@ func runDisbandCluster(ctx context.Context, clusterCfg *cluster.Config, configPa
 	return 0
 }
 
+// backupClusterConfig handles a backup cluster config.
 func backupClusterConfig() (string, error) {
+	// Normalize source data before building the derived payload.
 	sourcePath := cluster.DefaultConfigPath
 	info, errStat := os.Stat(sourcePath)
 	if os.IsNotExist(errStat) {
@@ -527,6 +538,7 @@ func backupClusterConfig() (string, error) {
 	return backupPath, nil
 }
 
+// applyLogLevel applies a log level.
 func applyLogLevel(cfg *config.Config) {
 	currentLevel := log.GetLevel()
 	debugEnabled := cfg != nil && cfg.Debug
@@ -540,6 +552,7 @@ func applyLogLevel(cfg *config.Config) {
 	}
 }
 
+// loadLocalConfigForCluster loads a local config for cluster.
 func loadLocalConfigForCluster(configPath string) (*config.Config, error) {
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" {

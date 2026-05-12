@@ -10,6 +10,7 @@ import (
 
 // RecordUsagePayload applies downstream usage status to the scheduler auth state.
 func (r *Runtime) RecordUsagePayload(ctx context.Context, payload string) {
+	// Validate input data before converting it into runtime state.
 	if r == nil || r.coreManager == nil {
 		return
 	}

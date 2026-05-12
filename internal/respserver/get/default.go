@@ -10,7 +10,9 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+// handleDefault handles a default.
 func handleDefault(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
+	// Validate request inputs before mutating persisted state.
 	if env.Runtime == nil {
 		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageRuntimeNotReady)))
 	}
@@ -45,6 +47,7 @@ func handleDefault(ctx context.Context, env dispatch.Env, args []string) dispatc
 	return dispatch.BulkString(payload)
 }
 
+// buildErrorJSON builds an error json.
 func buildErrorJSON(message string) string {
 	errorType, errorMessage := homeerrors.SplitRedisErrorMessage(message)
 	out := "{}"

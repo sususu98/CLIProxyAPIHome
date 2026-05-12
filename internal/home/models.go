@@ -16,7 +16,9 @@ const (
 
 type ModelInfo = registry.ModelInfo
 
+// modelInfosFromAuthMetadata derives model infos from auth metadata.
 func modelInfosFromAuthMetadata(a *coreauth.Auth, key string) []*ModelInfo {
+	// Normalize source data before building the derived payload.
 	if a == nil || len(a.Metadata) == 0 {
 		return nil
 	}
@@ -60,6 +62,7 @@ func modelInfosFromAuthMetadata(a *coreauth.Auth, key string) []*ModelInfo {
 	return out
 }
 
+// boolFromMetadataValue derives bool from metadata value.
 func boolFromMetadataValue(value any) bool {
 	switch typed := value.(type) {
 	case bool:
@@ -71,6 +74,7 @@ func boolFromMetadataValue(value any) bool {
 	}
 }
 
+// openAICompatInfoFromAuth derives open ai compat info from auth.
 func openAICompatInfoFromAuth(a *coreauth.Auth) (providerKey string, compatName string, ok bool) {
 	if a == nil {
 		return "", "", false
@@ -91,6 +95,7 @@ func openAICompatInfoFromAuth(a *coreauth.Auth) (providerKey string, compatName 
 	return "", "", false
 }
 
+// registerResolvedModelsForAuth returns a register resolved models for auth.
 func (r *Runtime) registerResolvedModelsForAuth(a *coreauth.Auth, providerKey string, models []*ModelInfo) {
 	if a == nil || a.ID == "" {
 		return
@@ -353,6 +358,7 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 	registry.GetGlobalRegistry().UnregisterClient(a.ID)
 }
 
+// oauthExcludedModels handles an oauth excluded models.
 func (r *Runtime) oauthExcludedModels(cfg *config.Config, provider, authKind string) []string {
 	if cfg == nil {
 		return nil
@@ -365,7 +371,9 @@ func (r *Runtime) oauthExcludedModels(cfg *config.Config, provider, authKind str
 	return cfg.OAuthExcludedModels[providerKey]
 }
 
+// resolveConfigClaudeKey resolves a config claude key.
 func (r *Runtime) resolveConfigClaudeKey(cfg *config.Config, auth *coreauth.Auth) *config.ClaudeKey {
+	// Normalize source data before building the derived payload.
 	if auth == nil || cfg == nil {
 		return nil
 	}
@@ -404,7 +412,9 @@ func (r *Runtime) resolveConfigClaudeKey(cfg *config.Config, auth *coreauth.Auth
 	return nil
 }
 
+// resolveConfigGeminiKey resolves a config gemini key.
 func (r *Runtime) resolveConfigGeminiKey(cfg *config.Config, auth *coreauth.Auth) *config.GeminiKey {
+	// Normalize source data before building the derived payload.
 	if auth == nil || cfg == nil {
 		return nil
 	}
@@ -430,7 +440,9 @@ func (r *Runtime) resolveConfigGeminiKey(cfg *config.Config, auth *coreauth.Auth
 	return nil
 }
 
+// resolveConfigVertexCompatKey resolves a config vertex compat key.
 func (r *Runtime) resolveConfigVertexCompatKey(cfg *config.Config, auth *coreauth.Auth) *config.VertexCompatKey {
+	// Normalize source data before building the derived payload.
 	if auth == nil || cfg == nil {
 		return nil
 	}
@@ -464,7 +476,9 @@ func (r *Runtime) resolveConfigVertexCompatKey(cfg *config.Config, auth *coreaut
 	return nil
 }
 
+// resolveConfigCodexKey resolves a config codex key.
 func (r *Runtime) resolveConfigCodexKey(cfg *config.Config, auth *coreauth.Auth) *config.CodexKey {
+	// Normalize source data before building the derived payload.
 	if auth == nil || cfg == nil {
 		return nil
 	}
@@ -490,7 +504,9 @@ func (r *Runtime) resolveConfigCodexKey(cfg *config.Config, auth *coreauth.Auth)
 	return nil
 }
 
+// applyExcludedModels applies an excluded models.
 func applyExcludedModels(models []*ModelInfo, excluded []string) []*ModelInfo {
+	// Normalize source data before building the derived payload.
 	if len(models) == 0 || len(excluded) == 0 {
 		return models
 	}
@@ -525,7 +541,9 @@ func applyExcludedModels(models []*ModelInfo, excluded []string) []*ModelInfo {
 	return filtered
 }
 
+// applyModelPrefixes applies a model prefixes.
 func applyModelPrefixes(models []*ModelInfo, prefix string, forceModelPrefix bool) []*ModelInfo {
+	// Normalize source data before building the derived payload.
 	trimmedPrefix := strings.TrimSpace(prefix)
 	if trimmedPrefix == "" || len(models) == 0 {
 		return models
@@ -567,8 +585,9 @@ func applyModelPrefixes(models []*ModelInfo, prefix string, forceModelPrefix boo
 	return out
 }
 
-// matchWildcard performs case-insensitive wildcard matching where '*' matches any substring.
+// matchWildcard handles a match wildcard.
 func matchWildcard(pattern, value string) bool {
+	// Keep validation before state changes so failures leave existing data intact.
 	if pattern == "" {
 		return false
 	}
@@ -612,7 +631,9 @@ type modelEntry interface {
 	GetAlias() string
 }
 
+// buildConfigModels builds a config models.
 func buildConfigModels[T modelEntry](models []T, ownedBy, modelType string) []*ModelInfo {
+	// Normalize source data before building the derived payload.
 	if len(models) == 0 {
 		return nil
 	}
@@ -657,6 +678,7 @@ func buildConfigModels[T modelEntry](models []T, ownedBy, modelType string) []*M
 	return out
 }
 
+// buildVertexCompatConfigModels builds a vertex compat config models.
 func buildVertexCompatConfigModels(entry *config.VertexCompatKey) []*ModelInfo {
 	if entry == nil {
 		return nil
@@ -664,6 +686,7 @@ func buildVertexCompatConfigModels(entry *config.VertexCompatKey) []*ModelInfo {
 	return buildConfigModels(entry.Models, "google", "vertex")
 }
 
+// buildGeminiConfigModels builds a gemini config models.
 func buildGeminiConfigModels(entry *config.GeminiKey) []*ModelInfo {
 	if entry == nil {
 		return nil
@@ -671,6 +694,7 @@ func buildGeminiConfigModels(entry *config.GeminiKey) []*ModelInfo {
 	return buildConfigModels(entry.Models, "google", "gemini")
 }
 
+// buildClaudeConfigModels builds a claude config models.
 func buildClaudeConfigModels(entry *config.ClaudeKey) []*ModelInfo {
 	if entry == nil {
 		return nil
@@ -678,6 +702,7 @@ func buildClaudeConfigModels(entry *config.ClaudeKey) []*ModelInfo {
 	return buildConfigModels(entry.Models, "anthropic", "claude")
 }
 
+// buildCodexConfigModels builds a codex config models.
 func buildCodexConfigModels(entry *config.CodexKey) []*ModelInfo {
 	if entry == nil {
 		return nil
@@ -685,7 +710,9 @@ func buildCodexConfigModels(entry *config.CodexKey) []*ModelInfo {
 	return registry.WithCodexBuiltins(buildConfigModels(entry.Models, "openai", "openai"))
 }
 
+// rewriteModelInfoName rewrites a model info name.
 func rewriteModelInfoName(name, oldID, newID string) string {
+	// Normalize source data before building the derived payload.
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return name
@@ -711,7 +738,9 @@ func rewriteModelInfoName(name, oldID, newID string) string {
 	return name
 }
 
+// applyOAuthModelAlias applies an o auth model alias.
 func applyOAuthModelAlias(cfg *config.Config, provider, authKind string, models []*ModelInfo) []*ModelInfo {
+	// Resolve credential context before calling upstream OAuth services.
 	if cfg == nil || len(models) == 0 {
 		return models
 	}

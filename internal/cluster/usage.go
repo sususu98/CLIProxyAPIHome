@@ -39,11 +39,14 @@ type UsageRecord struct {
 	CreatedAt           time.Time `gorm:"column:created_at;type:timestamptz;not null"`
 }
 
+// TableName returns the database table name.
 func (UsageRecord) TableName() string {
 	return "usage"
 }
 
+// UsageRecordFromPayload derives usage record from payload.
 func UsageRecordFromPayload(payload string) (*UsageRecord, error) {
+	// Validate input data before converting it into runtime state.
 	payload = strings.TrimSpace(payload)
 	if payload == "" {
 		return nil, fmt.Errorf("usage payload is empty")
@@ -91,6 +94,7 @@ func UsageRecordFromPayload(payload string) (*UsageRecord, error) {
 	return record, nil
 }
 
+// AppendUsage appends an usage.
 func (r *Repository) AppendUsage(ctx context.Context, payload string) (*UsageRecord, error) {
 	db, errDB := r.database()
 	if errDB != nil {
@@ -107,6 +111,7 @@ func (r *Repository) AppendUsage(ctx context.Context, payload string) (*UsageRec
 	return record, nil
 }
 
+// jsonbFromPayloadField derives jsonb from payload field.
 func jsonbFromPayloadField(payload string, path string) JSONB {
 	value := gjson.Get(payload, path)
 	if !value.Exists() || strings.TrimSpace(value.Raw) == "" {

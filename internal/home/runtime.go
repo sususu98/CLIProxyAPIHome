@@ -61,7 +61,9 @@ type clusterUsageStore interface {
 	StoreUsagePayload(ctx context.Context, payload string) error
 }
 
+// NewRuntime creates a new runtime.
 func NewRuntime(cfg *config.Config) (*Runtime, error) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if cfg == nil {
 		return nil, fmt.Errorf("home runtime: config is nil")
 	}
@@ -98,6 +100,7 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 	}, nil
 }
 
+// SetClusterAdapter sets a cluster adapter.
 func (r *Runtime) SetClusterAdapter(adapter ClusterAdapter) {
 	if r == nil {
 		return
@@ -116,6 +119,7 @@ func (r *Runtime) SetClusterAdapter(adapter ClusterAdapter) {
 	}
 }
 
+// SetClusterRefreshHandler sets a cluster refresh handler.
 func (r *Runtime) SetClusterRefreshHandler(handler func(context.Context, string) ([]byte, error)) {
 	if r == nil {
 		return
@@ -123,7 +127,9 @@ func (r *Runtime) SetClusterRefreshHandler(handler func(context.Context, string)
 	r.clusterRefresh = handler
 }
 
+// Start starts the process.
 func (r *Runtime) Start(ctx context.Context, configPath string) error {
+	// Keep validation before state changes so failures leave existing data intact.
 	if r == nil {
 		return fmt.Errorf("home runtime: runtime is nil")
 	}
@@ -181,6 +187,7 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	return nil
 }
 
+// Stop stops the process.
 func (r *Runtime) Stop() {
 	if r == nil {
 		return
@@ -199,6 +206,7 @@ func (r *Runtime) Stop() {
 	}
 }
 
+// StartAutoRefresh starts an auto refresh.
 func (r *Runtime) StartAutoRefresh(ctx context.Context) {
 	if r == nil || r.coreManager == nil {
 		return
@@ -211,6 +219,7 @@ func (r *Runtime) StartAutoRefresh(ctx context.Context) {
 	log.Infof("core auth auto-refresh started (interval=%s)", interval)
 }
 
+// StopAutoRefresh stops an auto refresh.
 func (r *Runtime) StopAutoRefresh() {
 	if r == nil || r.coreManager == nil {
 		return
@@ -218,10 +227,12 @@ func (r *Runtime) StopAutoRefresh() {
 	r.coreManager.StopAutoRefresh()
 }
 
+// clusterAutoRefreshGated handles a cluster auto refresh gated.
 func (r *Runtime) clusterAutoRefreshGated() bool {
 	return r != nil && r.clusterAdapter != nil && r.clusterAdapter.Enabled()
 }
 
+// Config handles a config.
 func (r *Runtime) Config() *config.Config {
 	if r == nil {
 		return nil
@@ -231,6 +242,7 @@ func (r *Runtime) Config() *config.Config {
 	return r.cfg
 }
 
+// CoreManager handles a core manager.
 func (r *Runtime) CoreManager() *coreauth.Manager {
 	if r == nil {
 		return nil
@@ -238,6 +250,7 @@ func (r *Runtime) CoreManager() *coreauth.Manager {
 	return r.coreManager
 }
 
+// RefreshNow refreshes refresh now.
 func (r *Runtime) RefreshNow(ctx context.Context, authIndex string) ([]byte, error) {
 	if r == nil {
 		return nil, fmt.Errorf("home runtime: runtime is nil")
@@ -248,6 +261,7 @@ func (r *Runtime) RefreshNow(ctx context.Context, authIndex string) ([]byte, err
 	return r.RefreshNowLocal(ctx, authIndex)
 }
 
+// RefreshNowLocal refreshes refresh now local.
 func (r *Runtime) RefreshNowLocal(ctx context.Context, authIndex string) ([]byte, error) {
 	if r == nil || r.coreManager == nil {
 		return nil, fmt.Errorf("home runtime: runtime not ready")
@@ -259,6 +273,7 @@ func (r *Runtime) RefreshNowLocal(ctx context.Context, authIndex string) ([]byte
 	return BuildRefreshPayload(updated)
 }
 
+// UpdateAuthInMemory updates an auth in memory.
 func (r *Runtime) UpdateAuthInMemory(ctx context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
 	if r == nil || r.coreManager == nil {
 		return nil, fmt.Errorf("home runtime: runtime not ready")
@@ -266,6 +281,7 @@ func (r *Runtime) UpdateAuthInMemory(ctx context.Context, auth *coreauth.Auth) (
 	return r.coreManager.Update(coreauth.WithSkipPersist(ctx), auth)
 }
 
+// RefreshClusterAuthIndex refreshes refresh cluster auth index.
 func (r *Runtime) RefreshClusterAuthIndex(ctx context.Context, uuid string) error {
 	if r == nil || r.clusterAdapter == nil {
 		return nil
@@ -279,6 +295,7 @@ func (r *Runtime) RefreshClusterAuthIndex(ctx context.Context, uuid string) erro
 	return refresher.RefreshAuthIndex(ctx, uuid)
 }
 
+// PersistClusterUsagePayload stores persist cluster usage payload.
 func (r *Runtime) PersistClusterUsagePayload(ctx context.Context, payload string) (bool, error) {
 	if r == nil || r.clusterAdapter == nil || !r.clusterAdapter.Enabled() {
 		return false, nil
@@ -290,7 +307,9 @@ func (r *Runtime) PersistClusterUsagePayload(ctx context.Context, payload string
 	return true, store.StoreUsagePayload(ctx, payload)
 }
 
+// BuildRefreshPayload builds a build refresh payload.
 func BuildRefreshPayload(updated *coreauth.Auth) ([]byte, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if updated == nil {
 		return nil, fmt.Errorf("auth manager: auth not found")
 	}
@@ -318,6 +337,7 @@ func BuildRefreshPayload(updated *coreauth.Auth) ([]byte, error) {
 	return out, nil
 }
 
+// AccessManager handles an access manager.
 func (r *Runtime) AccessManager() *access.Manager {
 	if r == nil {
 		return nil
@@ -325,15 +345,19 @@ func (r *Runtime) AccessManager() *access.Manager {
 	return r.accessManager
 }
 
+// Authenticate validates request credentials and returns the access result.
 func (r *Runtime) Authenticate(ctx context.Context, headers http.Header) (*access.Result, *access.AuthError) {
 	return r.authenticateRequest(ctx, headers)
 }
 
+// ReloadAuths handles a reload auths.
 func (r *Runtime) ReloadAuths(ctx context.Context) error {
 	return r.loadAuths(coreauth.WithSkipPersist(ctx))
 }
 
+// loadAuths loads an auths.
 func (r *Runtime) loadAuths(ctx context.Context) error {
+	// Normalize auth state before updating runtime indexes.
 	if r == nil || r.coreManager == nil {
 		return nil
 	}
@@ -416,7 +440,9 @@ type DispatchResult struct {
 	Auth *coreauth.Auth
 }
 
+// Dispatch processes dispatch.
 func (r *Runtime) Dispatch(ctx context.Context, reqModel string, headers http.Header) (*DispatchResult, error) {
+	// Build the candidate view before applying availability rules.
 	if r == nil || r.coreManager == nil {
 		return nil, fmt.Errorf("home runtime: core manager is nil")
 	}
@@ -477,6 +503,7 @@ func (r *Runtime) Dispatch(ctx context.Context, reqModel string, headers http.He
 	}, nil
 }
 
+// supportsRequestedModel handles a supports requested model.
 func (r *Runtime) supportsRequestedModel(model string) bool {
 	if r == nil {
 		return false
@@ -492,6 +519,7 @@ func (r *Runtime) supportsRequestedModel(model string) bool {
 	return registry.LookupModelInfo(modelKey) != nil
 }
 
+// stripModelSuffix handles a strip model suffix.
 func stripModelSuffix(model string) string {
 	lastOpen := strings.LastIndex(model, "(")
 	if lastOpen == -1 {
@@ -506,6 +534,7 @@ func stripModelSuffix(model string) string {
 // AddToken stores a credential JSON blob into the auth directory and schedules it for use.
 // It returns the created (or existing) auth file name under auth-dir.
 func (r *Runtime) AddToken(ctx context.Context, rawJSON string) (string, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if r == nil {
 		return "", fmt.Errorf("home runtime: runtime is nil")
 	}
@@ -560,7 +589,9 @@ func (r *Runtime) AddToken(ctx context.Context, rawJSON string) (string, error) 
 	return baseName, nil
 }
 
+// applyAuthFile applies an auth file.
 func (r *Runtime) applyAuthFile(ctx context.Context, fullPath string, data []byte) {
+	// Normalize auth state before updating runtime indexes.
 	if r == nil || r.coreManager == nil {
 		return
 	}
@@ -590,6 +621,7 @@ func (r *Runtime) applyAuthFile(ctx context.Context, fullPath string, data []byt
 	}
 }
 
+// authenticateRequest handles an authenticate request.
 func (r *Runtime) authenticateRequest(ctx context.Context, headers http.Header) (*access.Result, *access.AuthError) {
 	if r == nil || r.accessManager == nil {
 		return nil, nil

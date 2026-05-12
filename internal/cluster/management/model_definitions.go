@@ -8,7 +8,9 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 )
 
+// GetAuthFileModels returns an auth file models.
 func (h *Handler) GetAuthFileModels(c *gin.Context) {
+	// Normalize source data before building the derived payload.
 	name := strings.TrimSpace(c.Query("name"))
 	if name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
@@ -62,6 +64,7 @@ func (h *Handler) GetAuthFileModels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"models": result})
 }
 
+// GetStaticModelDefinitions returns a static model definitions.
 func (h *Handler) GetStaticModelDefinitions(c *gin.Context) {
 	channel := strings.TrimSpace(c.Param("channel"))
 	if channel == "" {

@@ -6,6 +6,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
 )
 
+// handleConfig handles a config.
 func handleConfig(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
 	_ = ctx
 

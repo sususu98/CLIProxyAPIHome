@@ -123,6 +123,7 @@ func IsVirtual(runtime any) bool {
 	return ok
 }
 
+// cloneMap clones a map.
 func cloneMap(in map[string]any) map[string]any {
 	if len(in) == 0 {
 		return nil
@@ -134,6 +135,7 @@ func cloneMap(in map[string]any) map[string]any {
 	return out
 }
 
+// cloneStrings clones a strings.
 func cloneStrings(in []string) []string {
 	if len(in) == 0 {
 		return nil

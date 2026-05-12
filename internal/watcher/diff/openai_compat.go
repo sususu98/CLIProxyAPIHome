@@ -12,6 +12,7 @@ import (
 
 // DiffOpenAICompatibility produces human-readable change descriptions.
 func DiffOpenAICompatibility(oldList, newList []config.OpenAICompatibility) []string {
+	// Normalize source data before building the derived payload.
 	changes := make([]string, 0)
 	oldMap := make(map[string]config.OpenAICompatibility, len(oldList))
 	oldLabels := make(map[string]string, len(oldList))
@@ -60,7 +61,9 @@ func DiffOpenAICompatibility(oldList, newList []config.OpenAICompatibility) []st
 	return changes
 }
 
+// describeOpenAICompatibilityUpdate handles a describe open ai compatibility update.
 func describeOpenAICompatibilityUpdate(oldEntry, newEntry config.OpenAICompatibility) string {
+	// Keep validation before state changes so failures leave existing data intact.
 	oldKeyCount := countAPIKeys(oldEntry)
 	newKeyCount := countAPIKeys(newEntry)
 	oldModelCount := countOpenAIModels(oldEntry.Models)
@@ -84,6 +87,7 @@ func describeOpenAICompatibilityUpdate(oldEntry, newEntry config.OpenAICompatibi
 	return "(" + strings.Join(details, ", ") + ")"
 }
 
+// countAPIKeys handles a count api keys.
 func countAPIKeys(entry config.OpenAICompatibility) int {
 	count := 0
 	for _, keyEntry := range entry.APIKeyEntries {
@@ -94,6 +98,7 @@ func countAPIKeys(entry config.OpenAICompatibility) int {
 	return count
 }
 
+// countOpenAIModels handles a count open ai models.
 func countOpenAIModels(models []config.OpenAICompatibilityModel) int {
 	count := 0
 	for _, model := range models {
@@ -107,7 +112,9 @@ func countOpenAIModels(models []config.OpenAICompatibilityModel) int {
 	return count
 }
 
+// openAICompatKey opens an ai compat key.
 func openAICompatKey(entry config.OpenAICompatibility, index int) (string, string) {
+	// Keep validation before state changes so failures leave existing data intact.
 	name := strings.TrimSpace(entry.Name)
 	if name != "" {
 		return "name:" + name, name
@@ -136,6 +143,7 @@ func openAICompatKey(entry config.OpenAICompatibility, index int) (string, strin
 	return "sig:" + sig, "compat-" + short
 }
 
+// openAICompatSignature opens an ai compat signature.
 func openAICompatSignature(entry config.OpenAICompatibility) string {
 	var parts []string
 

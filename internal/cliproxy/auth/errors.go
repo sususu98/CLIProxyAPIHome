@@ -12,7 +12,7 @@ type Error struct {
 	HTTPStatus int `json:"http_status,omitempty"`
 }
 
-// Error implements the error interface.
+// Error returns the error message.
 func (e *Error) Error() string {
 	if e == nil {
 		return ""
@@ -23,7 +23,7 @@ func (e *Error) Error() string {
 	return e.Code + ": " + e.Message
 }
 
-// StatusCode implements optional status accessor for manager decision making.
+// StatusCode returns the HTTP status code.
 func (e *Error) StatusCode() int {
 	if e == nil {
 		return 0

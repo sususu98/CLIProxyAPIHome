@@ -22,6 +22,7 @@ import (
 // refreshCredential refreshes auth metadata when a refresh token is present.
 // It is best-effort: providers that do not support refresh are treated as no-op.
 func refreshCredential(ctx context.Context, cfg *config.Config, auth *Auth, rt http.RoundTripper) (*Auth, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if auth == nil {
 		return nil, nil
 	}
@@ -46,7 +47,9 @@ func refreshCredential(ctx context.Context, cfg *config.Config, auth *Auth, rt h
 	}
 }
 
+// refreshGeminiCLI refreshes a gemini cli.
 func refreshGeminiCLI(ctx context.Context, cfg *config.Config, auth *Auth, rt http.RoundTripper) (*Auth, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	_ = cfg
 	if auth == nil {
 		return nil, nil
@@ -219,7 +222,9 @@ func refreshGeminiCLI(ctx context.Context, cfg *config.Config, auth *Auth, rt ht
 	return auth, nil
 }
 
+// refreshCodex refreshes a codex.
 func refreshCodex(ctx context.Context, cfg *config.Config, auth *Auth) (*Auth, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	refreshToken := metaStringValue(auth.Metadata, "refresh_token")
 	if refreshToken == "" {
 		return auth, nil
@@ -247,7 +252,9 @@ func refreshCodex(ctx context.Context, cfg *config.Config, auth *Auth) (*Auth, e
 	return auth, nil
 }
 
+// refreshClaude refreshes a claude.
 func refreshClaude(ctx context.Context, cfg *config.Config, auth *Auth) (*Auth, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	refreshToken := metaStringValue(auth.Metadata, "refresh_token")
 	if refreshToken == "" {
 		return auth, nil
@@ -271,7 +278,9 @@ func refreshClaude(ctx context.Context, cfg *config.Config, auth *Auth) (*Auth, 
 	return auth, nil
 }
 
+// refreshKimi refreshes a kimi.
 func refreshKimi(ctx context.Context, cfg *config.Config, auth *Auth) (*Auth, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	refreshToken := metaStringValue(auth.Metadata, "refresh_token")
 	if strings.TrimSpace(refreshToken) == "" {
 		return auth, nil
@@ -296,6 +305,7 @@ func refreshKimi(ctx context.Context, cfg *config.Config, auth *Auth) (*Auth, er
 	return auth, nil
 }
 
+// resolveKimiDeviceID resolves a kimi device id.
 func resolveKimiDeviceID(auth *Auth) string {
 	if auth == nil || auth.Metadata == nil {
 		return ""
@@ -306,7 +316,9 @@ func resolveKimiDeviceID(auth *Auth) string {
 	return ""
 }
 
+// refreshAntigravity refreshes an antigravity.
 func refreshAntigravity(ctx context.Context, cfg *config.Config, auth *Auth, rt http.RoundTripper) (*Auth, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	_ = cfg
 	refreshToken := metaStringValue(auth.Metadata, "refresh_token")
 	if refreshToken == "" {
@@ -373,6 +385,7 @@ func refreshAntigravity(ctx context.Context, cfg *config.Config, auth *Auth, rt 
 	return auth, nil
 }
 
+// metaStringValue handles a meta string value.
 func metaStringValue(meta map[string]any, key string) string {
 	if meta == nil {
 		return ""

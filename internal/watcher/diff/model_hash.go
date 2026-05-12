@@ -106,6 +106,7 @@ func ComputeExcludedModelsHash(excluded []string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// normalizeModelPairs normalizes a model pairs.
 func normalizeModelPairs(collect func(out func(key string))) []string {
 	seen := make(map[string]struct{})
 	keys := make([]string, 0)
@@ -123,6 +124,7 @@ func normalizeModelPairs(collect func(out func(key string))) []string {
 	return keys
 }
 
+// hashJoined reports whether h joined is present.
 func hashJoined(keys []string) string {
 	if len(keys) == 0 {
 		return ""

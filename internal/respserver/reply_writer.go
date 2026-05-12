@@ -8,7 +8,9 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
 )
 
+// writeDispatchReply writes a dispatch reply.
 func writeDispatchReply(writer *bufio.Writer, reply dispatch.Reply) error {
+	// Build the candidate view before applying availability rules.
 	switch reply.Kind {
 	case dispatch.ReplyKindSimpleString:
 		return writeRedisSimpleString(writer, reply.SimpleString)

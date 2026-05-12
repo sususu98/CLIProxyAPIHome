@@ -97,11 +97,14 @@ type gcpProject struct {
 
 type projectSelectionRequiredError struct{}
 
+// Error returns the error message.
 func (e *projectSelectionRequiredError) Error() string {
 	return "gemini cli: project selection required"
 }
 
+// RequestAnthropicToken handles request anthropic token.
 func (h *Handler) RequestAnthropicToken(c *gin.Context) {
+	// Resolve credential context before calling upstream OAuth services.
 	pkce, errPKCE := generatePKCECodes()
 	if errPKCE != nil {
 		log.Errorf("cluster oauth: failed to generate anthropic PKCE codes: %v", errPKCE)
@@ -125,7 +128,9 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
 }
 
+// RequestCodexToken handles request codex token.
 func (h *Handler) RequestCodexToken(c *gin.Context) {
+	// Resolve credential context before calling upstream OAuth services.
 	pkce, errPKCE := generatePKCECodes()
 	if errPKCE != nil {
 		log.Errorf("cluster oauth: failed to generate codex PKCE codes: %v", errPKCE)
@@ -149,6 +154,7 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
 }
 
+// RequestGeminiCLIToken handles request gemini cli token.
 func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 	projectID := strings.TrimSpace(c.Query("project_id"))
 	state, errState := generateOAuthState("gem")
@@ -168,6 +174,7 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
 }
 
+// RequestAntigravityToken handles request antigravity token.
 func (h *Handler) RequestAntigravityToken(c *gin.Context) {
 	state, errState := generateOAuthState("agv")
 	if errState != nil {
@@ -186,7 +193,9 @@ func (h *Handler) RequestAntigravityToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
 }
 
+// RequestKimiToken handles request kimi token.
 func (h *Handler) RequestKimiToken(c *gin.Context) {
+	// Resolve credential context before calling upstream OAuth services.
 	cfg := h.oauthConfig()
 	ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 30*time.Second)
 	defer cancel()
@@ -223,7 +232,9 @@ func (h *Handler) RequestKimiToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
 }
 
+// GetAuthStatus returns an auth status.
 func (h *Handler) GetAuthStatus(c *gin.Context) {
+	// Validate request inputs before mutating persisted state.
 	state := strings.TrimSpace(c.Query("state"))
 	if state == "" {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -256,7 +267,9 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "wait"})
 }
 
+// handleOAuthCallback handles an o auth callback.
 func (h *Handler) handleOAuthCallback(c *gin.Context) {
+	// Resolve credential context before calling upstream OAuth services.
 	var req oauthCallbackRequest
 	if errBind := c.ShouldBindJSON(&req); errBind != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "invalid body"})
@@ -350,7 +363,9 @@ func (h *Handler) handleOAuthCallback(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+// processOAuthCallback handles a process o auth callback.
 func (h *Handler) processOAuthCallback(provider, state, code string) {
+	// Resolve credential context before calling upstream OAuth services.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -392,7 +407,9 @@ func (h *Handler) processOAuthCallback(provider, state, code string) {
 	}
 }
 
+// waitForKimiAuthorization returns a wait for kimi authorization.
 func (h *Handler) waitForKimiAuthorization(state string, kimiAuth *kimiauth.KimiAuth, deviceFlow *kimiauth.DeviceCodeResponse) {
+	// Validate request inputs before mutating persisted state.
 	ctx, cancel := context.WithTimeout(context.Background(), 16*time.Minute)
 	defer cancel()
 
@@ -436,6 +453,7 @@ func (h *Handler) waitForKimiAuthorization(state string, kimiAuth *kimiauth.Kimi
 	}
 }
 
+// registerOAuthSession handles a register o auth session.
 func (h *Handler) registerOAuthSession(c *gin.Context, provider, state string, data map[string]any) error {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
@@ -446,7 +464,9 @@ func (h *Handler) registerOAuthSession(c *gin.Context, provider, state string, d
 	return h.repo.UpsertOAuthSession(ctx, record)
 }
 
+// exchangeAnthropicCallback handles an exchange anthropic callback.
 func (h *Handler) exchangeAnthropicCallback(ctx context.Context, state, code string, data map[string]any) error {
+	// Validate request inputs before mutating persisted state.
 	pkce := pkceCodes{
 		CodeVerifier:  stringFromAny(data["code_verifier"]),
 		CodeChallenge: stringFromAny(data["code_challenge"]),
@@ -519,7 +539,9 @@ func (h *Handler) exchangeAnthropicCallback(ctx context.Context, state, code str
 	return h.storeOAuthMetadataWithContext(ctx, metadata, claudeCredentialFileName(tokenResp.Account.EmailAddress))
 }
 
+// exchangeCodexCallback handles an exchange codex callback.
 func (h *Handler) exchangeCodexCallback(ctx context.Context, code string, data map[string]any) error {
+	// Validate request inputs before mutating persisted state.
 	pkce := pkceCodes{
 		CodeVerifier:  stringFromAny(data["code_verifier"]),
 		CodeChallenge: stringFromAny(data["code_challenge"]),
@@ -598,7 +620,9 @@ func (h *Handler) exchangeCodexCallback(ctx context.Context, code string, data m
 	return h.storeOAuthMetadataWithContext(ctx, metadata, codexCredentialFileName(email, planType, hashAccountID, true))
 }
 
+// exchangeGeminiCallback handles an exchange gemini callback.
 func (h *Handler) exchangeGeminiCallback(ctx context.Context, code string, data map[string]any) error {
+	// Validate request inputs before mutating persisted state.
 	client := h.oauthHTTPClient()
 	oauthCtx := context.WithValue(ctx, oauth2.HTTPClient, client)
 	conf := geminiOAuthConfig()
@@ -653,7 +677,9 @@ func (h *Handler) exchangeGeminiCallback(ctx context.Context, code string, data 
 	return h.storeOAuthMetadataWithContext(ctx, metadata, geminiCredentialFileName(storage.Email, storage.ProjectID, true))
 }
 
+// exchangeAntigravityCallback handles an exchange antigravity callback.
 func (h *Handler) exchangeAntigravityCallback(ctx context.Context, code string, data map[string]any) error {
+	// Validate request inputs before mutating persisted state.
 	redirectURI := stringFromAny(data["redirect_uri"])
 	if redirectURI == "" {
 		redirectURI = fmt.Sprintf("http://localhost:%d/oauth-callback", antigravityCallbackPort)
@@ -728,6 +754,7 @@ func (h *Handler) exchangeAntigravityCallback(ctx context.Context, code string, 
 	return h.storeOAuthMetadataWithContext(ctx, metadata, antigravityCredentialFileName(email))
 }
 
+// storeOAuthMetadataWithContext stores an o auth metadata with context.
 func (h *Handler) storeOAuthMetadataWithContext(ctx context.Context, metadata map[string]any, originalFilename string) error {
 	raw, errMarshal := json.MarshalIndent(metadata, "", "  ")
 	if errMarshal != nil {
@@ -738,6 +765,7 @@ func (h *Handler) storeOAuthMetadataWithContext(ctx context.Context, metadata ma
 	return errStore
 }
 
+// buildAnthropicAuthURL builds an anthropic auth url.
 func buildAnthropicAuthURL(state string, pkce *pkceCodes) string {
 	params := url.Values{
 		"code":                  {"true"},
@@ -752,6 +780,7 @@ func buildAnthropicAuthURL(state string, pkce *pkceCodes) string {
 	return anthropicAuthURL + "?" + params.Encode()
 }
 
+// buildCodexAuthURL builds a codex auth url.
 func buildCodexAuthURL(state string, pkce *pkceCodes) string {
 	params := url.Values{
 		"client_id":                  {codex.ClientID},
@@ -768,6 +797,7 @@ func buildCodexAuthURL(state string, pkce *pkceCodes) string {
 	return codexAuthURL + "?" + params.Encode()
 }
 
+// buildAntigravityAuthURL builds an antigravity auth url.
 func buildAntigravityAuthURL(state, redirectURI string) string {
 	params := url.Values{}
 	params.Set("access_type", "offline")
@@ -780,6 +810,7 @@ func buildAntigravityAuthURL(state, redirectURI string) string {
 	return antigravityAuthEndpoint + "?" + params.Encode()
 }
 
+// geminiOAuthConfig handles a gemini o auth config.
 func geminiOAuthConfig() *oauth2.Config {
 	return &oauth2.Config{
 		ClientID:     geminiClientID,
@@ -790,7 +821,9 @@ func geminiOAuthConfig() *oauth2.Config {
 	}
 }
 
+// fetchGeminiEmail fetches a gemini email.
 func fetchGeminiEmail(ctx context.Context, conf *oauth2.Config, token *oauth2.Token) (string, error) {
+	// Validate request inputs before mutating persisted state.
 	authHTTPClient := conf.Client(ctx, token)
 	req, errRequest := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/oauth2/v1/userinfo?alt=json", nil)
 	if errRequest != nil {
@@ -818,7 +851,9 @@ func fetchGeminiEmail(ctx context.Context, conf *oauth2.Config, token *oauth2.To
 	return strings.TrimSpace(gjson.GetBytes(bodyBytes, "email").String()), nil
 }
 
+// ensureGeminiProjectAndOnboard ensures a gemini project and onboard.
 func ensureGeminiProjectAndOnboard(ctx context.Context, httpClient *http.Client, storage *geminiTokenStorage, requestedProject string) error {
+	// Validate request inputs before mutating persisted state.
 	if storage == nil {
 		return fmt.Errorf("gemini storage is nil")
 	}
@@ -884,7 +919,9 @@ func ensureGeminiProjectAndOnboard(ctx context.Context, httpClient *http.Client,
 	return nil
 }
 
+// performGeminiCLISetup returns a perform gemini cli setup.
 func performGeminiCLISetup(ctx context.Context, httpClient *http.Client, storage *geminiTokenStorage, requestedProject string) error {
+	// Validate request inputs before mutating persisted state.
 	metadata := map[string]string{
 		"ideType":    "IDE_UNSPECIFIED",
 		"platform":   "PLATFORM_UNSPECIFIED",
@@ -988,7 +1025,9 @@ func performGeminiCLISetup(ctx context.Context, httpClient *http.Client, storage
 	}
 }
 
+// callGeminiCLI handles a call gemini cli.
 func callGeminiCLI(ctx context.Context, httpClient *http.Client, endpoint string, body any, result any) error {
+	// Validate request inputs before mutating persisted state.
 	endpointURL := fmt.Sprintf("%s/%s:%s", geminiCLIEndpoint, geminiCLIVersion, endpoint)
 	if strings.HasPrefix(endpoint, "operations/") {
 		endpointURL = fmt.Sprintf("%s/%s", geminiCLIEndpoint, endpoint)
@@ -1033,7 +1072,9 @@ func callGeminiCLI(ctx context.Context, httpClient *http.Client, endpoint string
 	return nil
 }
 
+// fetchGCPProjects fetches a gcp projects.
 func fetchGCPProjects(ctx context.Context, httpClient *http.Client) ([]gcpProject, error) {
+	// Validate request inputs before mutating persisted state.
 	req, errRequest := http.NewRequestWithContext(ctx, http.MethodGet, "https://cloudresourcemanager.googleapis.com/v1/projects", nil)
 	if errRequest != nil {
 		return nil, errRequest
@@ -1058,6 +1099,7 @@ func fetchGCPProjects(ctx context.Context, httpClient *http.Client) ([]gcpProjec
 	return projects.Projects, nil
 }
 
+// ensureGeminiProjectsEnabled ensures a gemini projects enabled.
 func ensureGeminiProjectsEnabled(ctx context.Context, httpClient *http.Client, projectIDs []string) error {
 	for _, projectID := range projectIDs {
 		projectID = strings.TrimSpace(projectID)
@@ -1075,7 +1117,9 @@ func ensureGeminiProjectsEnabled(ctx context.Context, httpClient *http.Client, p
 	return nil
 }
 
+// checkCloudAPIIsEnabled handles a check cloud api is enabled.
 func checkCloudAPIIsEnabled(ctx context.Context, httpClient *http.Client, projectID string) (bool, error) {
+	// Validate request inputs before mutating persisted state.
 	serviceUsageURL := "https://serviceusage.googleapis.com"
 	requiredServices := []string{
 		"cloudaicompanion.googleapis.com",
@@ -1137,6 +1181,7 @@ func checkCloudAPIIsEnabled(ctx context.Context, httpClient *http.Client, projec
 	return true, nil
 }
 
+// splitProjectIDs splits a project i ds.
 func splitProjectIDs(projectIDs string) []string {
 	parts := strings.Split(projectIDs, ",")
 	result := make([]string, 0, len(parts))
@@ -1155,6 +1200,7 @@ func splitProjectIDs(projectIDs string) []string {
 	return result
 }
 
+// geminiProjectIDFromMap derives gemini project id from map.
 func geminiProjectIDFromMap(values map[string]any) string {
 	if values == nil {
 		return ""
@@ -1169,7 +1215,9 @@ func geminiProjectIDFromMap(values map[string]any) string {
 	}
 }
 
+// fetchAntigravityEmail fetches an antigravity email.
 func (h *Handler) fetchAntigravityEmail(ctx context.Context, accessToken string) (string, error) {
+	// Validate request inputs before mutating persisted state.
 	req, errRequest := http.NewRequestWithContext(ctx, http.MethodGet, antigravityUserInfoEndpoint, nil)
 	if errRequest != nil {
 		return "", errRequest
@@ -1198,7 +1246,9 @@ func (h *Handler) fetchAntigravityEmail(ctx context.Context, accessToken string)
 	return email, nil
 }
 
+// fetchAntigravityProjectID fetches an antigravity project id.
 func (h *Handler) fetchAntigravityProjectID(ctx context.Context, accessToken string) (string, error) {
+	// Validate request inputs before mutating persisted state.
 	accessToken = strings.TrimSpace(accessToken)
 	if accessToken == "" {
 		return "", fmt.Errorf("antigravity project: missing access token")
@@ -1268,7 +1318,9 @@ func (h *Handler) fetchAntigravityProjectID(ctx context.Context, accessToken str
 	return h.onboardAntigravityUser(ctx, accessToken, tierID)
 }
 
+// onboardAntigravityUser handles an onboard antigravity user.
 func (h *Handler) onboardAntigravityUser(ctx context.Context, accessToken string, tierID string) (string, error) {
+	// Validate request inputs before mutating persisted state.
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1346,10 +1398,12 @@ func (h *Handler) onboardAntigravityUser(ctx context.Context, accessToken string
 	return "", nil
 }
 
+// antigravityLoadCodeAssistUserAgent handles an antigravity load code assist user agent.
 func antigravityLoadCodeAssistUserAgent() string {
 	return fmt.Sprintf("antigravity/%s darwin/arm64 %s", antigravityFallbackVersion, antigravityNodeAPIClientUA)
 }
 
+// antigravityVersionFromUserAgent derives antigravity version from user agent.
 func antigravityVersionFromUserAgent(userAgent string) string {
 	userAgent = strings.TrimSpace(userAgent)
 	lower := strings.ToLower(userAgent)
@@ -1367,6 +1421,7 @@ func antigravityVersionFromUserAgent(userAgent string) string {
 	return rest
 }
 
+// generatePKCECodes generates a pkce codes.
 func generatePKCECodes() (*pkceCodes, error) {
 	verifier, errVerifier := randomURLSafe(96)
 	if errVerifier != nil {
@@ -1379,6 +1434,7 @@ func generatePKCECodes() (*pkceCodes, error) {
 	}, nil
 }
 
+// generateOAuthState generates an o auth state.
 func generateOAuthState(prefix string) (string, error) {
 	value, errState := randomURLSafe(24)
 	if errState != nil {
@@ -1391,6 +1447,7 @@ func generateOAuthState(prefix string) (string, error) {
 	return prefix + "-" + value, nil
 }
 
+// randomURLSafe handles a random url safe.
 func randomURLSafe(size int) (string, error) {
 	if size <= 0 {
 		size = 32
@@ -1402,7 +1459,9 @@ func randomURLSafe(size int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
+// validateOAuthState validates an o auth state.
 func validateOAuthState(state string) error {
+	// Resolve credential context before calling upstream OAuth services.
 	trimmed := strings.TrimSpace(state)
 	if trimmed == "" {
 		return fmt.Errorf("%w: empty", errInvalidOAuthState)
@@ -1429,6 +1488,7 @@ func validateOAuthState(state string) error {
 	return nil
 }
 
+// normalizeOAuthProvider normalizes an o auth provider.
 func normalizeOAuthProvider(provider string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "anthropic", "claude":
@@ -1446,6 +1506,7 @@ func normalizeOAuthProvider(provider string) (string, error) {
 	}
 }
 
+// authStatusMessage handles an auth status message.
 func authStatusMessage(provider string, err error) string {
 	if err == nil {
 		return ""
@@ -1460,6 +1521,7 @@ func authStatusMessage(provider string, err error) string {
 	}
 }
 
+// oauthConfig handles an oauth config.
 func (h *Handler) oauthConfig() *config.Config {
 	if h != nil && h.runtime != nil {
 		if cfg := h.runtime.Config(); cfg != nil {
@@ -1469,6 +1531,7 @@ func (h *Handler) oauthConfig() *config.Config {
 	return &config.Config{}
 }
 
+// oauthHTTPClient handles an oauth http client.
 func (h *Handler) oauthHTTPClient() *http.Client {
 	cfg := h.oauthConfig()
 	sdkCfg := cfg.SDKConfig
@@ -1478,6 +1541,7 @@ func (h *Handler) oauthHTTPClient() *http.Client {
 	return util.SetProxy(&sdkCfg, &http.Client{Timeout: 60 * time.Second})
 }
 
+// requestContextOrBackground handles a request context or background.
 func requestContextOrBackground(c *gin.Context) context.Context {
 	if c != nil && c.Request != nil && c.Request.Context() != nil {
 		return c.Request.Context()
@@ -1485,10 +1549,12 @@ func requestContextOrBackground(c *gin.Context) context.Context {
 	return context.Background()
 }
 
+// claudeCredentialFileName handles a claude credential file name.
 func claudeCredentialFileName(email string) string {
 	return fmt.Sprintf("claude-%s.json", strings.TrimSpace(email))
 }
 
+// geminiCredentialFileName handles a gemini credential file name.
 func geminiCredentialFileName(email, projectID string, includeProviderPrefix bool) string {
 	email = strings.TrimSpace(email)
 	project := strings.TrimSpace(projectID)
@@ -1502,6 +1568,7 @@ func geminiCredentialFileName(email, projectID string, includeProviderPrefix boo
 	return fmt.Sprintf("%s%s-%s.json", prefix, email, project)
 }
 
+// codexCredentialFileName handles a codex credential file name.
 func codexCredentialFileName(email, planType, hashAccountID string, includeProviderPrefix bool) string {
 	email = strings.TrimSpace(email)
 	plan := normalizePlanTypeForFilename(planType)
@@ -1518,6 +1585,7 @@ func codexCredentialFileName(email, planType, hashAccountID string, includeProvi
 	return fmt.Sprintf("%s-%s-%s.json", prefix, email, plan)
 }
 
+// normalizePlanTypeForFilename normalizes a plan type for filename.
 func normalizePlanTypeForFilename(planType string) string {
 	planType = strings.TrimSpace(planType)
 	if planType == "" {
@@ -1535,6 +1603,7 @@ func normalizePlanTypeForFilename(planType string) string {
 	return strings.Join(parts, "-")
 }
 
+// antigravityCredentialFileName handles an antigravity credential file name.
 func antigravityCredentialFileName(email string) string {
 	email = strings.TrimSpace(email)
 	if email == "" {
@@ -1543,6 +1612,7 @@ func antigravityCredentialFileName(email string) string {
 	return fmt.Sprintf("antigravity-%s.json", email)
 }
 
+// geminiCLIUserAgent handles a gemini cli user agent.
 func geminiCLIUserAgent(model string) string {
 	if strings.TrimSpace(model) == "" {
 		model = "unknown"
@@ -1550,6 +1620,7 @@ func geminiCLIUserAgent(model string) string {
 	return fmt.Sprintf("GeminiCLI/%s/%s (%s; %s; terminal)", geminiCLIUserAgentVersion, model, geminiCLIOS(), geminiCLIArch())
 }
 
+// geminiCLIOS handles a gemini clios.
 func geminiCLIOS() string {
 	switch runtime.GOOS {
 	case "windows":
@@ -1559,6 +1630,7 @@ func geminiCLIOS() string {
 	}
 }
 
+// geminiCLIArch handles a gemini cli arch.
 func geminiCLIArch() string {
 	switch runtime.GOARCH {
 	case "amd64":

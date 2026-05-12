@@ -48,6 +48,7 @@ type modelCooldownError struct {
 	provider string
 }
 
+// newModelCooldownError creates a model cooldown error.
 func newModelCooldownError(model, provider string, resetIn time.Duration) *modelCooldownError {
 	if resetIn < 0 {
 		resetIn = 0
@@ -59,7 +60,9 @@ func newModelCooldownError(model, provider string, resetIn time.Duration) *model
 	}
 }
 
+// Error returns the error message.
 func (e *modelCooldownError) Error() string {
+	// Keep validation before state changes so failures leave existing data intact.
 	modelName := e.model
 	if modelName == "" {
 		modelName = "requested model"
@@ -96,10 +99,12 @@ func (e *modelCooldownError) Error() string {
 	return string(data)
 }
 
+// StatusCode returns the HTTP status code.
 func (e *modelCooldownError) StatusCode() int {
 	return http.StatusTooManyRequests
 }
 
+// Headers returns response headers associated with the error.
 func (e *modelCooldownError) Headers() http.Header {
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
@@ -111,6 +116,7 @@ func (e *modelCooldownError) Headers() http.Header {
 	return headers
 }
 
+// authPriority handles an auth priority.
 func authPriority(auth *Auth) int {
 	if auth == nil || auth.Attributes == nil {
 		return 0
@@ -126,6 +132,7 @@ func authPriority(auth *Auth) int {
 	return parsed
 }
 
+// canonicalModelKey handles a canonical model key.
 func canonicalModelKey(model string) string {
 	model = strings.TrimSpace(model)
 	if model == "" {
@@ -139,7 +146,9 @@ func canonicalModelKey(model string) string {
 	return modelName
 }
 
+// authWebsocketsEnabled handles an auth websockets enabled.
 func authWebsocketsEnabled(auth *Auth) bool {
+	// Normalize auth state before updating runtime indexes.
 	if auth == nil {
 		return false
 	}
@@ -171,6 +180,7 @@ func authWebsocketsEnabled(auth *Auth) bool {
 	return false
 }
 
+// collectAvailableByPriority handles a collect available by priority.
 func collectAvailableByPriority(auths []*Auth, model string, now time.Time) (available map[int][]*Auth, cooldownCount int, earliest time.Time) {
 	available = make(map[int][]*Auth)
 	for i := 0; i < len(auths); i++ {
@@ -191,7 +201,9 @@ func collectAvailableByPriority(auths []*Auth, model string, now time.Time) (ava
 	return available, cooldownCount, earliest
 }
 
+// getAvailableAuths returns an available auths.
 func getAvailableAuths(auths []*Auth, provider, model string, now time.Time) ([]*Auth, error) {
+	// Build the candidate view before applying availability rules.
 	if len(auths) == 0 {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth candidates"}
 	}
@@ -340,7 +352,9 @@ func (s *FillFirstSelector) Pick(ctx context.Context, provider, model string, op
 	return available[0], nil
 }
 
+// isAuthBlockedForModel reports whether auth blocked for model.
 func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, blockReason, time.Time) {
+	// Normalize source data before building the derived payload.
 	if auth == nil {
 		return true, blockReasonOther, time.Time{}
 	}
@@ -508,6 +522,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	return auth, nil
 }
 
+// selectorLogEntry handles a selector log entry.
 func selectorLogEntry(ctx context.Context) *log.Entry {
 	if ctx == nil {
 		return log.NewEntry(log.StandardLogger())
@@ -626,6 +641,7 @@ func extractSessionIDs(headers http.Header, payload []byte, metadata map[string]
 	return extractMessageHashIDs(payload)
 }
 
+// extractMessageHashIDs extracts a message hash i ds.
 func extractMessageHashIDs(payload []byte) (primaryID, fallbackID string) {
 	var systemPrompt, firstUserMsg, firstAssistantMsg string
 
@@ -793,6 +809,7 @@ func extractMessageHashIDs(payload []byte) (primaryID, fallbackID string) {
 	return fullHash, shortHash
 }
 
+// computeSessionHash computes a session hash.
 func computeSessionHash(systemPrompt, userMsg, assistantMsg string) string {
 	h := fnv.New64a()
 	if systemPrompt != "" {
@@ -807,6 +824,7 @@ func computeSessionHash(systemPrompt, userMsg, assistantMsg string) string {
 	return fmt.Sprintf("msg:%016x", h.Sum64())
 }
 
+// truncateString truncates a string.
 func truncateString(s string, maxLen int) string {
 	if len(s) > maxLen {
 		return s[:maxLen]
@@ -845,6 +863,7 @@ func extractMessageContent(content gjson.Result) string {
 	return ""
 }
 
+// extractResponsesAPIContent extracts a responses api content.
 func extractResponsesAPIContent(content gjson.Result) string {
 	if !content.IsArray() {
 		return ""

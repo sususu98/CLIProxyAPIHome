@@ -11,6 +11,7 @@ var (
 	kimiRefreshLead        = 5 * time.Minute
 )
 
+// init prepares package-level state.
 func init() {
 	registerRefreshLead("codex", &codexRefreshLead)
 	registerRefreshLead("claude", &claudeRefreshLead)
@@ -20,6 +21,7 @@ func init() {
 	registerRefreshLead("kimi", &kimiRefreshLead)
 }
 
+// registerRefreshLead handles a register refresh lead.
 func registerRefreshLead(provider string, lead *time.Duration) {
 	RegisterRefreshLeadProvider(provider, func() *time.Duration {
 		if lead == nil || *lead <= 0 {

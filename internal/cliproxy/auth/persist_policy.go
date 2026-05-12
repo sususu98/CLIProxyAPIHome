@@ -14,6 +14,7 @@ func WithSkipPersist(ctx context.Context) context.Context {
 	return context.WithValue(ctx, skipPersistContextKey{}, true)
 }
 
+// shouldSkipPersist reports whether should skip persist.
 func shouldSkipPersist(ctx context.Context) bool {
 	if ctx == nil {
 		return false

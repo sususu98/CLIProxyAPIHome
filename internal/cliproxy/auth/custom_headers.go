@@ -2,7 +2,9 @@ package auth
 
 import "strings"
 
+// ExtractCustomHeadersFromMetadata extracts a custom headers from metadata.
 func ExtractCustomHeadersFromMetadata(metadata map[string]any) map[string]string {
+	// Keep validation before state changes so failures leave existing data intact.
 	if len(metadata) == 0 {
 		return nil
 	}
@@ -51,6 +53,7 @@ func ExtractCustomHeadersFromMetadata(metadata map[string]any) map[string]string
 	return out
 }
 
+// ApplyCustomHeadersFromMetadata updates apply custom headers from metadata.
 func ApplyCustomHeadersFromMetadata(auth *Auth) {
 	if auth == nil || len(auth.Metadata) == 0 {
 		return

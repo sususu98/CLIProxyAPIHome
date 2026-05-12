@@ -8,6 +8,7 @@ import "strings"
 // It intentionally only treats the prefix as a type when it looks like a
 // machine-readable code (lowercase snake_case).
 func SplitRedisErrorMessage(message string) (string, string) {
+	// Keep validation before state changes so failures leave existing data intact.
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return TypeError, MessageError
@@ -31,6 +32,7 @@ func SplitRedisErrorMessage(message string) (string, string) {
 	return typePrefix, remainder
 }
 
+// isStructuredRedisErrorType reports whether structured redis error type.
 func isStructuredRedisErrorType(value string) bool {
 	hasUnderscore := false
 	for i := 0; i < len(value); i++ {

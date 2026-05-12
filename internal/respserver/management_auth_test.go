@@ -5,7 +5,9 @@ import (
 	"testing"
 )
 
+// TestNormalizeHostIP verifies test normalize host ip behavior.
 func TestNormalizeHostIP(t *testing.T) {
+	// Validate request inputs before mutating persisted state.
 	tests := []struct {
 		name string
 		in   string
@@ -47,7 +49,9 @@ func TestNormalizeHostIP(t *testing.T) {
 	}
 }
 
+// TestIsClientHostAllowed verifies test is client host allowed behavior.
 func TestIsClientHostAllowed(t *testing.T) {
+	// Validate request inputs before mutating persisted state.
 	tests := []struct {
 		name       string
 		clientIP   string
@@ -95,6 +99,7 @@ func TestIsClientHostAllowed(t *testing.T) {
 	}
 }
 
+// TestResolveRemoteIPNormalizesTCPAddr verifies test resolve remote ip normalizes tcp addr behavior.
 func TestResolveRemoteIPNormalizesTCPAddr(t *testing.T) {
 	ip, local := resolveRemoteIP(&net.TCPAddr{
 		IP:   net.ParseIP("::ffff:127.0.0.1"),

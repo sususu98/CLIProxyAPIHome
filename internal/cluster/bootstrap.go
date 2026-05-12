@@ -22,7 +22,9 @@ type BootstrapOptions struct {
 	Now        time.Time
 }
 
+// Bootstrap imports local configuration into the cluster database.
 func Bootstrap(ctx context.Context, opts BootstrapOptions) error {
+	// Keep validation before state changes so failures leave existing data intact.
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -80,7 +82,9 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) error {
 	return nil
 }
 
+// bootstrapConfig handles a bootstrap config.
 func bootstrapConfig(ctx context.Context, repo *Repository, configPath string, configExists bool) (bool, error) {
+	// Normalize source data before building the derived payload.
 	snapshot, errSnapshot := repo.LoadConfigSnapshot(ctx)
 	if errSnapshot != nil {
 		return false, errSnapshot
@@ -110,7 +114,9 @@ func bootstrapConfig(ctx context.Context, repo *Repository, configPath string, c
 	return imported, nil
 }
 
+// bootstrapConfigAuths handles a bootstrap config auths.
 func bootstrapConfigAuths(ctx context.Context, repo *Repository, cfg *appconfig.Config, authDir string, now time.Time) error {
+	// Normalize source data before building the derived payload.
 	sctx := &synthesizer.SynthesisContext{
 		Config:      cfg,
 		AuthDir:     authDir,
@@ -149,7 +155,9 @@ func bootstrapConfigAuths(ctx context.Context, repo *Repository, cfg *appconfig.
 	return nil
 }
 
+// bootstrapAuthFiles handles a bootstrap auth files.
 func bootstrapAuthFiles(ctx context.Context, repo *Repository, cfg *appconfig.Config, authDir string, now time.Time) ([]string, error) {
+	// Normalize auth state before updating runtime indexes.
 	if strings.TrimSpace(authDir) == "" {
 		return nil, nil
 	}
@@ -226,6 +234,7 @@ func bootstrapAuthFiles(ctx context.Context, repo *Repository, cfg *appconfig.Co
 	return authFilesToDelete, nil
 }
 
+// isBootstrapCredentialConfigKey reports whether bootstrap credential config key.
 func isBootstrapCredentialConfigKey(key string) bool {
 	switch strings.TrimSpace(key) {
 	case "auth-dir", "gemini-api-key", "vertex-api-key", "codex-api-key", "claude-api-key", "openai-compatibility":
@@ -235,6 +244,7 @@ func isBootstrapCredentialConfigKey(key string) bool {
 	}
 }
 
+// fileExists returns a file exists.
 func fileExists(path string) bool {
 	if strings.TrimSpace(path) == "" {
 		return false

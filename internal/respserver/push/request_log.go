@@ -19,6 +19,7 @@ import (
 
 var requestLogID atomic.Uint64
 
+// handleRequestLog handles a request log.
 func handleRequestLog(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
 	_ = ctx
 
@@ -68,6 +69,7 @@ func handleRequestLog(ctx context.Context, env dispatch.Env, args []string) disp
 	return dispatch.Integer(1)
 }
 
+// generateRequestLogID generates a request log id.
 func generateRequestLogID() string {
 	b := make([]byte, 4)
 	if _, errRead := rand.Read(b); errRead == nil {
@@ -78,7 +80,9 @@ func generateRequestLogID() string {
 	return fmt.Sprintf("%d", id)
 }
 
+// extractHeaderValue extracts a header value.
 func extractHeaderValue(headersObj gjson.Result, wantKeyLower string) string {
+	// Decode the wire frame before dispatching command handling.
 	if !headersObj.Exists() || !headersObj.IsObject() {
 		return ""
 	}
@@ -109,6 +113,7 @@ func extractHeaderValue(headersObj gjson.Result, wantKeyLower string) string {
 	return out
 }
 
+// extractRequestLogURL extracts a request log url.
 func extractRequestLogURL(requestLog string) string {
 	requestLog = strings.ReplaceAll(requestLog, "\r\n", "\n")
 	for _, line := range strings.Split(requestLog, "\n") {
@@ -120,6 +125,7 @@ func extractRequestLogURL(requestLog string) string {
 	return ""
 }
 
+// buildRequestLogFilename builds a request log filename.
 func buildRequestLogFilename(clientIP string, url string, requestID string, now time.Time) string {
 	sanitizedURL := sanitizeForFilename(url)
 	sanitizedIP := sanitizeForFilename(clientIP)
@@ -138,7 +144,9 @@ func buildRequestLogFilename(clientIP string, url string, requestID string, now 
 	return fmt.Sprintf("%s-%s-%s-%s.log", sanitizedIP, sanitizedURL, timestamp, requestID)
 }
 
+// sanitizeForFilename sanitizes a for filename.
 func sanitizeForFilename(url string) string {
+	// Decode the wire frame before dispatching command handling.
 	path := strings.TrimSpace(url)
 	if strings.Contains(path, "?") {
 		path = strings.Split(path, "?")[0]
@@ -163,7 +171,9 @@ func sanitizeForFilename(url string) string {
 	return sanitized
 }
 
+// writeRequestLogFile writes a request log file.
 func writeRequestLogFile(filename string, content string) error {
+	// Validate request inputs before mutating persisted state.
 	filename = strings.TrimSpace(filename)
 	if filename == "" {
 		return fmt.Errorf("empty filename")

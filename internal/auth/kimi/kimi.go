@@ -58,6 +58,7 @@ func NewDeviceFlowClientWithDeviceIDAndProxyURL(cfg *config.Config, deviceID str
 	}
 }
 
+// newRandomID creates a random id.
 func newRandomID(nbytes int) string {
 	if nbytes <= 0 {
 		nbytes = 16
@@ -69,6 +70,7 @@ func newRandomID(nbytes int) string {
 	return hex.EncodeToString(buf)
 }
 
+// getDeviceModel returns a device model.
 func getDeviceModel() string {
 	osName := runtime.GOOS
 	arch := runtime.GOARCH
@@ -85,6 +87,7 @@ func getDeviceModel() string {
 	}
 }
 
+// getHostname returns a hostname.
 func getHostname() string {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -93,6 +96,7 @@ func getHostname() string {
 	return hostname
 }
 
+// commonHeaders handles a common headers.
 func (c *DeviceFlowClient) commonHeaders() map[string]string {
 	if c == nil {
 		return nil
@@ -108,6 +112,7 @@ func (c *DeviceFlowClient) commonHeaders() map[string]string {
 
 // RefreshToken exchanges a refresh token for a new access token.
 func (c *DeviceFlowClient) RefreshToken(ctx context.Context, refreshToken string) (*KimiTokenData, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if c == nil || c.httpClient == nil {
 		return nil, fmt.Errorf("kimi: client not ready")
 	}

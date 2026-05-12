@@ -107,6 +107,7 @@ type readyBucketCursorState struct {
 	ws  readyViewCursorState
 }
 
+// snapshotReadyViewCursors snapshots a ready view cursors.
 func snapshotReadyViewCursors(view readyView) readyViewCursorState {
 	state := readyViewCursorState{
 		cursor:       view.cursor,
@@ -125,7 +126,9 @@ func snapshotReadyViewCursors(view readyView) readyViewCursorState {
 	return state
 }
 
+// restoreReadyViewCursors restores a ready view cursors.
 func restoreReadyViewCursors(view *readyView, state readyViewCursorState) {
+	// Validate input data before converting it into runtime state.
 	if view == nil {
 		return
 	}
@@ -151,6 +154,7 @@ func restoreReadyViewCursors(view *readyView, state readyViewCursorState) {
 	}
 }
 
+// normalizeCursor normalizes a cursor.
 func normalizeCursor(cursor, size int) int {
 	if size <= 0 || cursor <= 0 {
 		return 0
@@ -237,6 +241,7 @@ func (s *authScheduler) removeAuth(authID string) {
 
 // pickSingle returns the next auth for a single provider/model request using scheduler state.
 func (s *authScheduler) pickSingle(ctx context.Context, provider, model string, opts Options, tried map[string]struct{}) (*Auth, error) {
+	// Build the candidate view before applying availability rules.
 	if s == nil {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
@@ -401,6 +406,7 @@ func (s *authScheduler) pickMixed(ctx context.Context, providers []string, model
 
 // mixedUnavailableErrorLocked synthesizes the mixed-provider cooldown or unavailable error.
 func (s *authScheduler) mixedUnavailableErrorLocked(providers []string, model string, tried map[string]struct{}) error {
+	// Build the candidate view before applying availability rules.
 	now := time.Now()
 	total := 0
 	cooldownCount := 0
@@ -601,6 +607,7 @@ func (p *providerScheduler) removeAuthLocked(authID string) {
 
 // ensureModelLocked returns the shard for modelKey, building it lazily from provider auths.
 func (p *providerScheduler) ensureModelLocked(modelKey string, now time.Time) *modelScheduler {
+	// Normalize source data before building the derived payload.
 	if p == nil {
 		return nil
 	}
@@ -639,6 +646,7 @@ func (m *scheduledAuthMeta) supportsModel(modelKey string) bool {
 
 // upsertEntryLocked updates or inserts one auth entry and rebuilds indexes when ordering changes.
 func (m *modelScheduler) upsertEntryLocked(meta *scheduledAuthMeta, now time.Time) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if m == nil || meta == nil || meta.auth == nil {
 		return
 	}
@@ -695,6 +703,7 @@ func (m *modelScheduler) removeEntryLocked(authID string) {
 
 // promoteExpiredLocked reevaluates blocked auths whose retry time has elapsed.
 func (m *modelScheduler) promoteExpiredLocked(now time.Time) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if m == nil || len(m.blocked) == 0 {
 		return
 	}
@@ -775,6 +784,7 @@ func (m *modelScheduler) highestReadyPriorityLocked(preferWebsocket bool, predic
 // pickReadyAtPriorityLocked selects the next ready auth from a specific priority bucket.
 // The caller must ensure expired entries are already promoted when needed.
 func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priority int, strategy schedulerStrategy, predicate func(*scheduledAuth) bool) *Auth {
+	// Build the candidate view before applying availability rules.
 	if m == nil {
 		return nil
 	}
@@ -798,6 +808,7 @@ func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priorit
 	return picked.auth
 }
 
+// readyCountAtPriorityLocked reads a y count at priority locked.
 func (m *modelScheduler) readyCountAtPriorityLocked(preferWebsocket bool, priority int) int {
 	if m == nil {
 		return 0
@@ -835,6 +846,7 @@ func (m *modelScheduler) unavailableErrorLocked(provider, model string, predicat
 
 // availabilitySummaryLocked summarizes total candidates, cooldown count, and earliest retry time.
 func (m *modelScheduler) availabilitySummaryLocked(predicate func(*scheduledAuth) bool) (int, int, time.Time) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if m == nil {
 		return 0, 0, time.Time{}
 	}
@@ -862,6 +874,7 @@ func (m *modelScheduler) availabilitySummaryLocked(predicate func(*scheduledAuth
 
 // rebuildIndexesLocked reconstructs ready and blocked views from the current entry map.
 func (m *modelScheduler) rebuildIndexesLocked() {
+	// Keep validation before state changes so failures leave existing data intact.
 	cursorStates := make(map[int]readyBucketCursorState, len(m.readyByPriority))
 	for priority, bucket := range m.readyByPriority {
 		if bucket == nil {
@@ -939,6 +952,7 @@ func buildReadyBucket(entries []*scheduledAuth) *readyBucket {
 
 // buildReadyView creates either a flat view or a grouped parent/child view for rotation.
 func buildReadyView(entries []*scheduledAuth) readyView {
+	// Validate input data before converting it into runtime state.
 	view := readyView{flat: append([]*scheduledAuth(nil), entries...)}
 	if len(entries) == 0 {
 		return view
@@ -1001,6 +1015,7 @@ func (v *readyView) pickRoundRobin(predicate func(*scheduledAuth) bool) *schedul
 
 // pickGroupedRoundRobin rotates across parents first and then within the selected parent.
 func (v *readyView) pickGroupedRoundRobin(predicate func(*scheduledAuth) bool) *scheduledAuth {
+	// Build the candidate view before applying availability rules.
 	start := 0
 	if len(v.parentOrder) > 0 {
 		start = v.parentCursor % len(v.parentOrder)

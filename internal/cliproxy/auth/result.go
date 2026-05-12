@@ -28,6 +28,7 @@ type Result struct {
 
 // MarkResult records a downstream execution result and updates auth cooldown state.
 func (m *Manager) MarkResult(ctx context.Context, result Result) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if m == nil || (strings.TrimSpace(result.AuthID) == "" && strings.TrimSpace(result.AuthIndex) == "") {
 		return
 	}
@@ -188,6 +189,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	}
 }
 
+// resultAuthLocked handles a result auth locked.
 func (m *Manager) resultAuthLocked(result Result) *Auth {
 	if m == nil {
 		return nil
@@ -201,6 +203,7 @@ func (m *Manager) resultAuthLocked(result Result) *Auth {
 	return nil
 }
 
+// quotaCooldownDisabledForAuth returns a quota cooldown disabled for auth.
 func (m *Manager) quotaCooldownDisabledForAuth(auth *Auth) bool {
 	if auth != nil {
 		if override, ok := auth.DisableCoolingOverride(); ok {
@@ -213,6 +216,7 @@ func (m *Manager) quotaCooldownDisabledForAuth(auth *Auth) bool {
 	return cfg != nil && cfg.DisableCooling
 }
 
+// ensureModelState ensures a model state.
 func ensureModelState(auth *Auth, model string) *ModelState {
 	if auth == nil || model == "" {
 		return nil
@@ -228,6 +232,7 @@ func ensureModelState(auth *Auth, model string) *ModelState {
 	return state
 }
 
+// resetModelState resets a model state.
 func resetModelState(state *ModelState, now time.Time) {
 	if state == nil {
 		return
@@ -241,7 +246,9 @@ func resetModelState(state *ModelState, now time.Time) {
 	state.UpdatedAt = now
 }
 
+// updateAggregatedAvailability updates an aggregated availability.
 func updateAggregatedAvailability(auth *Auth, now time.Time) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if auth == nil {
 		return
 	}
@@ -312,6 +319,7 @@ func updateAggregatedAvailability(auth *Auth, now time.Time) {
 	}
 }
 
+// clearAggregatedAvailability clears an aggregated availability.
 func clearAggregatedAvailability(auth *Auth) {
 	if auth == nil {
 		return
@@ -321,6 +329,7 @@ func clearAggregatedAvailability(auth *Auth) {
 	auth.Quota = QuotaState{}
 }
 
+// hasModelError reports whether model error is present.
 func hasModelError(auth *Auth, now time.Time) bool {
 	if auth == nil || len(auth.ModelStates) == 0 {
 		return false
@@ -341,6 +350,7 @@ func hasModelError(auth *Auth, now time.Time) bool {
 	return false
 }
 
+// clearAuthStateOnSuccess clears an auth state on success.
 func clearAuthStateOnSuccess(auth *Auth, now time.Time) {
 	if auth == nil {
 		return
@@ -357,6 +367,7 @@ func clearAuthStateOnSuccess(auth *Auth, now time.Time) {
 	auth.UpdatedAt = now
 }
 
+// cloneError clones an error.
 func cloneError(err *Error) *Error {
 	if err == nil {
 		return nil
@@ -369,6 +380,7 @@ func cloneError(err *Error) *Error {
 	}
 }
 
+// statusCodeFromResult derives status code from result.
 func statusCodeFromResult(err *Error) int {
 	if err == nil {
 		return 0
@@ -376,7 +388,9 @@ func statusCodeFromResult(err *Error) int {
 	return err.StatusCode()
 }
 
+// isModelSupportErrorMessage reports whether model support error message.
 func isModelSupportErrorMessage(message string) bool {
+	// Normalize source data before building the derived payload.
 	lower := strings.ToLower(strings.TrimSpace(message))
 	if lower == "" {
 		return false
@@ -401,6 +415,7 @@ func isModelSupportErrorMessage(message string) bool {
 	return false
 }
 
+// isModelSupportResultError reports whether model support result error.
 func isModelSupportResultError(err *Error) bool {
 	if err == nil {
 		return false
@@ -412,6 +427,7 @@ func isModelSupportResultError(err *Error) bool {
 	return isModelSupportErrorMessage(err.Message)
 }
 
+// isRequestScopedNotFoundMessage reports whether request scoped not found message.
 func isRequestScopedNotFoundMessage(message string) bool {
 	if message == "" {
 		return false
@@ -422,6 +438,7 @@ func isRequestScopedNotFoundMessage(message string) bool {
 		strings.Contains(lower, "items are not persisted when `store` is set to false")
 }
 
+// isRequestScopedNotFoundResultError reports whether request scoped not found result error.
 func isRequestScopedNotFoundResultError(err *Error) bool {
 	if err == nil || statusCodeFromResult(err) != http.StatusNotFound {
 		return false
@@ -429,7 +446,9 @@ func isRequestScopedNotFoundResultError(err *Error) bool {
 	return isRequestScopedNotFoundMessage(err.Message)
 }
 
+// applyAuthFailureState applies an auth failure state.
 func applyAuthFailureState(m *Manager, auth *Auth, resultErr *Error, now time.Time) {
+	// Normalize auth state before updating runtime indexes.
 	if auth == nil {
 		return
 	}
@@ -497,6 +516,7 @@ func applyAuthFailureState(m *Manager, auth *Auth, resultErr *Error, now time.Ti
 	}
 }
 
+// nextQuotaCooldown returns a next quota cooldown.
 func nextQuotaCooldown(prevLevel int, disableCooling bool) (time.Duration, int) {
 	if prevLevel < 0 {
 		prevLevel = 0
@@ -514,7 +534,9 @@ func nextQuotaCooldown(prevLevel int, disableCooling bool) (time.Duration, int) 
 	return cooldown, prevLevel + 1
 }
 
+// NewUsageResult creates a new usage result.
 func NewUsageResult(authIndex, provider, model string, statusCode int, body string) Result {
+	// Keep validation before state changes so failures leave existing data intact.
 	authIndex = strings.TrimSpace(authIndex)
 	provider = strings.TrimSpace(provider)
 	model = strings.TrimSpace(model)

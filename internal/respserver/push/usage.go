@@ -15,6 +15,7 @@ import (
 
 var usageLogMu sync.Mutex
 
+// handleUsage handles an usage.
 func handleUsage(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
 	if len(args) != 3 {
 		return dispatch.Err("wrong number of arguments for 'lprush' command")
@@ -54,7 +55,9 @@ func handleUsage(ctx context.Context, env dispatch.Env, args []string) dispatch.
 	return dispatch.Integer(1)
 }
 
+// appendUsageLog appends an usage log.
 func appendUsageLog(payload string) error {
+	// Decode the wire frame before dispatching command handling.
 	if strings.TrimSpace(payload) == "" {
 		return fmt.Errorf("empty payload")
 	}

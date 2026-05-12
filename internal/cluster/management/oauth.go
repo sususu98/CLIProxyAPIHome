@@ -20,6 +20,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
 )
 
+// ListAuthFiles returns an auth files.
 func (h *Handler) ListAuthFiles(c *gin.Context) {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
@@ -41,6 +42,7 @@ func (h *Handler) ListAuthFiles(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"files": files})
 }
 
+// DownloadAuthFile downloads an auth file.
 func (h *Handler) DownloadAuthFile(c *gin.Context) {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
@@ -64,7 +66,9 @@ func (h *Handler) DownloadAuthFile(c *gin.Context) {
 	_, _ = c.Writer.Write(data)
 }
 
+// UploadAuthFile handles upload auth file.
 func (h *Handler) UploadAuthFile(c *gin.Context) {
+	// Validate request inputs before mutating persisted state.
 	if strings.HasPrefix(strings.ToLower(c.ContentType()), "multipart/form-data") {
 		headers, errHeaders := multipartHeaders(c)
 		if errHeaders != nil {
@@ -100,7 +104,9 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "name": name})
 }
 
+// DeleteAuthFile deletes an auth file.
 func (h *Handler) DeleteAuthFile(c *gin.Context) {
+	// Validate request inputs before mutating persisted state.
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 	auths, errAuths := h.repo.ListAuths(ctx)
@@ -144,7 +150,9 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+// PatchAuthFileStatus applies a partial update to an auth file status.
 func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
+	// Validate request inputs before mutating persisted state.
 	var req struct {
 		Name     string `json:"name"`
 		Disabled *bool  `json:"disabled"`
@@ -196,7 +204,9 @@ func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "disabled": disabled})
 }
 
+// PatchAuthFileFields applies a partial update to an auth file fields.
 func (h *Handler) PatchAuthFileFields(c *gin.Context) {
+	// Validate request inputs before mutating persisted state.
 	var body map[string]any
 	if errBindJSON := c.ShouldBindJSON(&body); errBindJSON != nil {
 		respondError(c, http.StatusBadRequest, "invalid body", errBindJSON)
@@ -234,10 +244,12 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 	respondOK(c)
 }
 
+// PostOAuthCallback handles a post o auth callback.
 func (h *Handler) PostOAuthCallback(c *gin.Context) {
 	h.handleOAuthCallback(c)
 }
 
+// storeUploadedOAuth stores an uploaded o auth.
 func (h *Handler) storeUploadedOAuth(c *gin.Context, header *multipart.FileHeader) (string, error) {
 	if header == nil {
 		return "", fmt.Errorf("file is required")
@@ -259,12 +271,14 @@ func (h *Handler) storeUploadedOAuth(c *gin.Context, header *multipart.FileHeade
 	return h.storeOAuthPayload(c, data, header.Filename)
 }
 
+// storeOAuthPayload stores an o auth payload.
 func (h *Handler) storeOAuthPayload(c *gin.Context, raw []byte, originalFilename string) (string, error) {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 	return h.storeOAuthPayloadWithContext(ctx, raw, originalFilename)
 }
 
+// storeOAuthPayloadWithContext stores an o auth payload with context.
 func (h *Handler) storeOAuthPayloadWithContext(ctx context.Context, raw []byte, originalFilename string) (string, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
@@ -288,7 +302,9 @@ func (h *Handler) storeOAuthPayloadWithContext(ctx context.Context, raw []byte, 
 	return fileUUID + ".json", nil
 }
 
+// synthesizeOAuthPayload handles a synthesize o auth payload.
 func (h *Handler) synthesizeOAuthPayload(raw []byte, fileUUID string, originalFilename string) []*coreauth.Auth {
+	// Resolve credential context before calling upstream OAuth services.
 	cfg := h.runtime.Config()
 	authPath := fileUUID + ".json"
 	legacyUUIDs := make(map[string]string)
@@ -325,7 +341,9 @@ func (h *Handler) synthesizeOAuthPayload(raw []byte, fileUUID string, originalFi
 	return auths
 }
 
+// replaceOAuthPayloadAuths handles a replace o auth payload auths.
 func (h *Handler) replaceOAuthPayloadAuths(ctx context.Context, fileUUID string, auths []*coreauth.Auth) error {
+	// Resolve credential context before calling upstream OAuth services.
 	nextIDs := make(map[string]struct{}, len(auths))
 	for _, auth := range auths {
 		if auth == nil {
@@ -355,6 +373,7 @@ func (h *Handler) replaceOAuthPayloadAuths(ctx context.Context, fileUUID string,
 	return nil
 }
 
+// isOAuthPayloadAuth reports whether o auth payload auth.
 func isOAuthPayloadAuth(auth *coreauth.Auth, fileUUID string) bool {
 	fileUUID = strings.TrimSpace(fileUUID)
 	if auth == nil || fileUUID == "" {
@@ -369,6 +388,7 @@ func isOAuthPayloadAuth(auth *coreauth.Auth, fileUUID string) bool {
 	return false
 }
 
+// findOAuthAuth handles a find o auth auth.
 func (h *Handler) findOAuthAuth(ctx context.Context, identifier authIdentifier) (*coreauth.Auth, error) {
 	auths, errAuths := h.repo.ListAuths(ctx)
 	if errAuths != nil {
@@ -377,6 +397,7 @@ func (h *Handler) findOAuthAuth(ctx context.Context, identifier authIdentifier) 
 	return findOAuthAuthInList(auths, identifier), nil
 }
 
+// deleteOAuthAuthAndChildren deletes an o auth auth and children.
 func (h *Handler) deleteOAuthAuthAndChildren(ctx context.Context, auth *coreauth.Auth, auths []*coreauth.Auth) error {
 	if auth == nil {
 		return nil
@@ -404,6 +425,7 @@ type authIdentifier struct {
 	Index *int
 }
 
+// authIdentifierFromRequest derives auth identifier from request.
 func authIdentifierFromRequest(c *gin.Context) authIdentifier {
 	identifier := authIdentifier{
 		ID:   firstNonEmptyQuery(c, "id", "uuid", "auth_index"),
@@ -417,6 +439,7 @@ func authIdentifierFromRequest(c *gin.Context) authIdentifier {
 	return identifier
 }
 
+// authIdentifierFromBodyAndRequest derives auth identifier from body and request.
 func authIdentifierFromBodyAndRequest(c *gin.Context, body map[string]any) authIdentifier {
 	identifier := authIdentifierFromRequest(c)
 	for _, key := range []string{"id", "uuid", "auth_index", "index"} {
@@ -435,7 +458,9 @@ func authIdentifierFromBodyAndRequest(c *gin.Context, body map[string]any) authI
 	return identifier
 }
 
+// findOAuthAuthInList handles a find o auth auth in list.
 func findOAuthAuthInList(auths []*coreauth.Auth, identifier authIdentifier) *coreauth.Auth {
+	// Resolve credential context before calling upstream OAuth services.
 	filtered := make([]*coreauth.Auth, 0, len(auths))
 	for _, auth := range auths {
 		if isOAuthAuth(auth) {
@@ -465,6 +490,7 @@ func findOAuthAuthInList(auths []*coreauth.Auth, identifier authIdentifier) *cor
 	return nil
 }
 
+// isOAuthAuth reports whether o auth auth.
 func isOAuthAuth(auth *coreauth.Auth) bool {
 	if auth == nil || auth.Metadata == nil {
 		return false
@@ -476,6 +502,7 @@ func isOAuthAuth(auth *coreauth.Auth) bool {
 	return typeValue != ""
 }
 
+// isVirtualOAuthAuth reports whether virtual o auth auth.
 func isVirtualOAuthAuth(auth *coreauth.Auth) bool {
 	if auth == nil {
 		return false
@@ -486,7 +513,9 @@ func isVirtualOAuthAuth(auth *coreauth.Auth) bool {
 	return auth.Attributes != nil && strings.EqualFold(auth.Attributes["runtime_only"], "true")
 }
 
+// authFileEntry handles an auth file entry.
 func authFileEntry(auth *coreauth.Auth) gin.H {
+	// Validate request inputs before mutating persisted state.
 	entry := gin.H{
 		"id":           auth.ID,
 		"auth_index":   auth.ID,
@@ -519,6 +548,7 @@ func authFileEntry(auth *coreauth.Auth) gin.H {
 	return entry
 }
 
+// authFileName handles an auth file name.
 func authFileName(auth *coreauth.Auth) string {
 	if auth == nil {
 		return ""
@@ -531,7 +561,9 @@ func authFileName(auth *coreauth.Auth) string {
 	return strings.TrimSpace(auth.ID) + ".json"
 }
 
+// applyOAuthFieldPatch applies an o auth field patch.
 func applyOAuthFieldPatch(auth *coreauth.Auth, fields map[string]any) (bool, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	changed := false
 	if auth.Metadata == nil {
 		auth.Metadata = make(map[string]any)
@@ -598,7 +630,9 @@ func applyOAuthFieldPatch(auth *coreauth.Auth, fields map[string]any) (bool, err
 	return changed, nil
 }
 
+// applyOAuthHeadersPatch applies an o auth headers patch.
 func applyOAuthHeadersPatch(auth *coreauth.Auth, headers map[string]string) bool {
+	// Resolve credential context before calling upstream OAuth services.
 	currentHeaders := coreauth.ExtractCustomHeadersFromMetadata(auth.Metadata)
 	nextHeaders := make(map[string]string, len(currentHeaders))
 	for name, value := range currentHeaders {
@@ -640,6 +674,7 @@ func applyOAuthHeadersPatch(auth *coreauth.Auth, headers map[string]string) bool
 	return true
 }
 
+// requiredBoolField handles a required bool field.
 func requiredBoolField(fields map[string]any, key string) (bool, error) {
 	raw, ok := fields[key]
 	if !ok {
@@ -652,6 +687,7 @@ func requiredBoolField(fields map[string]any, key string) (bool, error) {
 	return value, nil
 }
 
+// optionalStringField handles an optional string field.
 func optionalStringField(fields map[string]any, keys ...string) (string, bool, error) {
 	for _, key := range keys {
 		raw, ok := fields[key]
@@ -667,6 +703,7 @@ func optionalStringField(fields map[string]any, keys ...string) (string, bool, e
 	return "", false, nil
 }
 
+// optionalIntField handles an optional int field.
 func optionalIntField(fields map[string]any, key string) (int, bool, error) {
 	raw, ok := fields[key]
 	if !ok {
@@ -683,6 +720,7 @@ func optionalIntField(fields map[string]any, key string) (int, bool, error) {
 	return intValue, true, nil
 }
 
+// optionalHeadersField handles an optional headers field.
 func optionalHeadersField(fields map[string]any, key string) (map[string]string, bool, error) {
 	raw, ok := fields[key]
 	if !ok {
@@ -706,6 +744,7 @@ func optionalHeadersField(fields map[string]any, key string) (map[string]string,
 	return headers, true, nil
 }
 
+// multipartHeaders handles a multipart headers.
 func multipartHeaders(c *gin.Context) ([]*multipart.FileHeader, error) {
 	form, errForm := c.MultipartForm()
 	if errForm != nil {
@@ -726,6 +765,7 @@ func multipartHeaders(c *gin.Context) ([]*multipart.FileHeader, error) {
 	return headers, nil
 }
 
+// stringFromAny derives string from any.
 func stringFromAny(value any) string {
 	switch typed := value.(type) {
 	case string:
@@ -737,6 +777,7 @@ func stringFromAny(value any) string {
 	}
 }
 
+// firstStringField handles a first string field.
 func firstStringField(values map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if value := stringFromAny(values[key]); value != "" {
@@ -746,6 +787,7 @@ func firstStringField(values map[string]any, keys ...string) string {
 	return ""
 }
 
+// boolFromAny derives bool from any.
 func boolFromAny(value any) bool {
 	switch typed := value.(type) {
 	case bool:
@@ -757,6 +799,7 @@ func boolFromAny(value any) bool {
 	}
 }
 
+// priorityFromAuth derives priority from auth.
 func priorityFromAuth(auth *coreauth.Auth) *int {
 	if auth == nil {
 		return nil
@@ -777,6 +820,7 @@ func priorityFromAuth(auth *coreauth.Auth) *int {
 	return nil
 }
 
+// noteFromAuth derives note from auth.
 func noteFromAuth(auth *coreauth.Auth) string {
 	if auth == nil {
 		return ""

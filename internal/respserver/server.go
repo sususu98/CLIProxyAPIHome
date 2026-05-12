@@ -27,6 +27,7 @@ type Server struct {
 	cluster  *cluster.RESPHandler
 }
 
+// New creates a new.
 func New(addr string, runtime *home.Runtime) *Server {
 	return &Server{
 		addr:     strings.TrimSpace(addr),
@@ -36,6 +37,7 @@ func New(addr string, runtime *home.Runtime) *Server {
 	}
 }
 
+// SetClusterHandler sets a cluster handler.
 func (s *Server) SetClusterHandler(handler *cluster.RESPHandler) {
 	if s == nil {
 		return
@@ -43,7 +45,9 @@ func (s *Server) SetClusterHandler(handler *cluster.RESPHandler) {
 	s.cluster = handler
 }
 
+// ListenAndServe returns an en and serve.
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	// Decode the wire frame before dispatching command handling.
 	if s == nil {
 		return fmt.Errorf("resp server: server is nil")
 	}
@@ -94,7 +98,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 }
 
+// HandleConn handles handle conn.
 func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
+	// Validate request inputs before mutating persisted state.
 	if s == nil || conn == nil {
 		return
 	}
@@ -279,7 +285,9 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 	}
 }
 
+// readRESPArray reads a resp array.
 func readRESPArray(reader *bufio.Reader) ([]string, error) {
+	// Decode the wire frame before dispatching command handling.
 	prefix, errRead := reader.ReadByte()
 	if errRead != nil {
 		return nil, errRead
@@ -306,6 +314,7 @@ func readRESPArray(reader *bufio.Reader) ([]string, error) {
 	return args, nil
 }
 
+// readRESPString reads a resp string.
 func readRESPString(reader *bufio.Reader) (string, error) {
 	prefix, errRead := reader.ReadByte()
 	if errRead != nil {
@@ -321,6 +330,7 @@ func readRESPString(reader *bufio.Reader) (string, error) {
 	}
 }
 
+// readRESPBulkString reads a resp bulk string.
 func readRESPBulkString(reader *bufio.Reader) (string, error) {
 	line, errLine := readRESPLine(reader)
 	if errLine != nil {
@@ -343,6 +353,7 @@ func readRESPBulkString(reader *bufio.Reader) (string, error) {
 	return string(buf[:length]), nil
 }
 
+// readRESPLine reads a resp line.
 func readRESPLine(reader *bufio.Reader) (string, error) {
 	line, errRead := reader.ReadString('\n')
 	if errRead != nil {
@@ -353,6 +364,7 @@ func readRESPLine(reader *bufio.Reader) (string, error) {
 	return line, nil
 }
 
+// writeRedisSimpleString writes a redis simple string.
 func writeRedisSimpleString(writer *bufio.Writer, value string) error {
 	if writer == nil {
 		return net.ErrClosed
@@ -361,6 +373,7 @@ func writeRedisSimpleString(writer *bufio.Writer, value string) error {
 	return errWrite
 }
 
+// writeRedisError writes a redis error.
 func writeRedisError(writer *bufio.Writer, message string) error {
 	if writer == nil {
 		return net.ErrClosed
@@ -369,6 +382,7 @@ func writeRedisError(writer *bufio.Writer, message string) error {
 	return errWrite
 }
 
+// writeRedisNilBulkString writes a redis nil bulk string.
 func writeRedisNilBulkString(writer *bufio.Writer) error {
 	if writer == nil {
 		return net.ErrClosed
@@ -377,6 +391,7 @@ func writeRedisNilBulkString(writer *bufio.Writer) error {
 	return errWrite
 }
 
+// writeRedisBulkString writes a redis bulk string.
 func writeRedisBulkString(writer *bufio.Writer, payload []byte) error {
 	if writer == nil {
 		return net.ErrClosed
@@ -394,6 +409,7 @@ func writeRedisBulkString(writer *bufio.Writer, payload []byte) error {
 	return errWrite
 }
 
+// writeRedisInteger writes a redis integer.
 func writeRedisInteger(writer *bufio.Writer, value int64) error {
 	if writer == nil {
 		return net.ErrClosed

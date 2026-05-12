@@ -15,7 +15,9 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// startFileWatcher starts a file watcher.
 func (r *Runtime) startFileWatcher(ctx context.Context, configPath string) error {
+	// Keep validation before state changes so failures leave existing data intact.
 	if r == nil {
 		return nil
 	}
@@ -57,7 +59,9 @@ func (r *Runtime) startFileWatcher(ctx context.Context, configPath string) error
 	return nil
 }
 
+// applyConfigAndReloadAuths applies a config and reload auths.
 func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Config) error {
+	// Normalize source data before building the derived payload.
 	if r == nil {
 		return nil
 	}
@@ -113,6 +117,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 	return nil
 }
 
+// ApplyConfigFromCluster updates apply config from cluster.
 func (r *Runtime) ApplyConfigFromCluster(ctx context.Context, cfg *config.Config) error {
 	return r.applyConfigAndReloadAuths(ctx, cfg)
 }

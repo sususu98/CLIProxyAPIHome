@@ -5,7 +5,9 @@ import (
 	"testing"
 )
 
+// TestSanitizeConfigYAMLForDownstream_RemovesSensitiveKeys verifies test sanitize config yaml for downstream_ removes sensitive keys behavior.
 func TestSanitizeConfigYAMLForDownstream_RemovesSensitiveKeys(t *testing.T) {
+	// Normalize source data before building the derived payload.
 	input := strings.TrimSpace(`
 # head comment
 host: ""

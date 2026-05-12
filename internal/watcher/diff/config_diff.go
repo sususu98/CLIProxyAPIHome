@@ -330,6 +330,7 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	return changes
 }
 
+// trimStrings handles a trim strings.
 func trimStrings(in []string) []string {
 	out := make([]string, len(in))
 	for i := range in {
@@ -338,6 +339,7 @@ func trimStrings(in []string) []string {
 	return out
 }
 
+// equalStringMap handles an equal string map.
 func equalStringMap(a, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false
@@ -350,6 +352,7 @@ func equalStringMap(a, b map[string]string) bool {
 	return true
 }
 
+// formatProxyURL formats a proxy url.
 func formatProxyURL(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -378,6 +381,7 @@ func formatProxyURL(raw string) string {
 	return scheme + "://" + host
 }
 
+// equalStringSet handles an equal string set.
 func equalStringSet(a, b []string) bool {
 	if len(a) == 0 && len(b) == 0 {
 		return true

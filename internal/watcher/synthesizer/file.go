@@ -65,6 +65,7 @@ func SynthesizeAuthFile(ctx *SynthesisContext, fullPath string, data []byte) []*
 	return synthesizeFileAuths(ctx, fullPath, data)
 }
 
+// synthesizeFileAuths handles a synthesize file auths.
 func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []*coreauth.Auth {
 	if ctx == nil || len(data) == 0 {
 		return nil

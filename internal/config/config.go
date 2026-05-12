@@ -416,7 +416,10 @@ type ClaudeKey struct {
 	ExperimentalCCHSigning bool `yaml:"experimental-cch-signing,omitempty" json:"experimental-cch-signing,omitempty"`
 }
 
-func (k ClaudeKey) GetAPIKey() string  { return k.APIKey }
+// GetAPIKey returns an api key.
+func (k ClaudeKey) GetAPIKey() string { return k.APIKey }
+
+// GetBaseURL returns a base url.
 func (k ClaudeKey) GetBaseURL() string { return k.BaseURL }
 
 // ClaudeModel describes a mapping between an alias and the actual upstream model name.
@@ -428,7 +431,10 @@ type ClaudeModel struct {
 	Alias string `yaml:"alias" json:"alias"`
 }
 
-func (m ClaudeModel) GetName() string  { return m.Name }
+// GetName returns a name.
+func (m ClaudeModel) GetName() string { return m.Name }
+
+// GetAlias returns an alias.
 func (m ClaudeModel) GetAlias() string { return m.Alias }
 
 // CodexKey represents the configuration for a Codex API key,
@@ -467,7 +473,10 @@ type CodexKey struct {
 	DisableCooling bool `yaml:"disable-cooling,omitempty" json:"disable-cooling,omitempty"`
 }
 
-func (k CodexKey) GetAPIKey() string  { return k.APIKey }
+// GetAPIKey returns an api key.
+func (k CodexKey) GetAPIKey() string { return k.APIKey }
+
+// GetBaseURL returns a base url.
 func (k CodexKey) GetBaseURL() string { return k.BaseURL }
 
 // CodexModel describes a mapping between an alias and the actual upstream model name.
@@ -479,7 +488,10 @@ type CodexModel struct {
 	Alias string `yaml:"alias" json:"alias"`
 }
 
-func (m CodexModel) GetName() string  { return m.Name }
+// GetName returns a name.
+func (m CodexModel) GetName() string { return m.Name }
+
+// GetAlias returns an alias.
 func (m CodexModel) GetAlias() string { return m.Alias }
 
 // GeminiKey represents the configuration for a Gemini API key,
@@ -514,7 +526,10 @@ type GeminiKey struct {
 	DisableCooling bool `yaml:"disable-cooling,omitempty" json:"disable-cooling,omitempty"`
 }
 
-func (k GeminiKey) GetAPIKey() string  { return k.APIKey }
+// GetAPIKey returns an api key.
+func (k GeminiKey) GetAPIKey() string { return k.APIKey }
+
+// GetBaseURL returns a base url.
 func (k GeminiKey) GetBaseURL() string { return k.BaseURL }
 
 // GeminiModel describes a mapping between an alias and the actual upstream model name.
@@ -526,7 +541,10 @@ type GeminiModel struct {
 	Alias string `yaml:"alias" json:"alias"`
 }
 
-func (m GeminiModel) GetName() string  { return m.Name }
+// GetName returns a name.
+func (m GeminiModel) GetName() string { return m.Name }
+
+// GetAlias returns an alias.
 func (m GeminiModel) GetAlias() string { return m.Alias }
 
 // OpenAICompatibility represents the configuration for OpenAI API compatibility
@@ -584,7 +602,10 @@ type OpenAICompatibilityModel struct {
 	Thinking *registry.ThinkingSupport `yaml:"thinking,omitempty" json:"thinking,omitempty"`
 }
 
-func (m OpenAICompatibilityModel) GetName() string  { return m.Name }
+// GetName returns a name.
+func (m OpenAICompatibilityModel) GetName() string { return m.Name }
+
+// GetAlias returns an alias.
 func (m OpenAICompatibilityModel) GetAlias() string { return m.Alias }
 
 // LoadConfig reads a YAML configuration file from the given path,
@@ -759,7 +780,9 @@ func (cfg *Config) SanitizePayloadRules() {
 	cfg.Payload.OverrideRaw = sanitizePayloadRawRules(cfg.Payload.OverrideRaw, "override-raw")
 }
 
+// sanitizePayloadRawRules sanitizes a payload raw rules.
 func sanitizePayloadRawRules(rules []PayloadRule, section string) []PayloadRule {
+	// Validate input data before converting it into runtime state.
 	if len(rules) == 0 {
 		return rules
 	}
@@ -794,6 +817,7 @@ func sanitizePayloadRawRules(rules []PayloadRule, section string) []PayloadRule 
 	return out
 }
 
+// payloadRawString handles a payload raw string.
 func payloadRawString(value any) ([]byte, bool) {
 	switch typed := value.(type) {
 	case string:
@@ -833,6 +857,7 @@ func (cfg *Config) SanitizeClaudeHeaderDefaults() {
 // It trims whitespace, normalizes channel keys to lower-case, drops empty entries,
 // allows multiple aliases per upstream name, and ensures aliases are unique within each channel.
 func (cfg *Config) SanitizeOAuthModelAlias() {
+	// Resolve credential context before calling upstream OAuth services.
 	if cfg == nil || len(cfg.OAuthModelAlias) == 0 {
 		return
 	}
@@ -927,6 +952,7 @@ func (cfg *Config) SanitizeClaudeKeys() {
 // SanitizeGeminiKeys deduplicates and normalizes Gemini credentials.
 // It uses API key + base URL as the uniqueness key.
 func (cfg *Config) SanitizeGeminiKeys() {
+	// Keep validation before state changes so failures leave existing data intact.
 	if cfg == nil {
 		return
 	}
@@ -954,6 +980,7 @@ func (cfg *Config) SanitizeGeminiKeys() {
 	cfg.GeminiKey = out
 }
 
+// normalizeModelPrefix normalizes a model prefix.
 func normalizeModelPrefix(prefix string) string {
 	trimmed := strings.TrimSpace(prefix)
 	trimmed = strings.Trim(trimmed, "/")
@@ -971,6 +998,7 @@ func looksLikeBcrypt(s string) bool {
 	return len(s) > 4 && (s[:4] == "$2a$" || s[:4] == "$2b$" || s[:4] == "$2y$")
 }
 
+// NormalizeRemoteManagementSecret normalizes a remote management secret.
 func NormalizeRemoteManagementSecret(secret string) (string, bool, error) {
 	if secret == "" || looksLikeBcrypt(secret) {
 		return secret, false, nil
@@ -1400,6 +1428,7 @@ func isKnownDefaultValue(path []string, node *yaml.Node) bool {
 // pruneKnownDefaultsInNewNode removes default-valued descendants from a new node
 // before it is appended into the destination YAML tree.
 func pruneKnownDefaultsInNewNode(path []string, node *yaml.Node) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if node == nil {
 		return
 	}
@@ -1515,6 +1544,7 @@ func copyNodeShallow(dst, src *yaml.Node) {
 	}
 }
 
+// reorderSequenceForMerge returns a reorder sequence for merge.
 func reorderSequenceForMerge(dst, src *yaml.Node) {
 	if dst == nil || src == nil {
 		return
@@ -1537,6 +1567,7 @@ func reorderSequenceForMerge(dst, src *yaml.Node) {
 	dst.Content = ordered
 }
 
+// matchSequenceElement handles a match sequence element.
 func matchSequenceElement(original []*yaml.Node, used []bool, target *yaml.Node) int {
 	if target == nil {
 		return -1
@@ -1580,7 +1611,9 @@ func matchSequenceElement(original []*yaml.Node, used []bool, target *yaml.Node)
 	return -1
 }
 
+// sequenceElementIdentity handles a sequence element identity.
 func sequenceElementIdentity(node *yaml.Node) string {
+	// Keep validation before state changes so failures leave existing data intact.
 	if node == nil || node.Kind != yaml.MappingNode {
 		return ""
 	}
@@ -1604,6 +1637,7 @@ func sequenceElementIdentity(node *yaml.Node) string {
 	return ""
 }
 
+// mappingScalarValue handles a mapping scalar value.
 func mappingScalarValue(node *yaml.Node, key string) string {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return ""
@@ -1622,7 +1656,9 @@ func mappingScalarValue(node *yaml.Node, key string) string {
 	return ""
 }
 
+// nodesStructurallyEqual handles a nodes structurally equal.
 func nodesStructurallyEqual(a, b *yaml.Node) bool {
+	// Keep validation before state changes so failures leave existing data intact.
 	if a == nil || b == nil {
 		return a == b
 	}
@@ -1662,6 +1698,7 @@ func nodesStructurallyEqual(a, b *yaml.Node) bool {
 	}
 }
 
+// removeMapKey removes a map key.
 func removeMapKey(mapNode *yaml.Node, key string) {
 	if mapNode == nil || mapNode.Kind != yaml.MappingNode || key == "" {
 		return
@@ -1674,6 +1711,7 @@ func removeMapKey(mapNode *yaml.Node, key string) {
 	}
 }
 
+// pruneMappingToGeneratedKeys converts prune mapping to generated keys.
 func pruneMappingToGeneratedKeys(dstRoot, srcRoot *yaml.Node, key string) {
 	if key == "" || dstRoot == nil || srcRoot == nil {
 		return
@@ -1717,7 +1755,9 @@ func pruneMappingToGeneratedKeys(dstRoot, srcRoot *yaml.Node, key string) {
 	pruneMissingMapKeys(dstVal, srcVal)
 }
 
+// pruneMissingMapKeys prunes a missing map keys.
 func pruneMissingMapKeys(dstMap, srcMap *yaml.Node) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if dstMap == nil || srcMap == nil || dstMap.Kind != yaml.MappingNode || srcMap.Kind != yaml.MappingNode {
 		return
 	}
@@ -1791,7 +1831,9 @@ type legacyOpenAICompatibility struct {
 	APIKeys []string `yaml:"api-keys"`
 }
 
+// migrateLegacyGeminiKeys migrates a legacy gemini keys.
 func (cfg *Config) migrateLegacyGeminiKeys(legacy []string) bool {
+	// Keep validation before state changes so failures leave existing data intact.
 	if cfg == nil || len(legacy) == 0 {
 		return false
 	}
@@ -1819,6 +1861,7 @@ func (cfg *Config) migrateLegacyGeminiKeys(legacy []string) bool {
 	return changed
 }
 
+// migrateLegacyOpenAICompatibilityKeys migrates a legacy open ai compatibility keys.
 func (cfg *Config) migrateLegacyOpenAICompatibilityKeys(legacy []legacyOpenAICompatibility) bool {
 	if cfg == nil || len(cfg.OpenAICompatibility) == 0 || len(legacy) == 0 {
 		return false
@@ -1839,7 +1882,9 @@ func (cfg *Config) migrateLegacyOpenAICompatibilityKeys(legacy []legacyOpenAICom
 	return changed
 }
 
+// mergeLegacyOpenAICompatAPIKeys merges a legacy open ai compat api keys.
 func mergeLegacyOpenAICompatAPIKeys(entry *OpenAICompatibility, keys []string) bool {
+	// Keep validation before state changes so failures leave existing data intact.
 	if entry == nil || len(keys) == 0 {
 		return false
 	}
@@ -1867,7 +1912,9 @@ func mergeLegacyOpenAICompatAPIKeys(entry *OpenAICompatibility, keys []string) b
 	return changed
 }
 
+// findOpenAICompatTarget handles a find open ai compat target.
 func findOpenAICompatTarget(entries []OpenAICompatibility, legacyName, legacyBase string) *OpenAICompatibility {
+	// Keep validation before state changes so failures leave existing data intact.
 	nameKey := strings.ToLower(strings.TrimSpace(legacyName))
 	baseKey := strings.ToLower(strings.TrimSpace(legacyBase))
 	if nameKey != "" && baseKey != "" {
@@ -1895,7 +1942,9 @@ func findOpenAICompatTarget(entries []OpenAICompatibility, legacyName, legacyBas
 	return nil
 }
 
+// migrateLegacyAmpConfig migrates a legacy amp config.
 func (cfg *Config) migrateLegacyAmpConfig(legacy *legacyConfigData) bool {
+	// Normalize source data before building the derived payload.
 	if cfg == nil || legacy == nil {
 		return false
 	}
@@ -1923,6 +1972,7 @@ func (cfg *Config) migrateLegacyAmpConfig(legacy *legacyConfigData) bool {
 	return changed
 }
 
+// removeLegacyOpenAICompatAPIKeys removes a legacy open ai compat api keys.
 func removeLegacyOpenAICompatAPIKeys(root *yaml.Node) {
 	if root == nil || root.Kind != yaml.MappingNode {
 		return
@@ -1942,6 +1992,7 @@ func removeLegacyOpenAICompatAPIKeys(root *yaml.Node) {
 	}
 }
 
+// removeLegacyAmpKeys removes a legacy amp keys.
 func removeLegacyAmpKeys(root *yaml.Node) {
 	if root == nil || root.Kind != yaml.MappingNode {
 		return
@@ -1952,6 +2003,7 @@ func removeLegacyAmpKeys(root *yaml.Node) {
 	removeMapKey(root, "amp-model-mappings")
 }
 
+// removeLegacyGenerativeLanguageKeys removes a legacy generative language keys.
 func removeLegacyGenerativeLanguageKeys(root *yaml.Node) {
 	if root == nil || root.Kind != yaml.MappingNode {
 		return
@@ -1959,6 +2011,7 @@ func removeLegacyGenerativeLanguageKeys(root *yaml.Node) {
 	removeMapKey(root, "generative-language-api-key")
 }
 
+// removeLegacyAuthBlock removes a legacy auth block.
 func removeLegacyAuthBlock(root *yaml.Node) {
 	if root == nil || root.Kind != yaml.MappingNode {
 		return

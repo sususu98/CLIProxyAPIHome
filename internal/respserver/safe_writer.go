@@ -13,6 +13,7 @@ type safeWriter struct {
 	w  *bufio.Writer
 }
 
+// newSafeWriter creates a safe writer.
 func newSafeWriter(w *bufio.Writer) *safeWriter {
 	if w == nil {
 		return &safeWriter{}
@@ -20,6 +21,7 @@ func newSafeWriter(w *bufio.Writer) *safeWriter {
 	return &safeWriter{w: w}
 }
 
+// WriteDispatchReply writes a dispatch reply.
 func (w *safeWriter) WriteDispatchReply(reply dispatch.Reply) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -32,6 +34,7 @@ func (w *safeWriter) WriteDispatchReply(reply dispatch.Reply) error {
 	return w.w.Flush()
 }
 
+// WriteRedisSimpleString writes a redis simple string.
 func (w *safeWriter) WriteRedisSimpleString(value string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -44,6 +47,7 @@ func (w *safeWriter) WriteRedisSimpleString(value string) error {
 	return w.w.Flush()
 }
 
+// WriteRedisError writes a redis error.
 func (w *safeWriter) WriteRedisError(message string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -56,6 +60,7 @@ func (w *safeWriter) WriteRedisError(message string) error {
 	return w.w.Flush()
 }
 
+// WriteRedisBulkString writes a redis bulk string.
 func (w *safeWriter) WriteRedisBulkString(payload []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

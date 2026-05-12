@@ -38,18 +38,22 @@ type DeviceCodeResponse struct {
 	Interval                int    `json:"interval"`
 }
 
+// NewKimiAuth creates a new kimi auth.
 func NewKimiAuth(cfg *config.Config) *KimiAuth {
 	return &KimiAuth{deviceClient: NewDeviceFlowClient(cfg)}
 }
 
+// NewDeviceFlowClient creates a new device flow client.
 func NewDeviceFlowClient(cfg *config.Config) *DeviceFlowClient {
 	return NewDeviceFlowClientWithDeviceID(cfg, "")
 }
 
+// NewDeviceFlowClientWithDeviceID creates a new device flow client with device id.
 func NewDeviceFlowClientWithDeviceID(cfg *config.Config, deviceID string) *DeviceFlowClient {
 	return NewDeviceFlowClientWithDeviceIDAndProxyURL(cfg, deviceID, "")
 }
 
+// StartDeviceFlow starts a device flow.
 func (k *KimiAuth) StartDeviceFlow(ctx context.Context) (*DeviceCodeResponse, error) {
 	if k == nil || k.deviceClient == nil {
 		return nil, fmt.Errorf("kimi: client not ready")
@@ -57,6 +61,7 @@ func (k *KimiAuth) StartDeviceFlow(ctx context.Context) (*DeviceCodeResponse, er
 	return k.deviceClient.RequestDeviceCode(ctx)
 }
 
+// WaitForAuthorization returns a wait for authorization.
 func (k *KimiAuth) WaitForAuthorization(ctx context.Context, deviceCode *DeviceCodeResponse) (*KimiAuthBundle, error) {
 	if k == nil || k.deviceClient == nil {
 		return nil, fmt.Errorf("kimi: client not ready")
@@ -71,7 +76,9 @@ func (k *KimiAuth) WaitForAuthorization(ctx context.Context, deviceCode *DeviceC
 	}, nil
 }
 
+// RequestDeviceCode handles request device code.
 func (c *DeviceFlowClient) RequestDeviceCode(ctx context.Context) (*DeviceCodeResponse, error) {
+	// Validate request inputs before mutating persisted state.
 	if c == nil || c.httpClient == nil {
 		return nil, fmt.Errorf("kimi: client not ready")
 	}
@@ -117,7 +124,9 @@ func (c *DeviceFlowClient) RequestDeviceCode(ctx context.Context) (*DeviceCodeRe
 	return &deviceCode, nil
 }
 
+// PollForToken converts poll for token.
 func (c *DeviceFlowClient) PollForToken(ctx context.Context, deviceCode *DeviceCodeResponse) (*KimiTokenData, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if c == nil || c.httpClient == nil {
 		return nil, fmt.Errorf("kimi: client not ready")
 	}
@@ -163,7 +172,9 @@ func (c *DeviceFlowClient) PollForToken(ctx context.Context, deviceCode *DeviceC
 	}
 }
 
+// exchangeDeviceCode handles an exchange device code.
 func (c *DeviceFlowClient) exchangeDeviceCode(ctx context.Context, deviceCode string) (*KimiTokenData, error, bool) {
+	// Keep validation before state changes so failures leave existing data intact.
 	data := url.Values{}
 	data.Set("client_id", kimiClientID)
 	data.Set("device_code", strings.TrimSpace(deviceCode))

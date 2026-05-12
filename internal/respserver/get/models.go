@@ -11,7 +11,9 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+// handleModels handles a models.
 func handleModels(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
+	// Normalize source data before building the derived payload.
 	_ = ctx
 
 	if len(args) != 2 {

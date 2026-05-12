@@ -35,7 +35,9 @@ type apiCallResponse struct {
 	Body       string              `json:"body"`
 }
 
+// APICall proxies a management API call through a stored auth entry.
 func (h *Handler) APICall(c *gin.Context) {
+	// Validate request inputs before mutating persisted state.
 	var body apiCallRequest
 	if errBindJSON := c.ShouldBindJSON(&body); errBindJSON != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -147,7 +149,9 @@ func (h *Handler) APICall(c *gin.Context) {
 	})
 }
 
+// apiCallAuthByIndex handles an api call auth by index.
 func (h *Handler) apiCallAuthByIndex(ctx context.Context, authIndex string) (*coreauth.Auth, error) {
+	// Validate request inputs before mutating persisted state.
 	authIndex = strings.TrimSpace(authIndex)
 	if authIndex == "" || h == nil || h.repo == nil {
 		return nil, nil
@@ -181,6 +185,7 @@ func (h *Handler) apiCallAuthByIndex(ctx context.Context, authIndex string) (*co
 	return nil, nil
 }
 
+// apiCallToken converts api call token.
 func (h *Handler) apiCallToken(ctx context.Context, authIndex string, auth *coreauth.Auth) (string, error) {
 	if token := apiCallTokenValueForAuth(auth); token != "" {
 		return token, nil
@@ -196,7 +201,9 @@ func (h *Handler) apiCallToken(ctx context.Context, authIndex string, auth *core
 	return apiCallTokenValueFromRefreshPayload(payload), nil
 }
 
+// apiCallTransport handles an api call transport.
 func (h *Handler) apiCallTransport(auth *coreauth.Auth) http.RoundTripper {
+	// Validate request inputs before mutating persisted state.
 	proxyCandidates := make([]string, 0, 2)
 	if auth != nil {
 		if proxyStr := strings.TrimSpace(auth.ProxyURL); proxyStr != "" {
@@ -231,6 +238,7 @@ func (h *Handler) apiCallTransport(auth *coreauth.Auth) http.RoundTripper {
 	return clone
 }
 
+// apiCallHeadersNeedToken converts api call headers need token.
 func apiCallHeadersNeedToken(headers map[string]string) bool {
 	for _, value := range headers {
 		if strings.Contains(value, "$TOKEN$") {
@@ -240,6 +248,7 @@ func apiCallHeadersNeedToken(headers map[string]string) bool {
 	return false
 }
 
+// apiCallFirstNonEmptyString handles an api call first non empty string.
 func apiCallFirstNonEmptyString(values ...*string) string {
 	for _, value := range values {
 		if value == nil {
@@ -252,6 +261,7 @@ func apiCallFirstNonEmptyString(values ...*string) string {
 	return ""
 }
 
+// apiCallTokenValueForAuth converts api call token value for auth.
 func apiCallTokenValueForAuth(auth *coreauth.Auth) string {
 	if auth == nil {
 		return ""
@@ -267,6 +277,7 @@ func apiCallTokenValueForAuth(auth *coreauth.Auth) string {
 	return ""
 }
 
+// apiCallTokenValueFromRefreshPayload converts api call token value from refresh payload.
 func apiCallTokenValueFromRefreshPayload(payload []byte) string {
 	if len(payload) == 0 {
 		return ""
@@ -287,6 +298,7 @@ func apiCallTokenValueFromRefreshPayload(payload []byte) string {
 	return apiCallTokenValueForAuth(auth)
 }
 
+// apiCallTokenValueFromMetadata converts api call token value from metadata.
 func apiCallTokenValueFromMetadata(metadata map[string]any) string {
 	if len(metadata) == 0 {
 		return ""
@@ -309,6 +321,7 @@ func apiCallTokenValueFromMetadata(metadata map[string]any) string {
 	return ""
 }
 
+// apiCallTokenValueFromNestedToken converts api call token value from nested token.
 func apiCallTokenValueFromNestedToken(tokenRaw any) string {
 	switch typed := tokenRaw.(type) {
 	case string:

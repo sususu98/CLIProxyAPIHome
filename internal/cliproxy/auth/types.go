@@ -151,6 +151,7 @@ type ModelState struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// recentRequestBucketID handles a recent request bucket id.
 func recentRequestBucketID(now time.Time) int64 {
 	if now.IsZero() {
 		return 0
@@ -158,6 +159,7 @@ func recentRequestBucketID(now time.Time) int64 {
 	return now.Unix() / recentRequestBucketSeconds
 }
 
+// recentRequestBucketIndex handles a recent request bucket index.
 func recentRequestBucketIndex(bucketID int64) int {
 	mod := bucketID % int64(recentRequestBucketCount)
 	if mod < 0 {
@@ -166,12 +168,14 @@ func recentRequestBucketIndex(bucketID int64) int {
 	return int(mod)
 }
 
+// formatRecentRequestBucketLabel formats a recent request bucket label.
 func formatRecentRequestBucketLabel(bucketID int64) string {
 	start := time.Unix(bucketID*recentRequestBucketSeconds, 0).In(time.Local)
 	end := start.Add(time.Duration(recentRequestBucketSeconds) * time.Second)
 	return start.Format("15:04") + "-" + end.Format("15:04")
 }
 
+// recordRecentRequest records a recent request.
 func (a *Auth) recordRecentRequest(now time.Time, success bool) {
 	if a == nil {
 		return
@@ -191,7 +195,9 @@ func (a *Auth) recordRecentRequest(now time.Time, success bool) {
 	bucket.failed++
 }
 
+// RecentRequestsSnapshot handles a recent requests snapshot.
 func (a *Auth) RecentRequestsSnapshot(now time.Time) []RecentRequestBucket {
+	// Validate request inputs before mutating persisted state.
 	out := make([]RecentRequestBucket, 0, recentRequestBucketCount)
 	if a == nil {
 		return out
@@ -217,6 +223,7 @@ func (a *Auth) RecentRequestsSnapshot(now time.Time) []RecentRequestBucket {
 
 // Clone shallow copies the Auth structure, duplicating maps to avoid accidental mutation.
 func (a *Auth) Clone() *Auth {
+	// Keep validation before state changes so failures leave existing data intact.
 	if a == nil {
 		return nil
 	}
@@ -243,6 +250,7 @@ func (a *Auth) Clone() *Auth {
 	return &copyAuth
 }
 
+// stableAuthIndex handles a stable auth index.
 func stableAuthIndex(seed string) string {
 	seed = strings.TrimSpace(seed)
 	if seed == "" {
@@ -252,7 +260,9 @@ func stableAuthIndex(seed string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// indexSeed handles an index seed.
 func (a *Auth) indexSeed() string {
+	// Keep validation before state changes so failures leave existing data intact.
 	if a == nil {
 		return ""
 	}
@@ -364,6 +374,7 @@ func (m *ModelState) Clone() *ModelState {
 	return &copyState
 }
 
+// ProxyInfo handles a proxy info.
 func (a *Auth) ProxyInfo() string {
 	if a == nil {
 		return ""
@@ -446,7 +457,9 @@ func (a *Auth) RequestRetryOverride() (int, bool) {
 	return 0, false
 }
 
+// parseBoolAny parses a bool any.
 func parseBoolAny(val any) (bool, bool) {
+	// Validate input data before converting it into runtime state.
 	switch typed := val.(type) {
 	case bool:
 		return typed, true
@@ -473,7 +486,9 @@ func parseBoolAny(val any) (bool, bool) {
 	}
 }
 
+// parseIntAny parses an int any.
 func parseIntAny(val any) (int, bool) {
+	// Validate input data before converting it into runtime state.
 	switch typed := val.(type) {
 	case int:
 		return typed, true
@@ -504,6 +519,7 @@ func parseIntAny(val any) (int, bool) {
 	}
 }
 
+// AccountInfo handles an account info.
 func (a *Auth) AccountInfo() (string, string) {
 	if a == nil {
 		return "", ""
@@ -561,6 +577,7 @@ var (
 	refreshLeadFactories = make(map[string]func() *time.Duration)
 )
 
+// RegisterRefreshLeadProvider handles a register refresh lead provider.
 func RegisterRefreshLeadProvider(provider string, factory func() *time.Duration) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == "" || factory == nil {
@@ -573,7 +590,9 @@ func RegisterRefreshLeadProvider(provider string, factory func() *time.Duration)
 
 var expireKeys = [...]string{"expired", "expire", "expires_at", "expiresAt", "expiry", "expires"}
 
+// expirationFromMap derives expiration from map.
 func expirationFromMap(meta map[string]any) (time.Time, bool) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if meta == nil {
 		return time.Time{}, false
 	}
@@ -605,6 +624,7 @@ func expirationFromMap(meta map[string]any) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// ProviderRefreshLead handles a provider refresh lead.
 func ProviderRefreshLead(provider string, runtime any) *time.Duration {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if runtime != nil {
@@ -626,7 +646,9 @@ func ProviderRefreshLead(provider string, runtime any) *time.Duration {
 	return nil
 }
 
+// parseTimeValue parses a time value.
 func parseTimeValue(v any) (time.Time, bool) {
+	// Validate input data before converting it into runtime state.
 	switch value := v.(type) {
 	case string:
 		s := strings.TrimSpace(value)
@@ -663,6 +685,7 @@ func parseTimeValue(v any) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// normaliseUnix handles a normalise unix.
 func normaliseUnix(raw int64) time.Time {
 	if raw <= 0 {
 		return time.Time{}

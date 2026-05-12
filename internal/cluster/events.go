@@ -14,6 +14,7 @@ type EventWatcher struct {
 	onEvent      func(context.Context, ClusterEventRecord) error
 }
 
+// NewEventWatcher creates a new event watcher.
 func NewEventWatcher(repo *Repository, pollInterval time.Duration, onEvent func(context.Context, ClusterEventRecord) error) *EventWatcher {
 	return &EventWatcher{
 		repo:         repo,
@@ -22,6 +23,7 @@ func NewEventWatcher(repo *Repository, pollInterval time.Duration, onEvent func(
 	}
 }
 
+// NewEventWatcherFrom creates a new event watcher from.
 func NewEventWatcherFrom(repo *Repository, pollInterval time.Duration, lastSeenID int64, onEvent func(context.Context, ClusterEventRecord) error) *EventWatcher {
 	watcher := NewEventWatcher(repo, pollInterval, onEvent)
 	watcher.lastSeenID = lastSeenID
@@ -29,7 +31,9 @@ func NewEventWatcherFrom(repo *Repository, pollInterval time.Duration, lastSeenI
 	return watcher
 }
 
+// Start starts the process.
 func (w *EventWatcher) Start(ctx context.Context) error {
+	// Keep validation before state changes so failures leave existing data intact.
 	if w == nil {
 		return fmt.Errorf("cluster event watcher is nil")
 	}
@@ -71,6 +75,7 @@ func (w *EventWatcher) Start(ctx context.Context) error {
 	}
 }
 
+// poll handles a poll.
 func (w *EventWatcher) poll(ctx context.Context) error {
 	events, errEvents := w.eventsAfter(ctx, w.lastSeenID)
 	if errEvents != nil {
@@ -85,10 +90,12 @@ func (w *EventWatcher) poll(ctx context.Context) error {
 	return nil
 }
 
+// maxEventID handles a max event id.
 func (w *EventWatcher) maxEventID(ctx context.Context) (int64, error) {
 	return w.repo.MaxEventID(ctx)
 }
 
+// eventsAfter handles an events after.
 func (w *EventWatcher) eventsAfter(ctx context.Context, id int64) ([]ClusterEventRecord, error) {
 	db, errDB := w.repo.database()
 	if errDB != nil {

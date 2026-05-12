@@ -14,7 +14,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// ImportVertexCredential handles import vertex credential.
 func (h *Handler) ImportVertexCredential(c *gin.Context) {
+	// Validate request inputs before mutating persisted state.
 	fileHeader, errFormFile := c.FormFile("file")
 	if errFormFile != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "file required"})
@@ -93,6 +95,7 @@ func (h *Handler) ImportVertexCredential(c *gin.Context) {
 	})
 }
 
+// normalizeVertexServiceAccountMap normalizes a vertex service account map.
 func normalizeVertexServiceAccountMap(serviceAccount map[string]any) (map[string]any, error) {
 	if serviceAccount == nil {
 		return nil, fmt.Errorf("service account payload is empty")
@@ -113,7 +116,9 @@ func normalizeVertexServiceAccountMap(serviceAccount map[string]any) (map[string
 	return clone, nil
 }
 
+// sanitizeVertexPrivateKey sanitizes a vertex private key.
 func sanitizeVertexPrivateKey(raw string) (string, error) {
+	// Validate request inputs before mutating persisted state.
 	privateKey := strings.ReplaceAll(raw, "\r\n", "\n")
 	privateKey = strings.ReplaceAll(privateKey, "\r", "\n")
 	privateKey = stripANSIEscape(privateKey)
@@ -140,7 +145,9 @@ func sanitizeVertexPrivateKey(raw string) (string, error) {
 	return string(pem.EncodeToMemory(rsaBlock)), nil
 }
 
+// ensureVertexRSAPrivateKey ensures a vertex rsa private key.
 func ensureVertexRSAPrivateKey(block *pem.Block) (*pem.Block, error) {
+	// Validate request inputs before mutating persisted state.
 	if block == nil {
 		return nil, fmt.Errorf("pem block is nil")
 	}
@@ -172,7 +179,9 @@ func ensureVertexRSAPrivateKey(block *pem.Block) (*pem.Block, error) {
 	return nil, fmt.Errorf("private_key uses unsupported format")
 }
 
+// rebuildVertexPEM rebuilds a vertex pem.
 func rebuildVertexPEM(raw string) (string, error) {
+	// Validate request inputs before mutating persisted state.
 	kind := "PRIVATE KEY"
 	if strings.Contains(raw, "RSA PRIVATE KEY") {
 		kind = "RSA PRIVATE KEY"
@@ -196,6 +205,7 @@ func rebuildVertexPEM(raw string) (string, error) {
 	return string(pem.EncodeToMemory(&pem.Block{Type: kind, Bytes: der})), nil
 }
 
+// filterVertexBase64 handles a filter vertex base 64.
 func filterVertexBase64(value string) string {
 	var builder strings.Builder
 	for _, char := range value {
@@ -213,6 +223,7 @@ func filterVertexBase64(value string) string {
 	return builder.String()
 }
 
+// stripANSIEscape handles a strip ansi escape.
 func stripANSIEscape(value string) string {
 	var builder strings.Builder
 	for i := 0; i < len(value); i++ {
@@ -232,6 +243,7 @@ func stripANSIEscape(value string) string {
 	return builder.String()
 }
 
+// sanitizeVertexFilePart sanitizes a vertex file part.
 func sanitizeVertexFilePart(value string) string {
 	out := strings.TrimSpace(value)
 	replacers := []string{"/", "_", "\\", "_", ":", "_", " ", "-"}
@@ -244,6 +256,7 @@ func sanitizeVertexFilePart(value string) string {
 	return out
 }
 
+// labelForVertex returns a label for vertex.
 func labelForVertex(projectID, email string) string {
 	projectID = strings.TrimSpace(projectID)
 	email = strings.TrimSpace(email)

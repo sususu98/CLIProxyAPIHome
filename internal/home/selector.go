@@ -8,7 +8,9 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 )
 
+// selectorFromConfig derives selector from config.
 func selectorFromConfig(cfg *config.Config) coreauth.Selector {
+	// Build the candidate view before applying availability rules.
 	if cfg == nil {
 		return &coreauth.RoundRobinSelector{}
 	}

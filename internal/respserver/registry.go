@@ -11,6 +11,7 @@ import (
 
 const clusterCommand = "CLUSTER"
 
+// buildRegistry builds a registry.
 func buildRegistry() *dispatch.Registry {
 	reg := dispatch.NewRegistry()
 	respset.Register(reg)

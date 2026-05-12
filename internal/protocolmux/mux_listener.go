@@ -12,6 +12,7 @@ type Listener struct {
 	once    sync.Once
 }
 
+// NewListener creates a new listener.
 func NewListener(addr net.Addr, buffer int) *Listener {
 	if buffer <= 0 {
 		buffer = 1
@@ -23,6 +24,7 @@ func NewListener(addr net.Addr, buffer int) *Listener {
 	}
 }
 
+// Put handles put.
 func (l *Listener) Put(conn net.Conn) error {
 	if l == nil || conn == nil {
 		return nil
@@ -35,6 +37,7 @@ func (l *Listener) Put(conn net.Conn) error {
 	}
 }
 
+// Accept manages accept.
 func (l *Listener) Accept() (net.Conn, error) {
 	if l == nil {
 		return nil, net.ErrClosed
@@ -50,6 +53,7 @@ func (l *Listener) Accept() (net.Conn, error) {
 	}
 }
 
+// Close manages close.
 func (l *Listener) Close() error {
 	if l == nil {
 		return nil
@@ -60,6 +64,7 @@ func (l *Listener) Close() error {
 	return nil
 }
 
+// Addr adds a r.
 func (l *Listener) Addr() net.Addr {
 	if l == nil {
 		return &net.TCPAddr{}

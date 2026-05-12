@@ -99,6 +99,7 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (*http2.Clie
 // Chrome's TLS fingerprint is closer to Node.js/OpenSSL (which real Claude Code uses)
 // than Firefox, reducing the mismatch between TLS layer and HTTP headers.
 func (t *utlsRoundTripper) createConnection(host, addr string) (*http2.ClientConn, error) {
+	// Keep validation before state changes so failures leave existing data intact.
 	conn, err := t.dialer.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -122,7 +123,7 @@ func (t *utlsRoundTripper) createConnection(host, addr string) (*http2.ClientCon
 	return h2Conn, nil
 }
 
-// RoundTrip implements http.RoundTripper
+// RoundTrip returns a round trip.
 func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	host := req.URL.Host
 	addr := host

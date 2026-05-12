@@ -17,11 +17,14 @@ type Handler struct {
 	runtime *home.Runtime
 }
 
+// NewHandler creates a new handler.
 func NewHandler(repo *cluster.Repository, runtime *home.Runtime) *Handler {
 	return &Handler{repo: repo, runtime: runtime}
 }
 
+// RegisterRoutes handles a register routes.
 func (h *Handler) RegisterRoutes(group *gin.RouterGroup) {
+	// Validate request inputs before mutating persisted state.
 	if h == nil || group == nil {
 		return
 	}
@@ -149,6 +152,7 @@ func (h *Handler) RegisterRoutes(group *gin.RouterGroup) {
 	group.POST("/oauth-callback", h.PostOAuthCallback)
 }
 
+// requestContext handles a request context.
 func (h *Handler) requestContext(c *gin.Context) (context.Context, context.CancelFunc) {
 	ctx := context.Background()
 	if c != nil && c.Request != nil && c.Request.Context() != nil {
@@ -157,6 +161,7 @@ func (h *Handler) requestContext(c *gin.Context) (context.Context, context.Cance
 	return context.WithTimeout(ctx, 10*time.Second)
 }
 
+// currentConfig handles a current config.
 func (h *Handler) currentConfig(ctx context.Context) (*config.Config, map[string]any, error) {
 	root, errSnapshot := h.configRoot(ctx)
 	if errSnapshot != nil {
@@ -169,6 +174,7 @@ func (h *Handler) currentConfig(ctx context.Context) (*config.Config, map[string
 	return cfg, root, nil
 }
 
+// refreshConfig refreshes a config.
 func (h *Handler) refreshConfig(ctx context.Context) error {
 	if h == nil || h.runtime == nil {
 		return nil
@@ -184,6 +190,7 @@ func (h *Handler) refreshConfig(ctx context.Context) error {
 	return nil
 }
 
+// refreshAuths refreshes an auths.
 func (h *Handler) refreshAuths(ctx context.Context) error {
 	if h == nil || h.runtime == nil {
 		return nil
@@ -191,6 +198,7 @@ func (h *Handler) refreshAuths(ctx context.Context) error {
 	return h.runtime.ReloadAuths(ctx)
 }
 
+// respondError handles a respond error.
 func respondError(c *gin.Context, status int, code string, err error) {
 	message := strings.TrimSpace(code)
 	if err != nil && strings.TrimSpace(err.Error()) != "" {
@@ -199,6 +207,7 @@ func respondError(c *gin.Context, status int, code string, err error) {
 	c.JSON(status, gin.H{"error": code, "message": message})
 }
 
+// respondOK handles a respond ok.
 func respondOK(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }

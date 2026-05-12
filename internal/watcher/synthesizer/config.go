@@ -47,6 +47,7 @@ func (s *ConfigSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth,
 
 // synthesizeGeminiKeys creates Auth entries for Gemini API keys.
 func (s *ConfigSynthesizer) synthesizeGeminiKeys(ctx *SynthesisContext) []*coreauth.Auth {
+	// Normalize source data before building the derived payload.
 	cfg := ctx.Config
 	now := ctx.Now
 	idGen := ctx.IDGenerator
@@ -105,6 +106,7 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeys(ctx *SynthesisContext) []*corea
 
 // synthesizeClaudeKeys creates Auth entries for Claude API keys.
 func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*coreauth.Auth {
+	// Normalize source data before building the derived payload.
 	cfg := ctx.Config
 	now := ctx.Now
 	idGen := ctx.IDGenerator
@@ -163,6 +165,7 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 
 // synthesizeCodexKeys creates Auth entries for Codex API keys.
 func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreauth.Auth {
+	// Normalize source data before building the derived payload.
 	cfg := ctx.Config
 	now := ctx.Now
 	idGen := ctx.IDGenerator
@@ -334,6 +337,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 
 // synthesizeVertexCompat creates Auth entries for Vertex-compatible providers.
 func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*coreauth.Auth {
+	// Normalize source data before building the derived payload.
 	cfg := ctx.Config
 	now := ctx.Now
 	idGen := ctx.IDGenerator
@@ -393,7 +397,9 @@ type modelEntry interface {
 	GetAlias() string
 }
 
+// buildConfigModels builds a config models.
 func buildConfigModels[T modelEntry](models []T, ownedBy, modelType string, now time.Time) []*registry.ModelInfo {
+	// Normalize source data before building the derived payload.
 	if len(models) == 0 {
 		return nil
 	}
@@ -441,7 +447,9 @@ func buildConfigModels[T modelEntry](models []T, ownedBy, modelType string, now 
 	return out
 }
 
+// buildOpenAICompatibilityModels builds an open ai compatibility models.
 func buildOpenAICompatibilityModels(models []appconfig.OpenAICompatibilityModel, compatName string, now time.Time) []*registry.ModelInfo {
+	// Normalize source data before building the derived payload.
 	if len(models) == 0 {
 		return nil
 	}
@@ -483,6 +491,7 @@ func buildOpenAICompatibilityModels(models []appconfig.OpenAICompatibilityModel,
 	return out
 }
 
+// addConfigModelsToMetadata converts add config models to metadata.
 func addConfigModelsToMetadata(metadata map[string]any, models []*registry.ModelInfo) {
 	if metadata == nil || len(models) == 0 {
 		return
@@ -494,6 +503,7 @@ func addConfigModelsToMetadata(metadata map[string]any, models []*registry.Model
 	metadata[homeConfigModelsMetadataKey] = payload
 }
 
+// modelInfoMetadataPayload handles a model info metadata payload.
 func modelInfoMetadataPayload(models []*registry.ModelInfo) []map[string]any {
 	if len(models) == 0 {
 		return nil

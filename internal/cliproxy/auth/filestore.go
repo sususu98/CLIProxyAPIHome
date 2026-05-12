@@ -127,6 +127,7 @@ func (s *FileTokenStore) Save(ctx context.Context, auth *Auth) (string, error) {
 
 // List enumerates all auth JSON files under the configured directory.
 func (s *FileTokenStore) List(ctx context.Context) ([]*Auth, error) {
+	// Keep validation before state changes so failures leave existing data intact.
 	dir := s.baseDirSnapshot()
 	if dir == "" {
 		return nil, fmt.Errorf("auth filestore: directory not configured")
@@ -173,6 +174,7 @@ func (s *FileTokenStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// resolveDeletePath resolves a delete path.
 func (s *FileTokenStore) resolveDeletePath(id string) (string, error) {
 	if strings.ContainsRune(id, os.PathSeparator) || filepath.IsAbs(id) {
 		return id, nil
@@ -184,7 +186,9 @@ func (s *FileTokenStore) resolveDeletePath(id string) (string, error) {
 	return filepath.Join(dir, id), nil
 }
 
+// readAuthFile reads an auth file.
 func (s *FileTokenStore) readAuthFile(path, baseDir string) (*Auth, error) {
+	// Normalize auth state before updating runtime indexes.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read file: %w", err)
@@ -231,6 +235,7 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*Auth, error) {
 	return auth, nil
 }
 
+// idFor returns an id for.
 func (s *FileTokenStore) idFor(path, baseDir string) string {
 	id := path
 	if baseDir != "" {
@@ -245,7 +250,9 @@ func (s *FileTokenStore) idFor(path, baseDir string) string {
 	return id
 }
 
+// resolveAuthPath resolves an auth path.
 func (s *FileTokenStore) resolveAuthPath(auth *Auth) (string, error) {
+	// Normalize auth state before updating runtime indexes.
 	if auth == nil {
 		return "", fmt.Errorf("auth filestore: auth is nil")
 	}
@@ -276,6 +283,7 @@ func (s *FileTokenStore) resolveAuthPath(auth *Auth) (string, error) {
 	return filepath.Join(dir, auth.ID), nil
 }
 
+// labelFor returns a label for.
 func (s *FileTokenStore) labelFor(metadata map[string]any) string {
 	if metadata == nil {
 		return ""
@@ -292,12 +300,14 @@ func (s *FileTokenStore) labelFor(metadata map[string]any) string {
 	return ""
 }
 
+// baseDirSnapshot handles a base dir snapshot.
 func (s *FileTokenStore) baseDirSnapshot() string {
 	s.dirLock.RLock()
 	defer s.dirLock.RUnlock()
 	return s.baseDir
 }
 
+// extractAccessToken extracts an access token.
 func extractAccessToken(metadata map[string]any) string {
 	if at, ok := metadata["access_token"].(string); ok {
 		if v := strings.TrimSpace(at); v != "" {
@@ -314,7 +324,9 @@ func extractAccessToken(metadata map[string]any) string {
 	return ""
 }
 
+// refreshGeminiAccessToken converts refresh gemini access token.
 func refreshGeminiAccessToken(tokenMap map[string]any, httpClient *http.Client) (string, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	refreshToken, _ := tokenMap["refresh_token"].(string)
 	clientID, _ := tokenMap["client_id"].(string)
 	clientSecret, _ := tokenMap["client_secret"].(string)
@@ -376,7 +388,9 @@ func jsonEqual(a, b []byte) bool {
 	return deepEqualJSON(objA, objB)
 }
 
+// deepEqualJSON handles a deep equal json.
 func deepEqualJSON(a, b any) bool {
+	// Keep validation before state changes so failures leave existing data intact.
 	switch valA := a.(type) {
 	case map[string]any:
 		valB, ok := b.(map[string]any)

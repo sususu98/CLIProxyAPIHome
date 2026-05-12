@@ -9,7 +9,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// LoadConfigAsRuntimeConfig loads a config as runtime config.
 func (r *Repository) LoadConfigAsRuntimeConfig(ctx context.Context) (*appconfig.Config, []byte, error) {
+	// Normalize source data before building the derived payload.
 	snapshot, errSnapshot := r.LoadConfigSnapshot(ctx)
 	if errSnapshot != nil {
 		return nil, nil, errSnapshot
@@ -34,6 +36,7 @@ func (r *Repository) LoadConfigAsRuntimeConfig(ctx context.Context) (*appconfig.
 	return cfg, payload, nil
 }
 
+// ConfigRootFromSnapshot derives config root from snapshot.
 func ConfigRootFromSnapshot(snapshot map[string]json.RawMessage) (map[string]any, error) {
 	root := make(map[string]any, len(snapshot))
 	for key, raw := range snapshot {
@@ -51,7 +54,9 @@ func ConfigRootFromSnapshot(snapshot map[string]json.RawMessage) (map[string]any
 	return root, nil
 }
 
+// RuntimeConfigFromRoot derives runtime config from root.
 func RuntimeConfigFromRoot(root map[string]any) (*appconfig.Config, []byte, error) {
+	// Normalize source data before building the derived payload.
 	if _, errSecret := normalizeConfigRootSecrets(root); errSecret != nil {
 		return nil, nil, errSecret
 	}
@@ -85,7 +90,9 @@ func RuntimeConfigFromRoot(root map[string]any) (*appconfig.Config, []byte, erro
 	return cfg, data, nil
 }
 
+// normalizeConfigRootSecrets normalizes a config root secrets.
 func normalizeConfigRootSecrets(root map[string]any) (bool, error) {
+	// Normalize source data before building the derived payload.
 	if len(root) == 0 {
 		return false, nil
 	}
@@ -117,6 +124,7 @@ func normalizeConfigRootSecrets(root map[string]any) (bool, error) {
 	return true, nil
 }
 
+// isClusterCredentialConfigKey reports whether cluster credential config key.
 func isClusterCredentialConfigKey(key string) bool {
 	switch strings.TrimSpace(key) {
 	case "auth-dir", "gemini-api-key", "vertex-api-key", "codex-api-key", "claude-api-key", "openai-compatibility":

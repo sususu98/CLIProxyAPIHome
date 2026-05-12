@@ -64,6 +64,7 @@ type Manager struct {
 	refreshLoop   *authAutoRefreshLoop
 }
 
+// NewManager creates a new manager.
 func NewManager(store Store, selector Selector, _ any) *Manager {
 	if selector == nil {
 		selector = &RoundRobinSelector{}
@@ -81,6 +82,7 @@ func NewManager(store Store, selector Selector, _ any) *Manager {
 	return mgr
 }
 
+// SetRoundTripperProvider sets a round tripper provider.
 func (m *Manager) SetRoundTripperProvider(p RoundTripperProvider) {
 	if m == nil {
 		return
@@ -90,6 +92,7 @@ func (m *Manager) SetRoundTripperProvider(p RoundTripperProvider) {
 	m.mu.Unlock()
 }
 
+// roundTripperFor returns a round tripper for.
 func (m *Manager) roundTripperFor(auth *Auth) http.RoundTripper {
 	m.mu.RLock()
 	p := m.rtProvider
@@ -100,6 +103,7 @@ func (m *Manager) roundTripperFor(auth *Auth) http.RoundTripper {
 	return p.RoundTripperFor(auth)
 }
 
+// SetFullAuthResolver sets a full auth resolver.
 func (m *Manager) SetFullAuthResolver(resolver FullAuthResolver) {
 	if m == nil {
 		return
@@ -109,6 +113,7 @@ func (m *Manager) SetFullAuthResolver(resolver FullAuthResolver) {
 	m.mu.Unlock()
 }
 
+// SetStore sets a store.
 func (m *Manager) SetStore(store Store) {
 	if m == nil {
 		return
@@ -118,6 +123,7 @@ func (m *Manager) SetStore(store Store) {
 	m.mu.Unlock()
 }
 
+// SetConfig sets a config.
 func (m *Manager) SetConfig(cfg *internalconfig.Config) {
 	if m == nil {
 		return
@@ -128,6 +134,7 @@ func (m *Manager) SetConfig(cfg *internalconfig.Config) {
 	m.runtimeConfig.Store(cfg)
 }
 
+// SetSelector sets a selector.
 func (m *Manager) SetSelector(selector Selector) {
 	if m == nil {
 		return
@@ -150,7 +157,9 @@ func (m *Manager) SetSelector(selector Selector) {
 	}
 }
 
+// Register wires package handlers into the provided registry.
 func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if m == nil {
 		return nil, fmt.Errorf("auth manager: nil manager")
 	}
@@ -194,7 +203,9 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 	return next.Clone(), nil
 }
 
+// Delete handles delete.
 func (m *Manager) Delete(ctx context.Context, id string) error {
+	// Validate request inputs before mutating persisted state.
 	if m == nil {
 		return fmt.Errorf("auth manager: nil manager")
 	}
@@ -242,7 +253,9 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	return m.store.Delete(ctx, id)
 }
 
+// Update updates the value.
 func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if m == nil {
 		return nil, fmt.Errorf("auth manager: nil manager")
 	}
@@ -293,6 +306,7 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	return next.Clone(), nil
 }
 
+// persist persists the value.
 func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 	if m == nil || m.store == nil || auth == nil {
 		return nil
@@ -318,6 +332,7 @@ func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 	return errSave
 }
 
+// List returns the available entries.
 func (m *Manager) List() []*Auth {
 	if m == nil {
 		return nil
@@ -334,6 +349,7 @@ func (m *Manager) List() []*Auth {
 	return out
 }
 
+// GetByID returns a by id.
 func (m *Manager) GetByID(id string) (*Auth, bool) {
 	if m == nil {
 		return nil, false
@@ -351,6 +367,7 @@ func (m *Manager) GetByID(id string) (*Auth, bool) {
 	return a.Clone(), true
 }
 
+// GetByIndex returns a by index.
 func (m *Manager) GetByIndex(index string) (*Auth, bool) {
 	if m == nil {
 		return nil, false
@@ -368,6 +385,7 @@ func (m *Manager) GetByIndex(index string) (*Auth, bool) {
 	return a.Clone(), true
 }
 
+// RefreshSchedulerEntry refreshes refresh scheduler entry.
 func (m *Manager) RefreshSchedulerEntry(authID string) {
 	if m == nil || m.scheduler == nil {
 		return
@@ -379,11 +397,13 @@ func (m *Manager) RefreshSchedulerEntry(authID string) {
 	m.scheduler.upsertAuth(auth)
 }
 
+// ReconcileRegistryModelStates reconciles a registry model states.
 func (m *Manager) ReconcileRegistryModelStates(_ context.Context, _ string) {
 	// CLIProxyAPIHome does not execute upstream requests, so it does not maintain
 	// per-model runtime state beyond the shared model registry.
 }
 
+// ensureRequestedModelMetadata ensures a requested model metadata.
 func ensureRequestedModelMetadata(opts Options, requestedModel string) Options {
 	requestedModel = strings.TrimSpace(requestedModel)
 	if requestedModel == "" {
@@ -399,6 +419,7 @@ func ensureRequestedModelMetadata(opts Options, requestedModel string) Options {
 	return opts
 }
 
+// isBuiltInSelector reports whether built in selector.
 func isBuiltInSelector(selector Selector) bool {
 	switch selector.(type) {
 	case *FillFirstSelector, *RoundRobinSelector:
@@ -408,6 +429,7 @@ func isBuiltInSelector(selector Selector) bool {
 	}
 }
 
+// selectionArgForSelector returns a selection arg for selector.
 func selectionArgForSelector(selector Selector, routeModel string) string {
 	if isBuiltInSelector(selector) {
 		return ""
@@ -415,6 +437,7 @@ func selectionArgForSelector(selector Selector, routeModel string) string {
 	return routeModel
 }
 
+// useSchedulerFastPath reports whether use scheduler fast path.
 func (m *Manager) useSchedulerFastPath() bool {
 	if m == nil || m.scheduler == nil {
 		return false
@@ -425,7 +448,9 @@ func (m *Manager) useSchedulerFastPath() bool {
 	return isBuiltInSelector(selector)
 }
 
+// Dispatch processes dispatch.
 func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedModel string, opts Options) (*DispatchDecision, error) {
+	// Build the candidate view before applying availability rules.
 	if m == nil {
 		return nil, &Error{Code: "provider_not_found", Message: "manager is nil"}
 	}
@@ -555,7 +580,9 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 	}
 }
 
+// resolveFullDispatchAuth resolves a full dispatch auth.
 func (m *Manager) resolveFullDispatchAuth(ctx context.Context, auth *Auth) (*Auth, bool, error) {
+	// Build the candidate view before applying availability rules.
 	if auth == nil {
 		return nil, false, nil
 	}
@@ -585,7 +612,9 @@ func (m *Manager) resolveFullDispatchAuth(ctx context.Context, auth *Auth) (*Aut
 	return fullAuth, true, nil
 }
 
+// resolveFullRefreshAuth resolves a full refresh auth.
 func (m *Manager) resolveFullRefreshAuth(ctx context.Context, auth *Auth) (*Auth, bool, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if auth == nil {
 		return nil, false, nil
 	}
@@ -615,6 +644,7 @@ func (m *Manager) resolveFullRefreshAuth(ctx context.Context, auth *Auth) (*Auth
 	return fullAuth, true, nil
 }
 
+// executionModelCandidates handles an execution model candidates.
 func (m *Manager) executionModelCandidates(auth *Auth, routeModel string) []string {
 	requestedModel := rewriteModelForAuth(routeModel, auth)
 	requestedModel = m.applyOAuthModelAlias(auth, requestedModel)
@@ -631,7 +661,9 @@ func (m *Manager) executionModelCandidates(auth *Auth, routeModel string) []stri
 	return []string{resolved}
 }
 
+// shouldRefresh reports whether should refresh.
 func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
+	// Resolve credential context before calling upstream OAuth services.
 	if a == nil {
 		return false
 	}
@@ -686,6 +718,7 @@ func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
 	return true
 }
 
+// markRefreshPending handles a mark refresh pending.
 func (m *Manager) markRefreshPending(id string, now time.Time) bool {
 	m.mu.Lock()
 	auth, ok := m.auths[id]
@@ -705,6 +738,7 @@ func (m *Manager) markRefreshPending(id string, now time.Time) bool {
 	return true
 }
 
+// authPreferredInterval handles an auth preferred interval.
 func authPreferredInterval(a *Auth) time.Duration {
 	if a == nil {
 		return 0
@@ -718,6 +752,7 @@ func authPreferredInterval(a *Auth) time.Duration {
 	return 0
 }
 
+// durationFromMetadata derives duration from metadata.
 func durationFromMetadata(meta map[string]any, keys ...string) time.Duration {
 	if len(meta) == 0 {
 		return 0
@@ -732,6 +767,7 @@ func durationFromMetadata(meta map[string]any, keys ...string) time.Duration {
 	return 0
 }
 
+// durationFromAttributes derives duration from attributes.
 func durationFromAttributes(attrs map[string]string, keys ...string) time.Duration {
 	if len(attrs) == 0 {
 		return 0
@@ -746,7 +782,9 @@ func durationFromAttributes(attrs map[string]string, keys ...string) time.Durati
 	return 0
 }
 
+// parseDurationValue parses a duration value.
 func parseDurationValue(val any) time.Duration {
+	// Validate input data before converting it into runtime state.
 	switch v := val.(type) {
 	case time.Duration:
 		if v <= 0 {
@@ -809,6 +847,7 @@ func parseDurationValue(val any) time.Duration {
 	return 0
 }
 
+// parseDurationString parses a duration string.
 func parseDurationString(raw string) time.Duration {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -823,6 +862,7 @@ func parseDurationString(raw string) time.Duration {
 	return 0
 }
 
+// authLastRefreshTimestamp handles an auth last refresh timestamp.
 func authLastRefreshTimestamp(a *Auth) (time.Time, bool) {
 	if a == nil {
 		return time.Time{}, false
@@ -844,6 +884,7 @@ func authLastRefreshTimestamp(a *Auth) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// lookupMetadataTime handles a lookup metadata time.
 func lookupMetadataTime(meta map[string]any, keys ...string) (time.Time, bool) {
 	for _, key := range keys {
 		if val, ok := meta[key]; ok {
@@ -855,6 +896,7 @@ func lookupMetadataTime(meta map[string]any, keys ...string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// queueRefreshReschedule queues a refresh reschedule.
 func (m *Manager) queueRefreshReschedule(authID string) {
 	if m == nil || authID == "" {
 		return
@@ -868,7 +910,9 @@ func (m *Manager) queueRefreshReschedule(authID string) {
 	loop.queueReschedule(authID)
 }
 
+// StartAutoRefresh starts an auto refresh.
 func (m *Manager) StartAutoRefresh(parent context.Context, interval time.Duration) {
+	// Resolve credential context before calling upstream OAuth services.
 	if m == nil {
 		return
 	}
@@ -900,14 +944,17 @@ func (m *Manager) StartAutoRefresh(parent context.Context, interval time.Duratio
 	go loop.run(ctx)
 }
 
+// StopAutoRefresh stops an auto refresh.
 func (m *Manager) StopAutoRefresh() {
 	m.stopAutoRefresh(false)
 }
 
+// Shutdown manages shutdown.
 func (m *Manager) Shutdown() {
 	m.stopAutoRefresh(true)
 }
 
+// stopAutoRefresh stops an auto refresh.
 func (m *Manager) stopAutoRefresh(stopSelector bool) {
 	if m == nil {
 		return
@@ -931,6 +978,7 @@ func (m *Manager) stopAutoRefresh(stopSelector bool) {
 // RefreshNow forces a best-effort credential refresh for the given auth.
 // It updates the in-memory record and persists it when enabled.
 func (m *Manager) RefreshNow(ctx context.Context, authIndex string) (*Auth, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if m == nil {
 		return nil, fmt.Errorf("auth manager: nil manager")
 	}
@@ -1018,6 +1066,7 @@ func (m *Manager) RefreshNow(ctx context.Context, authIndex string) (*Auth, erro
 
 // RefreshAuthCredential refreshes a full auth value without updating memory or persistence.
 func (m *Manager) RefreshAuthCredential(ctx context.Context, target *Auth) (*Auth, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if m == nil {
 		return nil, fmt.Errorf("auth manager: nil manager")
 	}
@@ -1059,7 +1108,9 @@ func (m *Manager) RefreshAuthCredential(ctx context.Context, target *Auth) (*Aut
 	return updated, nil
 }
 
+// refreshAuth refreshes an auth.
 func (m *Manager) refreshAuth(ctx context.Context, authID string) {
+	// Resolve credential context before calling upstream OAuth services.
 	if m == nil {
 		return
 	}

@@ -19,6 +19,7 @@ type RuntimeAdapter struct {
 	mu        sync.RWMutex
 }
 
+// NewRuntimeAdapter creates a new runtime adapter.
 func NewRuntimeAdapter(repo *Repository) *RuntimeAdapter {
 	return &RuntimeAdapter{
 		repo:      repo,
@@ -27,11 +28,14 @@ func NewRuntimeAdapter(repo *Repository) *RuntimeAdapter {
 	}
 }
 
+// Enabled handles an enabled.
 func (a *RuntimeAdapter) Enabled() bool {
 	return a != nil && a.repo != nil
 }
 
+// LoadIndex loads an index.
 func (a *RuntimeAdapter) LoadIndex(ctx context.Context) error {
+	// Validate input data before converting it into runtime state.
 	if !a.Enabled() {
 		return fmt.Errorf("cluster runtime adapter is disabled")
 	}
@@ -60,10 +64,12 @@ func (a *RuntimeAdapter) LoadIndex(ctx context.Context) error {
 	return nil
 }
 
+// LoadAuthIndex loads an auth index.
 func (a *RuntimeAdapter) LoadAuthIndex(ctx context.Context) error {
 	return a.LoadIndex(ctx)
 }
 
+// LoadConfigYAML loads a config yaml.
 func (a *RuntimeAdapter) LoadConfigYAML(ctx context.Context) ([]byte, error) {
 	if !a.Enabled() {
 		return nil, fmt.Errorf("cluster runtime adapter is disabled")
@@ -75,6 +81,7 @@ func (a *RuntimeAdapter) LoadConfigYAML(ctx context.Context) ([]byte, error) {
 	return payload, nil
 }
 
+// StoreUsagePayload stores an usage payload.
 func (a *RuntimeAdapter) StoreUsagePayload(ctx context.Context, payload string) error {
 	if !a.Enabled() {
 		return fmt.Errorf("cluster runtime adapter is disabled")
@@ -83,6 +90,7 @@ func (a *RuntimeAdapter) StoreUsagePayload(ctx context.Context, payload string) 
 	return errAppend
 }
 
+// List returns the available entries.
 func (a *RuntimeAdapter) List(ctx context.Context) ([]*coreauth.Auth, error) {
 	if !a.Enabled() {
 		return nil, fmt.Errorf("cluster runtime adapter is disabled")
@@ -97,7 +105,9 @@ func (a *RuntimeAdapter) List(ctx context.Context) ([]*coreauth.Auth, error) {
 	return auths, nil
 }
 
+// Save stores save.
 func (a *RuntimeAdapter) Save(ctx context.Context, auth *coreauth.Auth) (string, error) {
+	// Prepare filesystem state before committing the write.
 	if !a.Enabled() {
 		return "", fmt.Errorf("cluster runtime adapter is disabled")
 	}
@@ -125,6 +135,7 @@ func (a *RuntimeAdapter) Save(ctx context.Context, auth *coreauth.Auth) (string,
 	return auth.ID, nil
 }
 
+// Delete handles delete.
 func (a *RuntimeAdapter) Delete(ctx context.Context, id string) error {
 	if !a.Enabled() {
 		return fmt.Errorf("cluster runtime adapter is disabled")
@@ -140,7 +151,9 @@ func (a *RuntimeAdapter) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// RefreshAuthIndex refreshes refresh auth index.
 func (a *RuntimeAdapter) RefreshAuthIndex(ctx context.Context, uuid string) error {
+	// Resolve credential context before calling upstream OAuth services.
 	if !a.Enabled() {
 		return fmt.Errorf("cluster runtime adapter is disabled")
 	}
@@ -172,6 +185,7 @@ func (a *RuntimeAdapter) RefreshAuthIndex(ctx context.Context, uuid string) erro
 	return nil
 }
 
+// normalizeAuthUUID normalizes an auth uuid.
 func normalizeAuthUUID(auth *coreauth.Auth) *coreauth.Auth {
 	if auth == nil {
 		return nil
@@ -185,6 +199,7 @@ func normalizeAuthUUID(auth *coreauth.Auth) *coreauth.Auth {
 	return auth
 }
 
+// ApplyEvent updates apply event.
 func (a *RuntimeAdapter) ApplyEvent(ctx context.Context, event ClusterEventRecord) error {
 	if !strings.EqualFold(strings.TrimSpace(event.Scope), "auth") {
 		return nil
@@ -200,6 +215,7 @@ func (a *RuntimeAdapter) ApplyEvent(ctx context.Context, event ClusterEventRecor
 	return a.RefreshAuthIndex(ctx, uuid)
 }
 
+// RemoveAuthIndex removes an auth index.
 func (a *RuntimeAdapter) RemoveAuthIndex(uuid string) {
 	if a == nil {
 		return
@@ -218,7 +234,9 @@ func (a *RuntimeAdapter) RemoveAuthIndex(uuid string) {
 	a.mu.Unlock()
 }
 
+// GetFullAuth returns a full auth.
 func (a *RuntimeAdapter) GetFullAuth(ctx context.Context, uuid string) (*coreauth.Auth, error) {
+	// Normalize auth state before updating runtime indexes.
 	if !a.Enabled() {
 		return nil, fmt.Errorf("cluster runtime adapter is disabled")
 	}
@@ -257,6 +275,7 @@ func (a *RuntimeAdapter) GetFullAuth(ctx context.Context, uuid string) (*coreaut
 	return auth.Clone(), nil
 }
 
+// InvalidateFullAuth invalidates a full auth.
 func (a *RuntimeAdapter) InvalidateFullAuth(uuid string) {
 	if a == nil {
 		return
@@ -272,6 +291,7 @@ func (a *RuntimeAdapter) InvalidateFullAuth(uuid string) {
 	a.mu.Unlock()
 }
 
+// ListMinimalAuths returns a minimal auths.
 func (a *RuntimeAdapter) ListMinimalAuths() []*coreauth.Auth {
 	if a == nil {
 		return nil
@@ -291,7 +311,9 @@ func (a *RuntimeAdapter) ListMinimalAuths() []*coreauth.Auth {
 	return out
 }
 
+// authIndexFromRecord derives auth index from record.
 func authIndexFromRecord(record *AuthRecord, auth *coreauth.Auth) AuthIndex {
+	// Normalize auth state before updating runtime indexes.
 	item := AuthIndex{}
 	if record != nil {
 		item.UUID = strings.TrimSpace(record.UUID)
@@ -317,7 +339,9 @@ func authIndexFromRecord(record *AuthRecord, auth *coreauth.Auth) AuthIndex {
 	return item
 }
 
+// authFromIndex derives auth from index.
 func authFromIndex(item AuthIndex) *coreauth.Auth {
+	// Normalize auth state before updating runtime indexes.
 	uuid := strings.TrimSpace(item.UUID)
 	if uuid == "" {
 		uuid = strings.TrimSpace(item.ID)
@@ -349,6 +373,7 @@ func authFromIndex(item AuthIndex) *coreauth.Auth {
 	}
 }
 
+// cloneStringMap clones a string map.
 func cloneStringMap(in map[string]string) map[string]string {
 	if len(in) == 0 {
 		return nil

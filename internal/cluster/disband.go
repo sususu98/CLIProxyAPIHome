@@ -75,7 +75,9 @@ type disbandOpenAICompatGroup struct {
 	FirstAuthID string
 }
 
+// Disband restores local files from the cluster database.
 func Disband(ctx context.Context, opts DisbandOptions) (*DisbandResult, error) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if opts.Repository == nil {
 		return nil, fmt.Errorf("cluster disband repository is required")
 	}
@@ -151,6 +153,7 @@ func Disband(ctx context.Context, opts DisbandOptions) (*DisbandResult, error) {
 	return result, nil
 }
 
+// disbandAuthDirValue handles a disband auth dir value.
 func disbandAuthDirValue(root map[string]any, auths []*coreauth.Auth, explicit string) string {
 	if value := strings.TrimSpace(explicit); value != "" {
 		return value
@@ -166,6 +169,7 @@ func disbandAuthDirValue(root map[string]any, auths []*coreauth.Auth, explicit s
 	return defaultDisbandAuthDir
 }
 
+// inferDisbandAuthDir infers a disband auth dir.
 func inferDisbandAuthDir(auths []*coreauth.Auth) string {
 	for _, auth := range auths {
 		if !isDisbandOAuthAuth(auth) {
@@ -186,7 +190,9 @@ func inferDisbandAuthDir(auths []*coreauth.Auth) string {
 	return ""
 }
 
+// disbandApplyCredentialConfig handles a disband apply credential config.
 func disbandApplyCredentialConfig(root map[string]any, auths []*coreauth.Auth, result *DisbandResult) {
+	// Normalize source data before building the derived payload.
 	geminiKeys := make([]appconfig.GeminiKey, 0)
 	vertexKeys := make([]appconfig.VertexCompatKey, 0)
 	codexKeys := make([]appconfig.CodexKey, 0)
@@ -244,6 +250,7 @@ func disbandApplyCredentialConfig(root map[string]any, auths []*coreauth.Auth, r
 	}
 }
 
+// disbandConfigAuthKind handles a disband config auth kind.
 func disbandConfigAuthKind(auth *coreauth.Auth) string {
 	if auth == nil || auth.Attributes == nil {
 		return ""
@@ -265,6 +272,7 @@ func disbandConfigAuthKind(auth *coreauth.Auth) string {
 	}
 }
 
+// isDisbandOpenAICompatAuth reports whether disband open ai compat auth.
 func isDisbandOpenAICompatAuth(auth *coreauth.Auth) bool {
 	if auth == nil || auth.Attributes == nil || auth.Provider == "vertex" {
 		return false
@@ -276,6 +284,7 @@ func isDisbandOpenAICompatAuth(auth *coreauth.Auth) bool {
 	return strings.HasPrefix(strings.TrimSpace(attrs["source"]), "config:") && strings.TrimSpace(attrs["provider_key"]) != ""
 }
 
+// disbandGeminiKey handles a disband gemini key.
 func disbandGeminiKey(auth *coreauth.Auth) appconfig.GeminiKey {
 	return appconfig.GeminiKey{
 		APIKey:         authAttribute(auth, "api_key"),
@@ -290,6 +299,7 @@ func disbandGeminiKey(auth *coreauth.Auth) appconfig.GeminiKey {
 	}
 }
 
+// disbandVertexKey handles a disband vertex key.
 func disbandVertexKey(auth *coreauth.Auth) appconfig.VertexCompatKey {
 	return appconfig.VertexCompatKey{
 		APIKey:         authAttribute(auth, "api_key"),
@@ -303,6 +313,7 @@ func disbandVertexKey(auth *coreauth.Auth) appconfig.VertexCompatKey {
 	}
 }
 
+// disbandCodexKey handles a disband codex key.
 func disbandCodexKey(auth *coreauth.Auth) appconfig.CodexKey {
 	return appconfig.CodexKey{
 		APIKey:         authAttribute(auth, "api_key"),
@@ -318,6 +329,7 @@ func disbandCodexKey(auth *coreauth.Auth) appconfig.CodexKey {
 	}
 }
 
+// disbandClaudeKey handles a disband claude key.
 func disbandClaudeKey(auth *coreauth.Auth) appconfig.ClaudeKey {
 	return appconfig.ClaudeKey{
 		APIKey:         authAttribute(auth, "api_key"),
@@ -332,7 +344,9 @@ func disbandClaudeKey(auth *coreauth.Auth) appconfig.ClaudeKey {
 	}
 }
 
+// disbandAddOpenAICompat handles a disband add open ai compat.
 func disbandAddOpenAICompat(groups map[string]*disbandOpenAICompatGroup, auth *coreauth.Auth) {
+	// Keep validation before state changes so failures leave existing data intact.
 	if auth == nil {
 		return
 	}
@@ -392,6 +406,7 @@ func disbandAddOpenAICompat(groups map[string]*disbandOpenAICompatGroup, auth *c
 	})
 }
 
+// disbandGeminiModels handles a disband gemini models.
 func disbandGeminiModels(auth *coreauth.Auth) []appconfig.GeminiModel {
 	pairs := disbandModelPairs(auth)
 	out := make([]appconfig.GeminiModel, 0, len(pairs))
@@ -401,6 +416,7 @@ func disbandGeminiModels(auth *coreauth.Auth) []appconfig.GeminiModel {
 	return out
 }
 
+// disbandVertexModels handles a disband vertex models.
 func disbandVertexModels(auth *coreauth.Auth) []appconfig.VertexCompatModel {
 	pairs := disbandModelPairs(auth)
 	out := make([]appconfig.VertexCompatModel, 0, len(pairs))
@@ -410,6 +426,7 @@ func disbandVertexModels(auth *coreauth.Auth) []appconfig.VertexCompatModel {
 	return out
 }
 
+// disbandCodexModels handles a disband codex models.
 func disbandCodexModels(auth *coreauth.Auth) []appconfig.CodexModel {
 	pairs := disbandModelPairs(auth)
 	out := make([]appconfig.CodexModel, 0, len(pairs))
@@ -419,6 +436,7 @@ func disbandCodexModels(auth *coreauth.Auth) []appconfig.CodexModel {
 	return out
 }
 
+// disbandClaudeModels handles a disband claude models.
 func disbandClaudeModels(auth *coreauth.Auth) []appconfig.ClaudeModel {
 	pairs := disbandModelPairs(auth)
 	out := make([]appconfig.ClaudeModel, 0, len(pairs))
@@ -428,6 +446,7 @@ func disbandClaudeModels(auth *coreauth.Auth) []appconfig.ClaudeModel {
 	return out
 }
 
+// disbandOpenAIModels handles a disband open ai models.
 func disbandOpenAIModels(auth *coreauth.Auth) []appconfig.OpenAICompatibilityModel {
 	pairs := disbandModelPairs(auth)
 	out := make([]appconfig.OpenAICompatibilityModel, 0, len(pairs))
@@ -437,7 +456,9 @@ func disbandOpenAIModels(auth *coreauth.Auth) []appconfig.OpenAICompatibilityMod
 	return out
 }
 
+// disbandModelPairs handles a disband model pairs.
 func disbandModelPairs(auth *coreauth.Auth) []disbandModelPair {
+	// Normalize source data before building the derived payload.
 	if auth == nil || auth.Metadata == nil {
 		return nil
 	}
@@ -482,6 +503,7 @@ func disbandModelPairs(auth *coreauth.Auth) []disbandModelPair {
 	return out
 }
 
+// isNonUserCodexBuiltin reports whether non user codex builtin.
 func isNonUserCodexBuiltin(modelMap map[string]any, alias string) bool {
 	if !strings.EqualFold(alias, "gpt-image-2") {
 		return false
@@ -490,6 +512,7 @@ func isNonUserCodexBuiltin(modelMap map[string]any, alias string) bool {
 	return ok && !userDefined
 }
 
+// disbandThinking handles a disband thinking.
 func disbandThinking(value any) *registry.ThinkingSupport {
 	if value == nil {
 		return nil
@@ -508,6 +531,7 @@ func disbandThinking(value any) *registry.ThinkingSupport {
 	return &thinking
 }
 
+// disbandHeaders handles a disband headers.
 func disbandHeaders(auth *coreauth.Auth) map[string]string {
 	if auth == nil || len(auth.Attributes) == 0 {
 		return nil
@@ -530,6 +554,7 @@ func disbandHeaders(auth *coreauth.Auth) map[string]string {
 	return headers
 }
 
+// disbandHeadersKey handles a disband headers key.
 func disbandHeadersKey(headers map[string]string) string {
 	if len(headers) == 0 {
 		return ""
@@ -546,6 +571,7 @@ func disbandHeadersKey(headers map[string]string) string {
 	return strings.Join(parts, "\n")
 }
 
+// disbandPriority handles a disband priority.
 func disbandPriority(auth *coreauth.Auth) int {
 	priority := strings.TrimSpace(authAttribute(auth, "priority"))
 	if priority == "" {
@@ -558,6 +584,7 @@ func disbandPriority(auth *coreauth.Auth) int {
 	return value
 }
 
+// disbandDisableCooling handles a disband disable cooling.
 func disbandDisableCooling(auth *coreauth.Auth) bool {
 	if auth == nil || auth.Metadata == nil {
 		return false
@@ -570,6 +597,7 @@ func disbandDisableCooling(auth *coreauth.Auth) bool {
 	return false
 }
 
+// disbandExcludedModels handles a disband excluded models.
 func disbandExcludedModels(auth *coreauth.Auth) []string {
 	raw := strings.TrimSpace(authAttribute(auth, "excluded_models"))
 	if raw == "" {
@@ -593,6 +621,7 @@ func disbandExcludedModels(auth *coreauth.Auth) []string {
 	return out
 }
 
+// authAttribute handles an auth attribute.
 func authAttribute(auth *coreauth.Auth, key string) string {
 	if auth == nil || auth.Attributes == nil {
 		return ""
@@ -600,7 +629,9 @@ func authAttribute(auth *coreauth.Auth, key string) string {
 	return strings.TrimSpace(auth.Attributes[key])
 }
 
+// writeDisbandAuthFiles writes a disband auth files.
 func writeDisbandAuthFiles(auths []*coreauth.Auth, authDir string) (int, error) {
+	// Normalize auth state before updating runtime indexes.
 	authDir = strings.TrimSpace(authDir)
 	if authDir == "" {
 		return 0, nil
@@ -648,6 +679,7 @@ func writeDisbandAuthFiles(auths []*coreauth.Auth, authDir string) (int, error) 
 	return count, nil
 }
 
+// isDisbandOAuthAuth reports whether disband o auth auth.
 func isDisbandOAuthAuth(auth *coreauth.Auth) bool {
 	if auth == nil || auth.Metadata == nil {
 		return false
@@ -670,7 +702,9 @@ func isDisbandOAuthAuth(auth *coreauth.Auth) bool {
 	return true
 }
 
+// disbandAuthFileName handles a disband auth file name.
 func disbandAuthFileName(auth *coreauth.Auth) string {
+	// Normalize auth state before updating runtime indexes.
 	if auth == nil {
 		return ""
 	}
@@ -701,6 +735,7 @@ func disbandAuthFileName(auth *coreauth.Auth) string {
 	return ""
 }
 
+// sanitizeDisbandRelativePath sanitizes a disband relative path.
 func sanitizeDisbandRelativePath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -719,6 +754,7 @@ func sanitizeDisbandRelativePath(path string) string {
 	return path
 }
 
+// disbandAuthFilePath handles a disband auth file path.
 func disbandAuthFilePath(authDir, relName string) (string, error) {
 	baseDir := filepath.Clean(authDir)
 	fullPath := filepath.Clean(filepath.Join(baseDir, relName))
@@ -732,6 +768,7 @@ func disbandAuthFilePath(authDir, relName string) (string, error) {
 	return fullPath, nil
 }
 
+// writeDisbandFile writes a disband file.
 func writeDisbandFile(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if dir != "." && dir != "" {
@@ -742,6 +779,7 @@ func writeDisbandFile(path string, data []byte, perm os.FileMode) error {
 	return os.WriteFile(path, data, perm)
 }
 
+// cloneAnyMap clones an any map.
 func cloneAnyMap(in map[string]any) map[string]any {
 	if len(in) == 0 {
 		return make(map[string]any)
@@ -753,6 +791,7 @@ func cloneAnyMap(in map[string]any) map[string]any {
 	return out
 }
 
+// stringFromAny derives string from any.
 func stringFromAny(value any) string {
 	switch typed := value.(type) {
 	case string:
@@ -769,6 +808,7 @@ func stringFromAny(value any) string {
 	}
 }
 
+// boolFromAny derives bool from any.
 func boolFromAny(value any) (bool, bool) {
 	switch typed := value.(type) {
 	case bool:

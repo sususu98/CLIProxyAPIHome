@@ -12,6 +12,7 @@ import (
 
 type JSONB []byte
 
+// Value converts the value for database storage.
 func (j JSONB) Value() (driver.Value, error) {
 	if len(j) == 0 {
 		return nil, nil
@@ -22,6 +23,7 @@ func (j JSONB) Value() (driver.Value, error) {
 	return string(j), nil
 }
 
+// Scan loads the value from database storage.
 func (j *JSONB) Scan(value any) error {
 	if j == nil {
 		return fmt.Errorf("jsonb scan target is nil")
@@ -41,6 +43,7 @@ func (j *JSONB) Scan(value any) error {
 	}
 }
 
+// MarshalJSON encodes a json.
 func (j JSONB) MarshalJSON() ([]byte, error) {
 	if len(j) == 0 {
 		return []byte("null"), nil
@@ -48,6 +51,7 @@ func (j JSONB) MarshalJSON() ([]byte, error) {
 	return j, nil
 }
 
+// UnmarshalJSON decodes a json.
 func (j *JSONB) UnmarshalJSON(data []byte) error {
 	if j == nil {
 		return fmt.Errorf("jsonb unmarshal target is nil")
@@ -87,6 +91,7 @@ type AuthRecord struct {
 	DeletedAt        gorm.DeletedAt  `gorm:"column:deleted_at;index;index:idx_auth_active_order,priority:1"`
 }
 
+// TableName returns the database table name.
 func (AuthRecord) TableName() string {
 	return "auth"
 }
@@ -99,6 +104,7 @@ type ConfigRecord struct {
 	UpdatedAt time.Time `gorm:"column:updated_at"`
 }
 
+// TableName returns the database table name.
 func (ConfigRecord) TableName() string {
 	return "config"
 }
@@ -112,6 +118,7 @@ type ClusterNodeRecord struct {
 	LastSeenAt time.Time `gorm:"column:last_seen_at;index:idx_cluster_auth_lookup,priority:3;index:idx_cluster_live_nodes,priority:1;index:idx_cluster_master_nodes,priority:2"`
 }
 
+// TableName returns the database table name.
 func (ClusterNodeRecord) TableName() string {
 	return "cluster"
 }
@@ -125,6 +132,7 @@ type ClusterEventRecord struct {
 	CreatedAt  time.Time `gorm:"column:created_at"`
 }
 
+// TableName returns the database table name.
 func (ClusterEventRecord) TableName() string {
 	return "cluster_events"
 }
@@ -141,6 +149,7 @@ type OAuthSessionRecord struct {
 	CompletedAt *time.Time `gorm:"column:completed_at"`
 }
 
+// TableName returns the database table name.
 func (OAuthSessionRecord) TableName() string {
 	return "oauth_sessions"
 }

@@ -58,7 +58,9 @@ type Watcher struct {
 	stopped atomic.Bool
 }
 
+// NewWatcher creates a new watcher.
 func NewWatcher(configPath string, authDir string, cb Callbacks) (*Watcher, error) {
+	// Keep validation before state changes so failures leave existing data intact.
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" {
 		return nil, os.ErrInvalid
@@ -90,7 +92,9 @@ func NewWatcher(configPath string, authDir string, cb Callbacks) (*Watcher, erro
 	}, nil
 }
 
+// Start starts the process.
 func (w *Watcher) Start(ctx context.Context) error {
+	// Keep validation before state changes so failures leave existing data intact.
 	if w == nil || w.w == nil {
 		return nil
 	}
@@ -117,6 +121,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 	return nil
 }
 
+// Stop stops the process.
 func (w *Watcher) Stop() error {
 	if w == nil || w.w == nil {
 		return nil
@@ -126,6 +131,7 @@ func (w *Watcher) Stop() error {
 	return w.w.Close()
 }
 
+// process handles pending watcher events.
 func (w *Watcher) process(ctx context.Context) {
 	for {
 		select {
@@ -146,6 +152,7 @@ func (w *Watcher) process(ctx context.Context) {
 	}
 }
 
+// handleEvent handles an event.
 func (w *Watcher) handleEvent(ctx context.Context, event fsnotify.Event) {
 	if w == nil || w.stopped.Load() {
 		return
@@ -171,6 +178,7 @@ func (w *Watcher) handleEvent(ctx context.Context, event fsnotify.Event) {
 	}
 }
 
+// stopTimers stops a timers.
 func (w *Watcher) stopTimers() {
 	w.mu.Lock()
 	if w.configTimer != nil {
@@ -184,6 +192,7 @@ func (w *Watcher) stopTimers() {
 	w.mu.Unlock()
 }
 
+// scheduleConfigReload handles a schedule config reload.
 func (w *Watcher) scheduleConfigReload(ctx context.Context) {
 	w.mu.Lock()
 	if w.configTimer != nil {
@@ -198,7 +207,9 @@ func (w *Watcher) scheduleConfigReload(ctx context.Context) {
 	w.mu.Unlock()
 }
 
+// reloadConfigIfChanged handles a reload config if changed.
 func (w *Watcher) reloadConfigIfChanged(ctx context.Context) {
+	// Normalize source data before building the derived payload.
 	if w == nil || w.stopped.Load() {
 		return
 	}
@@ -242,6 +253,7 @@ func (w *Watcher) reloadConfigIfChanged(ctx context.Context) {
 	}
 }
 
+// updateAuthDirWatch updates an auth dir watch.
 func (w *Watcher) updateAuthDirWatch(nextAuthDir string) {
 	nextAuthDir = strings.TrimSpace(nextAuthDir)
 	if nextAuthDir != "" {
@@ -275,6 +287,7 @@ func (w *Watcher) updateAuthDirWatch(nextAuthDir string) {
 	log.Debugf("watching auth directory: %s", nextAuthDir)
 }
 
+// scheduleAuthReload handles a schedule auth reload.
 func (w *Watcher) scheduleAuthReload(ctx context.Context) {
 	if w == nil || w.stopped.Load() {
 		return
@@ -297,6 +310,7 @@ func (w *Watcher) scheduleAuthReload(ctx context.Context) {
 	w.mu.Unlock()
 }
 
+// cleanPathMaybeAbs handles a clean path maybe abs.
 func cleanPathMaybeAbs(path string) string {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {

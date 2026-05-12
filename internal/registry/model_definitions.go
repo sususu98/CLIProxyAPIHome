@@ -85,6 +85,7 @@ func WithCodexBuiltins(models []*ModelInfo) []*ModelInfo {
 	return upsertModelInfos(models, codexBuiltinImageModelInfo())
 }
 
+// codexBuiltinImageModelInfo handles a codex builtin image model info.
 func codexBuiltinImageModelInfo() *ModelInfo {
 	return &ModelInfo{
 		ID:          codexBuiltinImageModelID,
@@ -97,7 +98,9 @@ func codexBuiltinImageModelInfo() *ModelInfo {
 	}
 }
 
+// upsertModelInfos inserts or updates a model infos.
 func upsertModelInfos(models []*ModelInfo, extras ...*ModelInfo) []*ModelInfo {
+	// Normalize source data before building the derived payload.
 	if len(extras) == 0 {
 		return models
 	}
@@ -168,6 +171,7 @@ func cloneModelInfos(models []*ModelInfo) []*ModelInfo {
 //   - kimi
 //   - antigravity
 func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
+	// Normalize source data before building the derived payload.
 	key := strings.ToLower(strings.TrimSpace(channel))
 	switch key {
 	case "claude":
@@ -194,6 +198,7 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 // LookupStaticModelInfo searches all static model definitions for a model by ID.
 // Returns nil if no matching model is found.
 func LookupStaticModelInfo(modelID string) *ModelInfo {
+	// Normalize source data before building the derived payload.
 	if modelID == "" {
 		return nil
 	}

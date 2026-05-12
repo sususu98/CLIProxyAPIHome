@@ -11,6 +11,7 @@ type BufferedConn struct {
 	reader *bufio.Reader
 }
 
+// Read loads read.
 func (c *BufferedConn) Read(p []byte) (int, error) {
 	if c == nil {
 		return 0, net.ErrClosed
@@ -21,6 +22,7 @@ func (c *BufferedConn) Read(p []byte) (int, error) {
 	return c.reader.Read(p)
 }
 
+// ConnectionState handles a connection state.
 func (c *BufferedConn) ConnectionState() tls.ConnectionState {
 	if c == nil || c.Conn == nil {
 		return tls.ConnectionState{}

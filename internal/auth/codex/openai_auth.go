@@ -162,6 +162,7 @@ func (o *CodexAuth) RefreshTokensWithRetry(ctx context.Context, refreshToken str
 	return nil, fmt.Errorf("token refresh failed after %d attempts: %w", maxRetries, lastErr)
 }
 
+// isNonRetryableRefreshErr reports whether non retryable refresh err.
 func isNonRetryableRefreshErr(err error) bool {
 	if err == nil {
 		return false

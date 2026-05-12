@@ -64,6 +64,7 @@ func SetModelRefreshCallback(cb ModelRefreshCallback) {
 	}
 }
 
+// init prepares package-level state.
 func init() {
 	// Load embedded data as fallback on startup.
 	if err := loadModelsFromBytes(embeddedModelsJSON, "embed"); err != nil {
@@ -80,11 +81,13 @@ func StartModelsUpdater(ctx context.Context) {
 	})
 }
 
+// runModelsUpdater runs a models updater.
 func runModelsUpdater(ctx context.Context) {
 	tryStartupRefresh(ctx)
 	periodicRefresh(ctx)
 }
 
+// periodicRefresh runs a periodic refresh on a schedule.
 func periodicRefresh(ctx context.Context) {
 	ticker := time.NewTicker(modelsRefreshInterval)
 	defer ticker.Stop()
@@ -112,6 +115,7 @@ func tryStartupRefresh(ctx context.Context) {
 	tryRefreshModels(ctx, "startup model refresh")
 }
 
+// tryRefreshModels attempts a refresh models.
 func tryRefreshModels(ctx context.Context, label string) {
 	oldData := getModels()
 
@@ -141,6 +145,7 @@ func tryRefreshModels(ctx context.Context, label string) {
 // fetchModelsFromRemote tries all remote URLs and returns the parsed model catalog
 // along with the URL it was fetched from. Returns (nil, "") if all fetches fail.
 func fetchModelsFromRemote(ctx context.Context) (*staticModelsJSON, string) {
+	// Normalize source data before building the derived payload.
 	client := &http.Client{Timeout: modelsFetchTimeout}
 	for _, url := range modelsURLs {
 		reqCtx, cancel := context.WithTimeout(ctx, modelsFetchTimeout)
@@ -197,6 +202,7 @@ func fetchModelsFromRemote(ctx context.Context) (*staticModelsJSON, string) {
 // whose model definitions differ. Codex tiers (free/team/plus/pro) are grouped
 // under a single "codex" provider.
 func detectChangedProviders(oldData, newData *staticModelsJSON) []string {
+	// Keep validation before state changes so failures leave existing data intact.
 	if oldData == nil || newData == nil {
 		return nil
 	}
@@ -251,6 +257,7 @@ func modelSectionChanged(a, b []*ModelInfo) bool {
 	return string(aj) != string(bj)
 }
 
+// notifyModelRefresh notifies listeners about a model refresh.
 func notifyModelRefresh(changedProviders []string) {
 	if len(changedProviders) == 0 {
 		return
@@ -267,7 +274,9 @@ func notifyModelRefresh(changedProviders []string) {
 	cb(changedProviders)
 }
 
+// mergeProviderNames merges a provider names.
 func mergeProviderNames(existing, incoming []string) []string {
+	// Keep validation before state changes so failures leave existing data intact.
 	if len(incoming) == 0 {
 		return existing
 	}
@@ -298,6 +307,7 @@ func mergeProviderNames(existing, incoming []string) []string {
 	return merged
 }
 
+// loadModelsFromBytes derives load models from bytes.
 func loadModelsFromBytes(data []byte, source string) error {
 	var parsed staticModelsJSON
 	if err := json.Unmarshal(data, &parsed); err != nil {
@@ -313,13 +323,16 @@ func loadModelsFromBytes(data []byte, source string) error {
 	return nil
 }
 
+// getModels returns a models.
 func getModels() *staticModelsJSON {
 	modelsCatalogStore.mu.RLock()
 	defer modelsCatalogStore.mu.RUnlock()
 	return modelsCatalogStore.data
 }
 
+// validateModelsCatalog validates a models catalog.
 func validateModelsCatalog(data *staticModelsJSON) error {
+	// Normalize source data before building the derived payload.
 	if data == nil {
 		return fmt.Errorf("catalog is nil")
 	}
@@ -349,6 +362,7 @@ func validateModelsCatalog(data *staticModelsJSON) error {
 	return nil
 }
 
+// validateModelSection validates a model section.
 func validateModelSection(section string, models []*ModelInfo) error {
 	if len(models) == 0 {
 		return fmt.Errorf("%s section is empty", section)

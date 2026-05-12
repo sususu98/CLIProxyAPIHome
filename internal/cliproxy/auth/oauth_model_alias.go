@@ -16,7 +16,9 @@ type oauthModelAliasTable struct {
 	reverse map[string]map[string]string
 }
 
+// compileOAuthModelAliasTable compiles an o auth model alias table.
 func compileOAuthModelAliasTable(aliases map[string][]internalconfig.OAuthModelAlias) *oauthModelAliasTable {
+	// Resolve credential context before calling upstream OAuth services.
 	if len(aliases) == 0 {
 		return &oauthModelAliasTable{}
 	}
@@ -79,6 +81,7 @@ func (m *Manager) applyOAuthModelAlias(auth *Auth, requestedModel string) string
 	return upstreamModel
 }
 
+// modelAliasLookupCandidates handles a model alias lookup candidates.
 func modelAliasLookupCandidates(requestedModel string) (suffixResult, []string) {
 	requestedModel = strings.TrimSpace(requestedModel)
 	if requestedModel == "" {
@@ -96,6 +99,7 @@ func modelAliasLookupCandidates(requestedModel string) (suffixResult, []string) 
 	return requestResult, candidates
 }
 
+// preserveResolvedModelSuffix preserves a resolved model suffix.
 func preserveResolvedModelSuffix(resolved string, requestResult suffixResult) string {
 	resolved = strings.TrimSpace(resolved)
 	if resolved == "" {
@@ -110,7 +114,9 @@ func preserveResolvedModelSuffix(resolved string, requestResult suffixResult) st
 	return resolved
 }
 
+// resolveModelAliasPoolFromConfigModels derives resolve model alias pool from config models.
 func resolveModelAliasPoolFromConfigModels(requestedModel string, models []modelAliasEntry) []string {
+	// Normalize source data before building the derived payload.
 	requestedModel = strings.TrimSpace(requestedModel)
 	if requestedModel == "" {
 		return nil
@@ -166,6 +172,7 @@ func resolveModelAliasPoolFromConfigModels(requestedModel string, models []model
 	return nil
 }
 
+// resolveModelAliasFromConfigModels derives resolve model alias from config models.
 func resolveModelAliasFromConfigModels(requestedModel string, models []modelAliasEntry) string {
 	resolved := resolveModelAliasPoolFromConfigModels(requestedModel, models)
 	if len(resolved) > 0 {
@@ -185,6 +192,7 @@ func (m *Manager) resolveOAuthUpstreamModel(auth *Auth, requestedModel string) s
 	return resolveUpstreamModelFromAliasTable(m, auth, requestedModel, modelAliasChannel(auth))
 }
 
+// resolveUpstreamModelFromAliasTable derives resolve upstream model from alias table.
 func resolveUpstreamModelFromAliasTable(m *Manager, auth *Auth, requestedModel, channel string) string {
 	if m == nil || auth == nil {
 		return ""

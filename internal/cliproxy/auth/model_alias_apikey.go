@@ -6,6 +6,7 @@ import (
 	internalconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
 )
 
+// rewriteModelForAuth returns a rewrite model for auth.
 func rewriteModelForAuth(model string, auth *Auth) string {
 	if auth == nil || model == "" {
 		return model
@@ -21,7 +22,9 @@ func rewriteModelForAuth(model string, auth *Auth) string {
 	return strings.TrimPrefix(model, needle)
 }
 
+// applyAPIKeyModelAlias applies an api key model alias.
 func (m *Manager) applyAPIKeyModelAlias(auth *Auth, requestedModel string) string {
+	// Normalize source data before building the derived payload.
 	if m == nil || auth == nil {
 		return requestedModel
 	}
@@ -67,7 +70,9 @@ type apiKeyConfigEntry interface {
 	GetBaseURL() string
 }
 
+// resolveAPIKeyConfig resolves an api key config.
 func resolveAPIKeyConfig[T apiKeyConfigEntry](entries []T, auth *Auth) *T {
+	// Normalize source data before building the derived payload.
 	if auth == nil || len(entries) == 0 {
 		return nil
 	}
@@ -106,6 +111,7 @@ func resolveAPIKeyConfig[T apiKeyConfigEntry](entries []T, auth *Auth) *T {
 	return nil
 }
 
+// resolveGeminiAPIKeyConfig resolves a gemini api key config.
 func resolveGeminiAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internalconfig.GeminiKey {
 	if cfg == nil {
 		return nil
@@ -113,6 +119,7 @@ func resolveGeminiAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internal
 	return resolveAPIKeyConfig(cfg.GeminiKey, auth)
 }
 
+// resolveClaudeAPIKeyConfig resolves a claude api key config.
 func resolveClaudeAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internalconfig.ClaudeKey {
 	if cfg == nil {
 		return nil
@@ -120,6 +127,7 @@ func resolveClaudeAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internal
 	return resolveAPIKeyConfig(cfg.ClaudeKey, auth)
 }
 
+// resolveCodexAPIKeyConfig resolves a codex api key config.
 func resolveCodexAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internalconfig.CodexKey {
 	if cfg == nil {
 		return nil
@@ -127,6 +135,7 @@ func resolveCodexAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internalc
 	return resolveAPIKeyConfig(cfg.CodexKey, auth)
 }
 
+// resolveVertexAPIKeyConfig resolves a vertex api key config.
 func resolveVertexAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internalconfig.VertexCompatKey {
 	if cfg == nil {
 		return nil
@@ -134,6 +143,7 @@ func resolveVertexAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internal
 	return resolveAPIKeyConfig(cfg.VertexCompatAPIKey, auth)
 }
 
+// resolveUpstreamModelForGeminiAPIKey resolves an upstream model for gemini api key.
 func resolveUpstreamModelForGeminiAPIKey(cfg *internalconfig.Config, auth *Auth, requestedModel string) string {
 	entry := resolveGeminiAPIKeyConfig(cfg, auth)
 	if entry == nil {
@@ -142,6 +152,7 @@ func resolveUpstreamModelForGeminiAPIKey(cfg *internalconfig.Config, auth *Auth,
 	return resolveModelAliasFromConfigModels(requestedModel, asModelAliasEntries(entry.Models))
 }
 
+// resolveUpstreamModelForClaudeAPIKey resolves an upstream model for claude api key.
 func resolveUpstreamModelForClaudeAPIKey(cfg *internalconfig.Config, auth *Auth, requestedModel string) string {
 	entry := resolveClaudeAPIKeyConfig(cfg, auth)
 	if entry == nil {
@@ -150,6 +161,7 @@ func resolveUpstreamModelForClaudeAPIKey(cfg *internalconfig.Config, auth *Auth,
 	return resolveModelAliasFromConfigModels(requestedModel, asModelAliasEntries(entry.Models))
 }
 
+// resolveUpstreamModelForCodexAPIKey resolves an upstream model for codex api key.
 func resolveUpstreamModelForCodexAPIKey(cfg *internalconfig.Config, auth *Auth, requestedModel string) string {
 	entry := resolveCodexAPIKeyConfig(cfg, auth)
 	if entry == nil {
@@ -158,6 +170,7 @@ func resolveUpstreamModelForCodexAPIKey(cfg *internalconfig.Config, auth *Auth, 
 	return resolveModelAliasFromConfigModels(requestedModel, asModelAliasEntries(entry.Models))
 }
 
+// resolveUpstreamModelForVertexAPIKey resolves an upstream model for vertex api key.
 func resolveUpstreamModelForVertexAPIKey(cfg *internalconfig.Config, auth *Auth, requestedModel string) string {
 	entry := resolveVertexAPIKeyConfig(cfg, auth)
 	if entry == nil {
@@ -166,6 +179,7 @@ func resolveUpstreamModelForVertexAPIKey(cfg *internalconfig.Config, auth *Auth,
 	return resolveModelAliasFromConfigModels(requestedModel, asModelAliasEntries(entry.Models))
 }
 
+// resolveUpstreamModelForOpenAICompatAPIKey resolves an upstream model for open ai compat api key.
 func resolveUpstreamModelForOpenAICompatAPIKey(cfg *internalconfig.Config, auth *Auth, requestedModel string) string {
 	providerKey := ""
 	compatName := ""
@@ -183,7 +197,9 @@ func resolveUpstreamModelForOpenAICompatAPIKey(cfg *internalconfig.Config, auth 
 	return resolveModelAliasFromConfigModels(requestedModel, asModelAliasEntries(entry.Models))
 }
 
+// resolveOpenAICompatConfig resolves an open ai compat config.
 func resolveOpenAICompatConfig(cfg *internalconfig.Config, providerKey, compatName, authProvider string) *internalconfig.OpenAICompatibility {
+	// Normalize source data before building the derived payload.
 	if cfg == nil {
 		return nil
 	}
@@ -211,6 +227,7 @@ func resolveOpenAICompatConfig(cfg *internalconfig.Config, providerKey, compatNa
 	return nil
 }
 
+// asModelAliasEntries handles an as model alias entries.
 func asModelAliasEntries[T interface {
 	GetName() string
 	GetAlias() string

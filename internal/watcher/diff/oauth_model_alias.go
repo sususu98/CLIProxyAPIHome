@@ -36,6 +36,7 @@ func SummarizeOAuthModelAlias(entries map[string][]config.OAuthModelAlias) map[s
 
 // DiffOAuthModelAliasChanges compares OAuth model alias maps.
 func DiffOAuthModelAliasChanges(oldMap, newMap map[string][]config.OAuthModelAlias) ([]string, []string) {
+	// Resolve credential context before calling upstream OAuth services.
 	oldSummary := SummarizeOAuthModelAlias(oldMap)
 	newSummary := SummarizeOAuthModelAlias(newMap)
 	keys := make(map[string]struct{}, len(oldSummary)+len(newSummary))
@@ -67,7 +68,9 @@ func DiffOAuthModelAliasChanges(oldMap, newMap map[string][]config.OAuthModelAli
 	return changes, affected
 }
 
+// summarizeOAuthModelAliasList handles a summarize o auth model alias list.
 func summarizeOAuthModelAliasList(list []config.OAuthModelAlias) OAuthModelAliasSummary {
+	// Resolve credential context before calling upstream OAuth services.
 	if len(list) == 0 {
 		return OAuthModelAliasSummary{}
 	}

@@ -12,6 +12,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// IsRESPPrefix reports whether is resp prefix.
 func IsRESPPrefix(prefix byte) bool {
 	switch prefix {
 	case '*', '$', '+', '-', ':':
@@ -21,7 +22,9 @@ func IsRESPPrefix(prefix byte) bool {
 	}
 }
 
+// Serve handles serve.
 func Serve(ctx context.Context, listener net.Listener, httpListener *Listener, onRESPConn func(net.Conn), onHTTPConn func(net.Conn)) error {
+	// Decode the wire frame before dispatching command handling.
 	if listener == nil {
 		return net.ErrClosed
 	}
@@ -94,6 +97,7 @@ func Serve(ctx context.Context, listener net.Listener, httpListener *Listener, o
 	}
 }
 
+// NormalizeServeError normalizes a serve error.
 func NormalizeServeError(err error) error {
 	if err == nil {
 		return nil

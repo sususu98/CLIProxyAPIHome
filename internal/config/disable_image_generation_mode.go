@@ -23,6 +23,7 @@ const (
 	DisableImageGenerationChat
 )
 
+// String returns the string representation.
 func (m DisableImageGenerationMode) String() string {
 	switch m {
 	case DisableImageGenerationOff:
@@ -36,6 +37,7 @@ func (m DisableImageGenerationMode) String() string {
 	}
 }
 
+// MarshalYAML encodes a yaml.
 func (m DisableImageGenerationMode) MarshalYAML() (any, error) {
 	switch m {
 	case DisableImageGenerationAll:
@@ -47,6 +49,7 @@ func (m DisableImageGenerationMode) MarshalYAML() (any, error) {
 	}
 }
 
+// UnmarshalYAML decodes a yaml.
 func (m *DisableImageGenerationMode) UnmarshalYAML(value *yaml.Node) error {
 	mode, err := parseDisableImageGenerationNode(value)
 	if err != nil {
@@ -56,6 +59,7 @@ func (m *DisableImageGenerationMode) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
+// MarshalJSON encodes a json.
 func (m DisableImageGenerationMode) MarshalJSON() ([]byte, error) {
 	switch m {
 	case DisableImageGenerationAll:
@@ -67,6 +71,7 @@ func (m DisableImageGenerationMode) MarshalJSON() ([]byte, error) {
 	}
 }
 
+// UnmarshalJSON decodes a json.
 func (m *DisableImageGenerationMode) UnmarshalJSON(data []byte) error {
 	mode, err := parseDisableImageGenerationJSON(data)
 	if err != nil {
@@ -76,6 +81,7 @@ func (m *DisableImageGenerationMode) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// parseDisableImageGenerationNode parses a disable image generation node.
 func parseDisableImageGenerationNode(value *yaml.Node) (DisableImageGenerationMode, error) {
 	if value == nil {
 		return DisableImageGenerationOff, nil
@@ -98,6 +104,7 @@ func parseDisableImageGenerationNode(value *yaml.Node) (DisableImageGenerationMo
 	return parseDisableImageGenerationString(s)
 }
 
+// parseDisableImageGenerationJSON parses a disable image generation json.
 func parseDisableImageGenerationJSON(data []byte) (DisableImageGenerationMode, error) {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
@@ -121,6 +128,7 @@ func parseDisableImageGenerationJSON(data []byte) (DisableImageGenerationMode, e
 	return parseDisableImageGenerationString(s)
 }
 
+// parseDisableImageGenerationString parses a disable image generation string.
 func parseDisableImageGenerationString(s string) (DisableImageGenerationMode, error) {
 	s = strings.TrimSpace(strings.ToLower(s))
 	switch s {

@@ -36,12 +36,14 @@ type RouteRegistry struct {
 	clusterManagement *ClusterManagementOption
 }
 
+// newRouteRegistry creates a route registry.
 func newRouteRegistry() *RouteRegistry {
 	return &RouteRegistry{
 		routes: make(map[RouteKey]gin.HandlerFunc),
 	}
 }
 
+// Set updates set.
 func (r *RouteRegistry) Set(method, path string, handler gin.HandlerFunc) {
 	if r == nil || handler == nil {
 		return
@@ -54,6 +56,7 @@ func (r *RouteRegistry) Set(method, path string, handler gin.HandlerFunc) {
 	r.routes[RouteKey{Method: method, Path: path}] = handler
 }
 
+// Delete handles delete.
 func (r *RouteRegistry) Delete(method, path string) {
 	if r == nil {
 		return
@@ -66,6 +69,7 @@ func (r *RouteRegistry) Delete(method, path string) {
 	delete(r.routes, RouteKey{Method: method, Path: path})
 }
 
+// Register wires package handlers into the provided registry.
 func (r *RouteRegistry) Register(group *gin.RouterGroup) {
 	if r == nil || group == nil || len(r.routes) == 0 {
 		return
@@ -97,6 +101,7 @@ type ClusterManagementOption struct {
 	Runtime    *home.Runtime
 }
 
+// WithRoute applies the route option.
 func WithRoute(method, path string, handler gin.HandlerFunc) RouteOption {
 	return func(r *RouteRegistry) {
 		if r == nil {
@@ -106,6 +111,7 @@ func WithRoute(method, path string, handler gin.HandlerFunc) RouteOption {
 	}
 }
 
+// WithoutRoute removes a route from the registry.
 func WithoutRoute(method, path string) RouteOption {
 	return func(r *RouteRegistry) {
 		if r == nil {
@@ -115,6 +121,7 @@ func WithoutRoute(method, path string) RouteOption {
 	}
 }
 
+// WithClusterManagement applies the cluster management option.
 func WithClusterManagement(opt ClusterManagementOption) RouteOption {
 	return func(r *RouteRegistry) {
 		if r == nil || !opt.Enabled || opt.Repository == nil || opt.Runtime == nil {
@@ -126,7 +133,9 @@ func WithClusterManagement(opt ClusterManagementOption) RouteOption {
 	}
 }
 
+// registerClusterManagementRoutes handles a register cluster management routes.
 func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagement.Handler) {
+	// Validate request inputs before mutating persisted state.
 	if r == nil || handler == nil {
 		return
 	}
@@ -267,6 +276,7 @@ type BuildResult struct {
 	AuthManager *cpacoreauth.Manager
 }
 
+// serveManagementControlPanel serves a management control panel.
 func serveManagementControlPanel(cfg *cpaconfig.Config, configFilePath string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c == nil {
@@ -300,6 +310,7 @@ func serveManagementControlPanel(cfg *cpaconfig.Config, configFilePath string) g
 	}
 }
 
+// serveManagementControlPanelFromRuntime derives serve management control panel from runtime.
 func serveManagementControlPanelFromRuntime(opt *ClusterManagementOption, configFilePath string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if opt == nil || !opt.Enabled || opt.Runtime == nil {
@@ -311,7 +322,9 @@ func serveManagementControlPanelFromRuntime(opt *ClusterManagementOption, config
 	}
 }
 
+// Build builds a build.
 func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
+	// Validate request inputs before mutating persisted state.
 	configFilePath = strings.TrimSpace(configFilePath)
 	if configFilePath == "" {
 		return nil, fmt.Errorf("management http: config file path is empty")
@@ -410,6 +423,7 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 	}, nil
 }
 
+// withBuildInfoHeaders applies the build info headers option.
 func withBuildInfoHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c == nil {
@@ -422,7 +436,9 @@ func withBuildInfoHeaders() gin.HandlerFunc {
 	}
 }
 
+// refreshAndAvailabilityMiddleware refreshes an and availability middleware.
 func refreshAndAvailabilityMiddleware(configFilePath string, handler *cpasdkapi.Handler, authManager *cpacoreauth.Manager, tokenStore any) gin.HandlerFunc {
+	// Resolve credential context before calling upstream OAuth services.
 	envSecret, envSecretSet := os.LookupEnv("MANAGEMENT_PASSWORD")
 	envSecret = strings.TrimSpace(envSecret)
 	envManagementSecret := envSecretSet && envSecret != ""
@@ -484,7 +500,9 @@ func refreshAndAvailabilityMiddleware(configFilePath string, handler *cpasdkapi.
 	}
 }
 
+// clusterAvailabilityMiddleware handles a cluster availability middleware.
 func clusterAvailabilityMiddleware(opt *ClusterManagementOption, handler *cpasdkapi.Handler) gin.HandlerFunc {
+	// Validate request inputs before mutating persisted state.
 	envSecret, envSecretSet := os.LookupEnv("MANAGEMENT_PASSWORD")
 	envSecret = strings.TrimSpace(envSecret)
 	envManagementSecret := envSecretSet && envSecret != ""
@@ -513,6 +531,7 @@ func clusterAvailabilityMiddleware(opt *ClusterManagementOption, handler *cpasdk
 	}
 }
 
+// cpaConfigFromHomeConfig derives cpa config from home config.
 func cpaConfigFromHomeConfig(homeCfg *appconfig.Config) *cpaconfig.Config {
 	if homeCfg == nil {
 		return nil
@@ -528,7 +547,9 @@ func cpaConfigFromHomeConfig(homeCfg *appconfig.Config) *cpaconfig.Config {
 	return cfg
 }
 
+// defaultRoutes handles a default routes.
 func defaultRoutes(handler *cpasdkapi.Handler) *RouteRegistry {
+	// Validate request inputs before mutating persisted state.
 	r := newRouteRegistry()
 	if handler == nil {
 		return r

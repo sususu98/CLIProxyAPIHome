@@ -16,6 +16,7 @@ type RefreshController struct {
 	repo        *Repository
 }
 
+// NewRefreshController creates a new refresh controller.
 func NewRefreshController(coordinator *Coordinator, runtime *home.Runtime, repo *Repository) *RefreshController {
 	return &RefreshController{
 		coordinator: coordinator,
@@ -24,6 +25,7 @@ func NewRefreshController(coordinator *Coordinator, runtime *home.Runtime, repo 
 	}
 }
 
+// OnMasterChanged handles an on master changed.
 func (c *RefreshController) OnMasterChanged(isMaster bool) {
 	if c == nil || c.runtime == nil {
 		return
@@ -37,6 +39,7 @@ func (c *RefreshController) OnMasterChanged(isMaster bool) {
 	c.runtime.StopAutoRefresh()
 }
 
+// CanAutoRefresh reports whether can auto refresh.
 func (c *RefreshController) CanAutoRefresh() bool {
 	if c == nil || c.coordinator == nil {
 		return false
@@ -44,7 +47,9 @@ func (c *RefreshController) CanAutoRefresh() bool {
 	return c.coordinator.IsMaster()
 }
 
+// RefreshNow refreshes refresh now.
 func (c *RefreshController) RefreshNow(ctx context.Context, authIndex string) ([]byte, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if c == nil || c.runtime == nil {
 		return nil, fmt.Errorf("cluster refresh: runtime is nil")
 	}
@@ -88,6 +93,7 @@ func (c *RefreshController) RefreshNow(ctx context.Context, authIndex string) ([
 	return c.refreshLocalWithLock(ctx, authIndex)
 }
 
+// isSelf reports whether self.
 func (c *RefreshController) isSelf(node *ClusterNodeRecord) bool {
 	if c == nil || c.coordinator == nil || node == nil {
 		return false
@@ -95,7 +101,9 @@ func (c *RefreshController) isSelf(node *ClusterNodeRecord) bool {
 	return strings.TrimSpace(node.IP) == strings.TrimSpace(c.coordinator.node.IP) && node.Port == c.coordinator.node.Port
 }
 
+// refreshLocalWithLock refreshes a local with lock.
 func (c *RefreshController) refreshLocalWithLock(ctx context.Context, authIndex string) ([]byte, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if c == nil || c.runtime == nil || c.repo == nil {
 		return nil, fmt.Errorf("cluster refresh: controller is not ready")
 	}
@@ -149,7 +157,9 @@ func (c *RefreshController) refreshLocalWithLock(ctx context.Context, authIndex 
 	return home.BuildRefreshPayload(updated)
 }
 
+// refreshTarget refreshes a target.
 func (c *RefreshController) refreshTarget(core *coreauth.Manager, authIndex string) (string, string, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if core == nil {
 		return "", "", fmt.Errorf("cluster refresh: core manager is nil")
 	}

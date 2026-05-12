@@ -18,27 +18,67 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
 )
 
-func (h *Handler) GetGeminiKeys(c *gin.Context)         { h.getAPIKeyList(c, "gemini-api-key") }
-func (h *Handler) PutGeminiKeys(c *gin.Context)         { h.putAPIKeyList(c, "gemini-api-key") }
-func (h *Handler) PatchGeminiKey(c *gin.Context)        { h.patchAPIKey(c, "gemini-api-key") }
-func (h *Handler) DeleteGeminiKey(c *gin.Context)       { h.deleteAPIKey(c, "gemini-api-key") }
-func (h *Handler) GetVertexCompatKeys(c *gin.Context)   { h.getAPIKeyList(c, "vertex-api-key") }
-func (h *Handler) PutVertexCompatKeys(c *gin.Context)   { h.putAPIKeyList(c, "vertex-api-key") }
-func (h *Handler) PatchVertexCompatKey(c *gin.Context)  { h.patchAPIKey(c, "vertex-api-key") }
-func (h *Handler) DeleteVertexCompatKey(c *gin.Context) { h.deleteAPIKey(c, "vertex-api-key") }
-func (h *Handler) GetCodexKeys(c *gin.Context)          { h.getAPIKeyList(c, "codex-api-key") }
-func (h *Handler) PutCodexKeys(c *gin.Context)          { h.putAPIKeyList(c, "codex-api-key") }
-func (h *Handler) PatchCodexKey(c *gin.Context)         { h.patchAPIKey(c, "codex-api-key") }
-func (h *Handler) DeleteCodexKey(c *gin.Context)        { h.deleteAPIKey(c, "codex-api-key") }
-func (h *Handler) GetClaudeKeys(c *gin.Context)         { h.getAPIKeyList(c, "claude-api-key") }
-func (h *Handler) PutClaudeKeys(c *gin.Context)         { h.putAPIKeyList(c, "claude-api-key") }
-func (h *Handler) PatchClaudeKey(c *gin.Context)        { h.patchAPIKey(c, "claude-api-key") }
-func (h *Handler) DeleteClaudeKey(c *gin.Context)       { h.deleteAPIKey(c, "claude-api-key") }
-func (h *Handler) GetOpenAICompat(c *gin.Context)       { h.getAPIKeyList(c, "openai-compatibility") }
-func (h *Handler) PutOpenAICompat(c *gin.Context)       { h.putAPIKeyList(c, "openai-compatibility") }
-func (h *Handler) PatchOpenAICompat(c *gin.Context)     { h.patchAPIKey(c, "openai-compatibility") }
-func (h *Handler) DeleteOpenAICompat(c *gin.Context)    { h.deleteAPIKey(c, "openai-compatibility") }
+// GetGeminiKeys returns a gemini keys.
+func (h *Handler) GetGeminiKeys(c *gin.Context) { h.getAPIKeyList(c, "gemini-api-key") }
 
+// PutGeminiKeys replaces a gemini keys.
+func (h *Handler) PutGeminiKeys(c *gin.Context) { h.putAPIKeyList(c, "gemini-api-key") }
+
+// PatchGeminiKey applies a partial update to a gemini key.
+func (h *Handler) PatchGeminiKey(c *gin.Context) { h.patchAPIKey(c, "gemini-api-key") }
+
+// DeleteGeminiKey deletes a gemini key.
+func (h *Handler) DeleteGeminiKey(c *gin.Context) { h.deleteAPIKey(c, "gemini-api-key") }
+
+// GetVertexCompatKeys returns a vertex compat keys.
+func (h *Handler) GetVertexCompatKeys(c *gin.Context) { h.getAPIKeyList(c, "vertex-api-key") }
+
+// PutVertexCompatKeys replaces a vertex compat keys.
+func (h *Handler) PutVertexCompatKeys(c *gin.Context) { h.putAPIKeyList(c, "vertex-api-key") }
+
+// PatchVertexCompatKey applies a partial update to a vertex compat key.
+func (h *Handler) PatchVertexCompatKey(c *gin.Context) { h.patchAPIKey(c, "vertex-api-key") }
+
+// DeleteVertexCompatKey deletes a vertex compat key.
+func (h *Handler) DeleteVertexCompatKey(c *gin.Context) { h.deleteAPIKey(c, "vertex-api-key") }
+
+// GetCodexKeys returns a codex keys.
+func (h *Handler) GetCodexKeys(c *gin.Context) { h.getAPIKeyList(c, "codex-api-key") }
+
+// PutCodexKeys replaces a codex keys.
+func (h *Handler) PutCodexKeys(c *gin.Context) { h.putAPIKeyList(c, "codex-api-key") }
+
+// PatchCodexKey applies a partial update to a codex key.
+func (h *Handler) PatchCodexKey(c *gin.Context) { h.patchAPIKey(c, "codex-api-key") }
+
+// DeleteCodexKey deletes a codex key.
+func (h *Handler) DeleteCodexKey(c *gin.Context) { h.deleteAPIKey(c, "codex-api-key") }
+
+// GetClaudeKeys returns a claude keys.
+func (h *Handler) GetClaudeKeys(c *gin.Context) { h.getAPIKeyList(c, "claude-api-key") }
+
+// PutClaudeKeys replaces a claude keys.
+func (h *Handler) PutClaudeKeys(c *gin.Context) { h.putAPIKeyList(c, "claude-api-key") }
+
+// PatchClaudeKey applies a partial update to a claude key.
+func (h *Handler) PatchClaudeKey(c *gin.Context) { h.patchAPIKey(c, "claude-api-key") }
+
+// DeleteClaudeKey deletes a claude key.
+func (h *Handler) DeleteClaudeKey(c *gin.Context) { h.deleteAPIKey(c, "claude-api-key") }
+
+// GetOpenAICompat returns an open ai compat.
+func (h *Handler) GetOpenAICompat(c *gin.Context) { h.getAPIKeyList(c, "openai-compatibility") }
+
+// PutOpenAICompat replaces an open ai compat.
+func (h *Handler) PutOpenAICompat(c *gin.Context) { h.putAPIKeyList(c, "openai-compatibility") }
+
+// PatchOpenAICompat applies a partial update to an open ai compat.
+func (h *Handler) PatchOpenAICompat(c *gin.Context) { h.patchAPIKey(c, "openai-compatibility") }
+
+// DeleteOpenAICompat deletes an open ai compat.
+func (h *Handler) DeleteOpenAICompat(c *gin.Context) { h.deleteAPIKey(c, "openai-compatibility") }
+
+// getAPIKeyList returns an api key list.
 func (h *Handler) getAPIKeyList(c *gin.Context, key string) {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
@@ -60,7 +100,9 @@ func (h *Handler) getAPIKeyList(c *gin.Context, key string) {
 	c.JSON(http.StatusOK, gin.H{key: items})
 }
 
+// putAPIKeyList replaces an api key list.
 func (h *Handler) putAPIKeyList(c *gin.Context, key string) {
+	// Validate request inputs before mutating persisted state.
 	body, errRead := io.ReadAll(c.Request.Body)
 	if errRead != nil {
 		respondError(c, http.StatusBadRequest, "invalid body", errRead)
@@ -85,7 +127,9 @@ func (h *Handler) putAPIKeyList(c *gin.Context, key string) {
 	respondOK(c)
 }
 
+// patchAPIKey applies a partial update to an api key.
 func (h *Handler) patchAPIKey(c *gin.Context, key string) {
+	// Validate request inputs before mutating persisted state.
 	body, errRead := io.ReadAll(c.Request.Body)
 	if errRead != nil {
 		respondError(c, http.StatusBadRequest, "invalid body", errRead)
@@ -156,7 +200,9 @@ func (h *Handler) patchAPIKey(c *gin.Context, key string) {
 	respondOK(c)
 }
 
+// deleteAPIKey deletes an api key.
 func (h *Handler) deleteAPIKey(c *gin.Context, key string) {
+	// Validate request inputs before mutating persisted state.
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 	auths, errAuths := h.repo.ListAuths(ctx)
@@ -181,7 +227,9 @@ func (h *Handler) deleteAPIKey(c *gin.Context, key string) {
 	respondOK(c)
 }
 
+// synthesizeAPIKeyBody handles a synthesize api key body.
 func (h *Handler) synthesizeAPIKeyBody(key string, body []byte) ([]*coreauth.Auth, error) {
+	// Normalize source data before building the derived payload.
 	cfg := &appconfig.Config{}
 	switch key {
 	case "gemini-api-key":
@@ -225,7 +273,9 @@ func (h *Handler) synthesizeAPIKeyBody(key string, body []byte) ([]*coreauth.Aut
 	return synthesizeConfigAuths(cfg), nil
 }
 
+// synthesizeConfigAuths handles a synthesize config auths.
 func synthesizeConfigAuths(cfg *appconfig.Config) []*coreauth.Auth {
+	// Normalize source data before building the derived payload.
 	now := time.Now().UTC()
 	sctx := &synthesizer.SynthesisContext{
 		Config:      cfg,
@@ -252,7 +302,9 @@ func synthesizeConfigAuths(cfg *appconfig.Config) []*coreauth.Auth {
 	return auths
 }
 
+// replaceAPIKeyAuths handles a replace api key auths.
 func (h *Handler) replaceAPIKeyAuths(ctx context.Context, key string, next []*coreauth.Auth) error {
+	// Validate request inputs before mutating persisted state.
 	existing, errExisting := h.repo.ListAuths(ctx)
 	if errExisting != nil {
 		return errExisting
@@ -286,7 +338,9 @@ func (h *Handler) replaceAPIKeyAuths(ctx context.Context, key string, next []*co
 	return nil
 }
 
+// decodeListBody decodes a list body.
 func decodeListBody[T any](body []byte, key string, out *[]T) error {
+	// Validate request inputs before mutating persisted state.
 	if len(body) == 0 {
 		*out = nil
 		return nil
@@ -336,6 +390,7 @@ type apiKeyIdentifier struct {
 	Name    string
 }
 
+// Identifier returns the provider identifier.
 func (p apiKeyPatchRequest) Identifier(c *gin.Context) apiKeyIdentifier {
 	identifier := apiKeyIdentifier{Index: p.Index}
 	if p.ID != nil {
@@ -356,6 +411,7 @@ func (p apiKeyPatchRequest) Identifier(c *gin.Context) apiKeyIdentifier {
 	return identifier
 }
 
+// apiKeyIdentifierFromRequest derives api key identifier from request.
 func apiKeyIdentifierFromRequest(c *gin.Context) apiKeyIdentifier {
 	identifier := apiKeyIdentifier{
 		ID:      firstNonEmptyQuery(c, "id", "uuid", "auth_index", "index"),
@@ -371,7 +427,9 @@ func apiKeyIdentifierFromRequest(c *gin.Context) apiKeyIdentifier {
 	return identifier
 }
 
+// findAPIKeyAuth handles a find api key auth.
 func findAPIKeyAuth(auths []*coreauth.Auth, key string, identifier apiKeyIdentifier) *coreauth.Auth {
+	// Validate request inputs before mutating persisted state.
 	filtered := make([]*coreauth.Auth, 0, len(auths))
 	for _, auth := range auths {
 		if isAPIKeyAuthForKey(auth, key) {
@@ -405,6 +463,7 @@ func findAPIKeyAuth(auths []*coreauth.Auth, key string, identifier apiKeyIdentif
 	return nil
 }
 
+// isAPIKeyAuthForKey reports whether api key auth for key.
 func isAPIKeyAuthForKey(auth *coreauth.Auth, key string) bool {
 	if auth == nil || auth.Attributes == nil || strings.TrimSpace(auth.Attributes["api_key"]) == "" && key != "openai-compatibility" {
 		return false
@@ -426,7 +485,9 @@ func isAPIKeyAuthForKey(auth *coreauth.Auth, key string) bool {
 	}
 }
 
+// apiKeyAuthToMap converts api key auth to map.
 func apiKeyAuthToMap(auth *coreauth.Auth, key string) map[string]any {
+	// Validate request inputs before mutating persisted state.
 	item := make(map[string]any)
 	if auth == nil {
 		return item
@@ -474,6 +535,7 @@ func apiKeyAuthToMap(auth *coreauth.Auth, key string) map[string]any {
 	return item
 }
 
+// firstNonEmptyQuery handles a first non empty query.
 func firstNonEmptyQuery(c *gin.Context, keys ...string) string {
 	if c == nil {
 		return ""

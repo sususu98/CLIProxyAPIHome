@@ -24,6 +24,7 @@ type SynthesisContext struct {
 	UUIDForAuth func(auth *coreauth.Auth) string
 }
 
+// applyClusterUUID applies a cluster uuid.
 func applyClusterUUID(ctx *SynthesisContext, auth *coreauth.Auth) {
 	if ctx == nil || !ctx.ClusterMode || ctx.UUIDForAuth == nil || auth == nil {
 		return

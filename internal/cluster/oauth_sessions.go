@@ -13,7 +13,9 @@ import (
 
 const OAuthSessionTTL = 20 * time.Minute
 
+// NewOAuthSessionRecord creates a new o auth session record.
 func NewOAuthSessionRecord(provider, state string, data map[string]any, now time.Time) (*OAuthSessionRecord, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	state = strings.TrimSpace(state)
 	if provider == "" {
@@ -39,6 +41,7 @@ func NewOAuthSessionRecord(provider, state string, data map[string]any, now time
 	}, nil
 }
 
+// OAuthSessionData handles an o auth session data.
 func OAuthSessionData(record *OAuthSessionRecord) (map[string]any, error) {
 	if record == nil || len(record.Data) == 0 {
 		return nil, nil
@@ -50,6 +53,7 @@ func OAuthSessionData(record *OAuthSessionRecord) (map[string]any, error) {
 	return data, nil
 }
 
+// UpsertOAuthSession inserts or updates an o auth session.
 func (r *Repository) UpsertOAuthSession(ctx context.Context, record *OAuthSessionRecord) error {
 	db, errDB := r.database()
 	if errDB != nil {
@@ -71,7 +75,9 @@ func (r *Repository) UpsertOAuthSession(ctx context.Context, record *OAuthSessio
 	return db.WithContext(contextOrBackground(ctx)).Save(record).Error
 }
 
+// GetOAuthSession returns an o auth session.
 func (r *Repository) GetOAuthSession(ctx context.Context, state string) (*OAuthSessionRecord, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	db, errDB := r.database()
 	if errDB != nil {
 		return nil, errDB
@@ -99,7 +105,9 @@ func (r *Repository) GetOAuthSession(ctx context.Context, state string) (*OAuthS
 	return record, nil
 }
 
+// MergeOAuthSessionData merges an o auth session data.
 func (r *Repository) MergeOAuthSessionData(ctx context.Context, state string, values map[string]any) error {
+	// Resolve credential context before calling upstream OAuth services.
 	db, errDB := r.database()
 	if errDB != nil {
 		return errDB
@@ -142,6 +150,7 @@ func (r *Repository) MergeOAuthSessionData(ctx context.Context, state string, va
 	return db.WithContext(contextOrBackground(ctx)).Save(record).Error
 }
 
+// CompleteOAuthSession handles a complete o auth session.
 func (r *Repository) CompleteOAuthSession(ctx context.Context, state string) error {
 	db, errDB := r.database()
 	if errDB != nil {
@@ -160,6 +169,7 @@ func (r *Repository) CompleteOAuthSession(ctx context.Context, state string) err
 		}).Error
 }
 
+// SetOAuthSessionError sets an o auth session error.
 func (r *Repository) SetOAuthSessionError(ctx context.Context, state string, message string) error {
 	db, errDB := r.database()
 	if errDB != nil {

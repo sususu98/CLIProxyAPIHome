@@ -20,11 +20,14 @@ type Repository struct {
 	db *gorm.DB
 }
 
+// NewRepository creates a new repository.
 func NewRepository(db *gorm.DB) *Repository {
 	return &Repository{db: db}
 }
 
+// AuthToRecord converts auth to record.
 func AuthToRecord(auth *coreauth.Auth) (*AuthRecord, error) {
+	// Normalize auth state before updating runtime indexes.
 	if auth == nil {
 		return nil, fmt.Errorf("auth is nil")
 	}
@@ -72,7 +75,9 @@ func AuthToRecord(auth *coreauth.Auth) (*AuthRecord, error) {
 	return record, nil
 }
 
+// RecordToAuth records a to auth.
 func RecordToAuth(record *AuthRecord) (*coreauth.Auth, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	if record == nil {
 		return nil, fmt.Errorf("auth record is nil")
 	}
@@ -98,7 +103,9 @@ func RecordToAuth(record *AuthRecord) (*coreauth.Auth, error) {
 	return auth, nil
 }
 
+// UpsertAuth inserts or updates an auth.
 func (r *Repository) UpsertAuth(ctx context.Context, auth *coreauth.Auth, op string) (*AuthRecord, error) {
+	// Normalize auth state before updating runtime indexes.
 	db, errDB := r.database()
 	if errDB != nil {
 		return nil, errDB
@@ -139,6 +146,7 @@ func (r *Repository) UpsertAuth(ctx context.Context, auth *coreauth.Auth, op str
 	return record, nil
 }
 
+// GetAuth returns an auth.
 func (r *Repository) GetAuth(ctx context.Context, uuid string) (*coreauth.Auth, *AuthRecord, error) {
 	db, errDB := r.database()
 	if errDB != nil {
@@ -161,7 +169,9 @@ func (r *Repository) GetAuth(ctx context.Context, uuid string) (*coreauth.Auth, 
 	return auth, record, nil
 }
 
+// WithAuthRefreshLock applies the auth refresh lock option.
 func (r *Repository) WithAuthRefreshLock(ctx context.Context, uuid string, fn func(tx *Repository, auth *coreauth.Auth) (*coreauth.Auth, error)) (*coreauth.Auth, error) {
+	// Resolve credential context before calling upstream OAuth services.
 	db, errDB := r.database()
 	if errDB != nil {
 		return nil, errDB
@@ -206,7 +216,9 @@ func (r *Repository) WithAuthRefreshLock(ctx context.Context, uuid string, fn fu
 	return out, nil
 }
 
+// ListAuthIndex returns an auth index.
 func (r *Repository) ListAuthIndex(ctx context.Context) ([]AuthIndex, error) {
+	// Normalize auth state before updating runtime indexes.
 	db, errDB := r.database()
 	if errDB != nil {
 		return nil, errDB
@@ -241,7 +253,9 @@ func (r *Repository) ListAuthIndex(ctx context.Context) ([]AuthIndex, error) {
 	return out, nil
 }
 
+// LiveClusterNodeByIPAndSecret handles a live cluster node by ip and secret.
 func (r *Repository) LiveClusterNodeByIPAndSecret(ctx context.Context, ip string, secret string, cutoff time.Time) (*ClusterNodeRecord, error) {
+	// Keep validation before state changes so failures leave existing data intact.
 	db, errDB := r.database()
 	if errDB != nil {
 		return nil, errDB
@@ -272,7 +286,9 @@ func (r *Repository) LiveClusterNodeByIPAndSecret(ctx context.Context, ip string
 	return record, nil
 }
 
+// ListAuths returns an auths.
 func (r *Repository) ListAuths(ctx context.Context) ([]*coreauth.Auth, error) {
+	// Normalize auth state before updating runtime indexes.
 	db, errDB := r.database()
 	if errDB != nil {
 		return nil, errDB
@@ -297,7 +313,9 @@ func (r *Repository) ListAuths(ctx context.Context) ([]*coreauth.Auth, error) {
 	return auths, nil
 }
 
+// SoftDeleteAuth handles a soft delete auth.
 func (r *Repository) SoftDeleteAuth(ctx context.Context, uuid string) error {
+	// Validate request inputs before mutating persisted state.
 	db, errDB := r.database()
 	if errDB != nil {
 		return errDB
@@ -321,7 +339,9 @@ func (r *Repository) SoftDeleteAuth(ctx context.Context, uuid string) error {
 	})
 }
 
+// UpsertConfigValue inserts or updates a config value.
 func (r *Repository) UpsertConfigValue(ctx context.Context, key string, value any) error {
+	// Normalize source data before building the derived payload.
 	db, errDB := r.database()
 	if errDB != nil {
 		return errDB
@@ -358,7 +378,9 @@ func (r *Repository) UpsertConfigValue(ctx context.Context, key string, value an
 	})
 }
 
+// ReplaceConfigSnapshot handles a replace config snapshot.
 func (r *Repository) ReplaceConfigSnapshot(ctx context.Context, values map[string]any) error {
+	// Normalize source data before building the derived payload.
 	db, errDB := r.database()
 	if errDB != nil {
 		return errDB
@@ -429,6 +451,7 @@ func (r *Repository) ReplaceConfigSnapshot(ctx context.Context, values map[strin
 	})
 }
 
+// LoadConfigSnapshot loads a config snapshot.
 func (r *Repository) LoadConfigSnapshot(ctx context.Context) (map[string]json.RawMessage, error) {
 	db, errDB := r.database()
 	if errDB != nil {
@@ -447,6 +470,7 @@ func (r *Repository) LoadConfigSnapshot(ctx context.Context) (map[string]json.Ra
 	return out, nil
 }
 
+// AppendEvent appends an event.
 func (r *Repository) AppendEvent(ctx context.Context, scope, op, entity string, version int64) error {
 	db, errDB := r.database()
 	if errDB != nil {
@@ -455,6 +479,7 @@ func (r *Repository) AppendEvent(ctx context.Context, scope, op, entity string, 
 	return appendEvent(db.WithContext(contextOrBackground(ctx)), scope, op, entity, version)
 }
 
+// MaxEventID handles a max event id.
 func (r *Repository) MaxEventID(ctx context.Context) (int64, error) {
 	db, errDB := r.database()
 	if errDB != nil {
@@ -467,6 +492,7 @@ func (r *Repository) MaxEventID(ctx context.Context) (int64, error) {
 	return maxID, nil
 }
 
+// database handles a database.
 func (r *Repository) database() (*gorm.DB, error) {
 	if r == nil {
 		return nil, fmt.Errorf("cluster repository is nil")
@@ -477,6 +503,7 @@ func (r *Repository) database() (*gorm.DB, error) {
 	return r.db, nil
 }
 
+// appendEvent appends an event.
 func appendEvent(db *gorm.DB, scope, op, entity string, version int64) error {
 	if db == nil {
 		return fmt.Errorf("database connection is nil")
@@ -491,6 +518,7 @@ func appendEvent(db *gorm.DB, scope, op, entity string, version int64) error {
 	return db.Create(&event).Error
 }
 
+// contextOrBackground handles a context or background.
 func contextOrBackground(ctx context.Context) context.Context {
 	if ctx == nil {
 		return context.Background()
@@ -498,6 +526,7 @@ func contextOrBackground(ctx context.Context) context.Context {
 	return ctx
 }
 
+// timePtrOrNil handles a time ptr or nil.
 func timePtrOrNil(value time.Time) *time.Time {
 	if value.IsZero() {
 		return nil
@@ -506,6 +535,7 @@ func timePtrOrNil(value time.Time) *time.Time {
 	return &utcValue
 }
 
+// hashValue reports whether h value is present.
 func hashValue(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -515,7 +545,9 @@ func hashValue(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// hydrateAuthRuntime handles a hydrate auth runtime.
 func (r *Repository) hydrateAuthRuntime(ctx context.Context, db *gorm.DB, auth *coreauth.Auth) error {
+	// Normalize auth state before updating runtime indexes.
 	if auth == nil {
 		return nil
 	}
@@ -551,7 +583,9 @@ func (r *Repository) hydrateAuthRuntime(ctx context.Context, db *gorm.DB, auth *
 	return nil
 }
 
+// hydrateAuthListRuntimes handles a hydrate auth list runtimes.
 func hydrateAuthListRuntimes(auths []*coreauth.Auth) {
+	// Normalize auth state before updating runtime indexes.
 	if len(auths) == 0 {
 		return
 	}
@@ -602,6 +636,7 @@ func hydrateAuthListRuntimes(auths []*coreauth.Auth) {
 	}
 }
 
+// applyGeminiVirtualRuntime applies a gemini virtual runtime.
 func applyGeminiVirtualRuntime(auth *coreauth.Auth, parent *coreauth.Auth) {
 	if auth == nil || parent == nil {
 		return
@@ -621,6 +656,7 @@ func applyGeminiVirtualRuntime(auth *coreauth.Auth, parent *coreauth.Auth) {
 	auth.Runtime = geminicli.NewVirtualCredential(projectID, shared)
 }
 
+// geminiSharedCredential handles a gemini shared credential.
 func geminiSharedCredential(auth *coreauth.Auth, fallbackProjectID string) *geminicli.SharedCredential {
 	if auth == nil || !isGeminiCLIAuth(auth) {
 		return nil
@@ -637,6 +673,7 @@ func geminiSharedCredential(auth *coreauth.Auth, fallbackProjectID string) *gemi
 	return geminicli.NewSharedCredential(auth.ID, email, auth.Metadata, projects)
 }
 
+// isGeminiCLIAuth reports whether gemini cli auth.
 func isGeminiCLIAuth(auth *coreauth.Auth) bool {
 	if auth == nil {
 		return false
@@ -656,6 +693,7 @@ func isGeminiCLIAuth(auth *coreauth.Auth) bool {
 	return false
 }
 
+// geminiVirtualParentID handles a gemini virtual parent id.
 func geminiVirtualParentID(auth *coreauth.Auth) string {
 	if auth == nil || auth.Attributes == nil {
 		return ""
@@ -663,6 +701,7 @@ func geminiVirtualParentID(auth *coreauth.Auth) string {
 	return strings.TrimSpace(auth.Attributes["gemini_virtual_parent"])
 }
 
+// geminiVirtualProjectID handles a gemini virtual project id.
 func geminiVirtualProjectID(auth *coreauth.Auth) string {
 	if auth == nil {
 		return ""
@@ -675,6 +714,7 @@ func geminiVirtualProjectID(auth *coreauth.Auth) string {
 	return metadataString(auth.Metadata, "project_id")
 }
 
+// geminiProjectIDs handles a gemini project i ds.
 func geminiProjectIDs(auth *coreauth.Auth) []string {
 	if auth == nil {
 		return nil
@@ -691,6 +731,7 @@ func geminiProjectIDs(auth *coreauth.Auth) []string {
 	return out
 }
 
+// metadataString handles a metadata string.
 func metadataString(metadata map[string]any, key string) string {
 	if metadata == nil {
 		return ""
@@ -699,6 +740,7 @@ func metadataString(metadata map[string]any, key string) string {
 	return strings.TrimSpace(value)
 }
 
+// splitCommaValues splits a comma values.
 func splitCommaValues(value string) []string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -716,6 +758,7 @@ func splitCommaValues(value string) []string {
 	return out
 }
 
+// appendUniqueString appends an unique string.
 func appendUniqueString(values []string, value string) []string {
 	value = strings.TrimSpace(value)
 	if value == "" {

@@ -145,12 +145,15 @@ func GetGlobalRegistry() *ModelRegistry {
 	})
 	return globalRegistry
 }
+
+// ensureAvailableModelsCacheLocked ensures an available models cache locked.
 func (r *ModelRegistry) ensureAvailableModelsCacheLocked() {
 	if r.availableModelsCache == nil {
 		r.availableModelsCache = make(map[string]availableModelsCacheEntry)
 	}
 }
 
+// invalidateAvailableModelsCacheLocked invalidates an available models cache locked.
 func (r *ModelRegistry) invalidateAvailableModelsCacheLocked() {
 	if len(r.availableModelsCache) == 0 {
 		return
@@ -189,6 +192,7 @@ func (r *ModelRegistry) SetHook(hook ModelRegistryHook) {
 const defaultModelRegistryHookTimeout = 5 * time.Second
 const modelQuotaExceededWindow = 5 * time.Minute
 
+// triggerModelsRegistered triggers a models registered.
 func (r *ModelRegistry) triggerModelsRegistered(provider, clientID string, models []*ModelInfo) {
 	hook := r.hook
 	if hook == nil {
@@ -207,6 +211,7 @@ func (r *ModelRegistry) triggerModelsRegistered(provider, clientID string, model
 	}()
 }
 
+// triggerModelsUnregistered triggers a models unregistered.
 func (r *ModelRegistry) triggerModelsUnregistered(provider, clientID string) {
 	hook := r.hook
 	if hook == nil {
@@ -444,7 +449,9 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 	misc.LogCredentialSeparator()
 }
 
+// addModelRegistration adds a model registration.
 func (r *ModelRegistry) addModelRegistration(modelID, provider string, model *ModelInfo, now time.Time) {
+	// Normalize source data before building the derived payload.
 	if model == nil || modelID == "" {
 		return
 	}
@@ -485,7 +492,9 @@ func (r *ModelRegistry) addModelRegistration(modelID, provider string, model *Mo
 	log.Debugf("Registered new model %s from provider %s", modelID, provider)
 }
 
+// removeModelRegistration removes a model registration.
 func (r *ModelRegistry) removeModelRegistration(clientID, modelID, provider string, now time.Time) {
+	// Normalize source data before building the derived payload.
 	registration, exists := r.models[modelID]
 	if !exists {
 		return
@@ -520,7 +529,9 @@ func (r *ModelRegistry) removeModelRegistration(clientID, modelID, provider stri
 	}
 }
 
+// cloneModelInfo clones a model info.
 func cloneModelInfo(model *ModelInfo) *ModelInfo {
+	// Normalize source data before building the derived payload.
 	if model == nil {
 		return nil
 	}
@@ -547,6 +558,7 @@ func cloneModelInfo(model *ModelInfo) *ModelInfo {
 	return &copyModel
 }
 
+// cloneModelInfosUnique clones a model infos unique.
 func cloneModelInfosUnique(models []*ModelInfo) []*ModelInfo {
 	if len(models) == 0 {
 		return nil
@@ -576,7 +588,7 @@ func (r *ModelRegistry) UnregisterClient(clientID string) {
 	r.invalidateAvailableModelsCacheLocked()
 }
 
-// unregisterClientInternal performs the actual client unregistration (internal, no locking)
+// unregisterClientInternal handles an unregister client internal.
 func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 	models, exists := r.clientModels[clientID]
 	provider, hasProvider := r.clientProviders[clientID]
@@ -672,6 +684,7 @@ func (r *ModelRegistry) ClearModelQuotaExceeded(clientID, modelID string) {
 //   - modelID: The model affected by the suspension
 //   - reason: Optional description for observability
 func (r *ModelRegistry) SuspendClientModel(clientID, modelID, reason string) {
+	// Normalize source data before building the derived payload.
 	if clientID == "" || modelID == "" {
 		return
 	}
@@ -726,6 +739,7 @@ func (r *ModelRegistry) ResumeClientModel(clientID, modelID string) {
 
 // ClientSupportsModel reports whether the client registered support for modelID.
 func (r *ModelRegistry) ClientSupportsModel(clientID, modelID string) bool {
+	// Normalize source data before building the derived payload.
 	clientID = strings.TrimSpace(clientID)
 	modelID = strings.TrimSpace(modelID)
 	if clientID == "" || modelID == "" {
@@ -756,6 +770,7 @@ func (r *ModelRegistry) ClientSupportsModel(clientID, modelID string) bool {
 // Returns:
 //   - []map[string]any: List of available models in the requested format
 func (r *ModelRegistry) GetAvailableModels(handlerType string) []map[string]any {
+	// Build the candidate view before applying availability rules.
 	now := time.Now()
 
 	r.mutex.RLock()
@@ -783,7 +798,9 @@ func (r *ModelRegistry) GetAvailableModels(handlerType string) []map[string]any 
 	return models
 }
 
+// buildAvailableModelsLocked builds an available models locked.
 func (r *ModelRegistry) buildAvailableModelsLocked(handlerType string, now time.Time) ([]map[string]any, time.Time) {
+	// Build the candidate view before applying availability rules.
 	models := make([]map[string]any, 0, len(r.models))
 	var expiresAt time.Time
 
@@ -832,6 +849,7 @@ func (r *ModelRegistry) buildAvailableModelsLocked(handlerType string, now time.
 	return models, expiresAt
 }
 
+// cloneModelMaps clones a model maps.
 func cloneModelMaps(models []map[string]any) []map[string]any {
 	cloned := make([]map[string]any, 0, len(models))
 	for _, model := range models {
@@ -848,6 +866,7 @@ func cloneModelMaps(models []map[string]any) []map[string]any {
 	return cloned
 }
 
+// cloneModelMapValue clones a model map value.
 func cloneModelMapValue(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:
@@ -876,6 +895,7 @@ func cloneModelMapValue(value any) any {
 // Returns:
 //   - []*ModelInfo: List of available models for the provider
 func (r *ModelRegistry) GetAvailableModelsByProvider(provider string) []*ModelInfo {
+	// Build the candidate view before applying availability rules.
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == "" {
 		return nil
