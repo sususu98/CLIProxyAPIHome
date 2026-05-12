@@ -142,7 +142,7 @@ func refreshGeminiCLI(ctx context.Context, cfg *config.Config, auth *Auth, rt ht
 		return nil, errRead
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("gemini refresh: oauth refresh failed: %s", strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("gemini refresh: oauth refresh failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var tokenResp struct {
@@ -357,7 +357,7 @@ func refreshAntigravity(ctx context.Context, cfg *config.Config, auth *Auth, rt 
 		return nil, errRead
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("antigravity refresh: oauth refresh failed: %s", strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("antigravity refresh: oauth refresh failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var tokenResp struct {

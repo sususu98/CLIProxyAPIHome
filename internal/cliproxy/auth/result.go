@@ -89,6 +89,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					}
 
 					statusCode := statusCodeFromResult(result.Error)
+					disableAuth := false
 					if isModelSupportResultError(result.Error) {
 						next := now.Add(12 * time.Hour)
 						state.NextRetryAfter = next
@@ -97,14 +98,9 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					} else {
 						switch statusCode {
 						case http.StatusUnauthorized:
-							if disableCooling {
-								state.NextRetryAfter = time.Time{}
-							} else {
-								next := now.Add(30 * time.Minute)
-								state.NextRetryAfter = next
-								suspendReason = "unauthorized"
-								shouldSuspendModel = true
-							}
+							disableAuth = true
+							suspendReason = "unauthorized"
+							shouldSuspendModel = true
 						case http.StatusPaymentRequired, http.StatusForbidden:
 							if disableCooling {
 								state.NextRetryAfter = time.Time{}
@@ -156,9 +152,13 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 						}
 					}
 
-					auth.Status = StatusError
-					auth.UpdatedAt = now
-					updateAggregatedAvailability(auth, now)
+					if disableAuth {
+						disableAuthAfterUnauthorized(auth, state, result.Error, now)
+					} else {
+						auth.Status = StatusError
+						auth.UpdatedAt = now
+						updateAggregatedAvailability(auth, now)
+					}
 				}
 			} else {
 				applyAuthFailureState(m, auth, result.Error, now)
@@ -172,6 +172,9 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 
 	if m.scheduler != nil && authSnapshot != nil {
 		m.scheduler.upsertAuth(authSnapshot)
+	}
+	if authSnapshot != nil && authRefreshDisabled(authSnapshot) {
+		m.queueRefreshReschedule(authSnapshot.ID)
 	}
 	if resultAuthID == "" {
 		return
@@ -468,12 +471,7 @@ func applyAuthFailureState(m *Manager, auth *Auth, resultErr *Error, now time.Ti
 	statusCode := statusCodeFromResult(resultErr)
 	switch statusCode {
 	case http.StatusUnauthorized:
-		auth.StatusMessage = "unauthorized"
-		if disableCooling {
-			auth.NextRetryAfter = time.Time{}
-		} else {
-			auth.NextRetryAfter = now.Add(30 * time.Minute)
-		}
+		disableAuthAfterUnauthorized(auth, nil, resultErr, now)
 	case http.StatusPaymentRequired, http.StatusForbidden:
 		auth.StatusMessage = "payment_required"
 		if disableCooling {
@@ -513,6 +511,40 @@ func applyAuthFailureState(m *Manager, auth *Auth, resultErr *Error, now time.Ti
 		if auth.StatusMessage == "" {
 			auth.StatusMessage = "request failed"
 		}
+	}
+}
+
+// disableAuthAfterUnauthorized removes a credential from request and refresh retries.
+func disableAuthAfterUnauthorized(auth *Auth, state *ModelState, resultErr *Error, now time.Time) {
+	if auth == nil {
+		return
+	}
+	auth.Disabled = true
+	auth.Unavailable = true
+	auth.Status = StatusDisabled
+	auth.StatusMessage = "unauthorized"
+	auth.NextRetryAfter = time.Time{}
+	auth.NextRefreshAfter = time.Time{}
+	auth.Quota = QuotaState{}
+	auth.UpdatedAt = now
+	if resultErr != nil {
+		auth.LastError = cloneError(resultErr)
+	} else if auth.LastError == nil {
+		auth.LastError = &Error{Message: http.StatusText(http.StatusUnauthorized), HTTPStatus: http.StatusUnauthorized}
+	}
+	if state == nil {
+		return
+	}
+	state.Unavailable = true
+	state.Status = StatusDisabled
+	state.StatusMessage = "unauthorized"
+	state.NextRetryAfter = time.Time{}
+	state.Quota = QuotaState{}
+	state.UpdatedAt = now
+	if resultErr != nil {
+		state.LastError = cloneError(resultErr)
+	} else if state.LastError == nil {
+		state.LastError = &Error{Message: http.StatusText(http.StatusUnauthorized), HTTPStatus: http.StatusUnauthorized}
 	}
 }
 

@@ -351,7 +351,7 @@ func (l *authAutoRefreshLoop) remove(authID string) {
 // nextRefreshCheckAt returns a next refresh check at.
 func nextRefreshCheckAt(now time.Time, auth *Auth, interval time.Duration) (time.Time, bool) {
 	// Resolve credential context before calling upstream OAuth services.
-	if auth == nil {
+	if authRefreshDisabled(auth) {
 		return time.Time{}, false
 	}
 

@@ -23,6 +23,8 @@ const (
 	refreshMaxConcurrency = 16
 	refreshPendingBackoff = time.Minute
 	refreshFailureBackoff = 5 * time.Minute
+	refreshAuthErrorCode  = "authentication_error"
+	refreshAuthErrorMsg   = "credential unauthorized"
 	// refreshIneffectiveBackoff throttles refresh attempts when the refresh completes
 	// successfully but the auth still evaluates as needing refresh (e.g. token expiry
 	// wasn't updated). Without this guard, the auto-refresh loop can tight-loop and
@@ -664,7 +666,7 @@ func (m *Manager) executionModelCandidates(auth *Auth, routeModel string) []stri
 // shouldRefresh reports whether should refresh.
 func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
 	// Resolve credential context before calling upstream OAuth services.
-	if a == nil {
+	if authRefreshDisabled(a) {
 		return false
 	}
 	if !a.NextRefreshAfter.IsZero() && now.Before(a.NextRefreshAfter) {
@@ -716,6 +718,46 @@ func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
 		return now.Sub(lastRefresh) >= *lead
 	}
 	return true
+}
+
+// authRefreshDisabled reports whether auth should be absent from auto-refresh scheduling.
+func authRefreshDisabled(auth *Auth) bool {
+	return auth == nil || auth.Disabled || auth.Status == StatusDisabled
+}
+
+// applyRefreshFailureState records refresh failure without retrying 401 credentials.
+func applyRefreshFailureState(auth *Auth, errRefresh error, now time.Time) {
+	if auth == nil || errRefresh == nil {
+		return
+	}
+	if isUnauthorizedRefreshError(errRefresh) {
+		disableAuthAfterUnauthorized(auth, nil, &Error{Message: errRefresh.Error(), HTTPStatus: http.StatusUnauthorized}, now)
+		return
+	}
+	auth.NextRefreshAfter = now.Add(refreshFailureBackoff)
+	auth.LastError = &Error{Message: errRefresh.Error()}
+}
+
+// newUnauthorizedRefreshError returns the fixed wire error for failed forced refresh.
+func newUnauthorizedRefreshError() error {
+	return &Error{
+		Code:       refreshAuthErrorCode,
+		Message:    refreshAuthErrorMsg,
+		HTTPStatus: http.StatusUnauthorized,
+	}
+}
+
+// isUnauthorizedRefreshError reports whether a refresh error came from HTTP 401.
+func isUnauthorizedRefreshError(errRefresh error) bool {
+	if errRefresh == nil {
+		return false
+	}
+	raw := strings.ToLower(errRefresh.Error())
+	return strings.Contains(raw, "status 401") ||
+		strings.Contains(raw, "status: 401") ||
+		strings.Contains(raw, "status code 401") ||
+		strings.Contains(raw, "http 401") ||
+		strings.Contains(raw, "401 unauthorized")
 }
 
 // markRefreshPending handles a mark refresh pending.
@@ -1033,9 +1075,12 @@ func (m *Manager) RefreshNow(ctx context.Context, authIndex string) (*Auth, erro
 	now := time.Now().UTC()
 	if errRefresh != nil {
 		snapshot := target.Clone()
-		snapshot.NextRefreshAfter = now.Add(refreshFailureBackoff)
-		snapshot.LastError = &Error{Message: errRefresh.Error()}
+		unauthorized := isUnauthorizedRefreshError(errRefresh)
+		applyRefreshFailureState(snapshot, errRefresh, now)
 		_, _ = m.Update(ctx, snapshot)
+		if unauthorized {
+			return nil, newUnauthorizedRefreshError()
+		}
 		return nil, errRefresh
 	}
 	if updated == nil {
@@ -1089,8 +1134,11 @@ func (m *Manager) RefreshAuthCredential(ctx context.Context, target *Auth) (*Aut
 	now := time.Now().UTC()
 	if errRefresh != nil {
 		snapshot := target.Clone()
-		snapshot.NextRefreshAfter = now.Add(refreshFailureBackoff)
-		snapshot.LastError = &Error{Message: errRefresh.Error()}
+		unauthorized := isUnauthorizedRefreshError(errRefresh)
+		applyRefreshFailureState(snapshot, errRefresh, now)
+		if unauthorized {
+			return snapshot, newUnauthorizedRefreshError()
+		}
 		return snapshot, errRefresh
 	}
 	if updated == nil {
@@ -1155,8 +1203,7 @@ func (m *Manager) refreshAuth(ctx context.Context, authID string) {
 	if errRefresh != nil {
 		logEntryWithRequestID(ctx).Warnf("auth refresh failed | auth=%s provider=%s err=%v", authID, current.Provider, errRefresh)
 		snapshot := current.Clone()
-		snapshot.NextRefreshAfter = now.Add(refreshFailureBackoff)
-		snapshot.LastError = &Error{Message: errRefresh.Error()}
+		applyRefreshFailureState(snapshot, errRefresh, now)
 		_, _ = m.Update(ctx, snapshot)
 		return
 	}
