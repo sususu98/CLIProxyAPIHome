@@ -18,13 +18,13 @@ It serves as a centralized hub for managing and scheduling API credentials in la
   - Anthropic Messages protocol providers
   - Google Gemini protocol providers
 
-## 集群模式
+## Cluster Mode
 
-当工作目录中存在 `cluster.yaml` 时，Home 会启用基于 PGSQL 的集群模式；当 `cluster.yaml` 不存在时，Home 会保持单节点模式并继续使用本地配置。
+Home enables PGSQL-backed cluster mode when `cluster.yaml` exists in the working directory. When `cluster.yaml` is absent, Home keeps the single-node mode and continues using local configuration.
 
-可以复制 `cluster.example.yaml` 为 `cluster.yaml` 后按实际环境修改。PGSQL 连接必须使用 TCP `host` 和 `port`，不能使用 Unix Socket。集群模式启动并完成迁移后，会删除已经导入的本地凭证文件和 `config.yaml`，避免后续继续读取旧的本地状态。
+Copy `cluster.example.yaml` to `cluster.yaml`, then adjust it for the target environment. PGSQL connections must use a TCP `host` and `port`; Unix sockets are not supported. After cluster mode starts and completes migration, Home deletes the imported local credential files and `config.yaml` so it will not keep reading stale local state.
 
-集群模式下，Management API 会直接操作 PGSQL 中的数据。默认监听端口来自 `cluster.yaml` 的 `node.port`；也可以通过启动参数 `-addr` 覆盖监听地址，但实际集群节点端口始终以最终监听端口为准。
+In cluster mode, the Management API operates directly on data stored in PGSQL. The default listen port comes from `node.port` in `cluster.yaml`; the startup `-addr` flag can override the listen address, but the effective cluster node port always follows the final listen port.
 
 ## Contributing
 
