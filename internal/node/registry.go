@@ -8,8 +8,9 @@ import (
 )
 
 type Node struct {
-	IP        string    `json:"ip"`
-	Connected time.Time `json:"connected_time"`
+	IP          string    `json:"ip"`
+	Connected   time.Time `json:"connected_time"`
+	ClientCount int       `json:"client_count"`
 }
 
 type Registry struct {
@@ -95,8 +96,9 @@ func (r *Registry) List() []Node {
 	snapshot := make([]Node, 0, len(r.nodes))
 	for ip, entry := range r.nodes {
 		snapshot = append(snapshot, Node{
-			IP:        ip,
-			Connected: entry.connectedAt,
+			IP:          ip,
+			Connected:   entry.connectedAt,
+			ClientCount: entry.count,
 		})
 	}
 	r.mu.RUnlock()
@@ -109,4 +111,20 @@ func (r *Registry) List() []Node {
 	})
 
 	return snapshot
+}
+
+// TotalCount returns the current number of active client connections.
+func (r *Registry) TotalCount() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.RLock()
+	total := 0
+	for _, entry := range r.nodes {
+		if entry.count > 0 {
+			total += entry.count
+		}
+	}
+	r.mu.RUnlock()
+	return total
 }

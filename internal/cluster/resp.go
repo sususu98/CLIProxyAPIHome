@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,14 @@ type RESPHandler struct {
 	repo        *Repository
 }
 
+type clientNodePayload struct {
+	IP          string    `json:"ip"`
+	Port        int       `json:"port"`
+	ClientCount int       `json:"client_count"`
+	IsMaster    bool      `json:"is_master"`
+	LastSeenAt  time.Time `json:"last_seen_at"`
+}
+
 // NewRESPHandler creates a new resp handler.
 func NewRESPHandler(coordinator *Coordinator, refresh *RefreshController, repo *Repository) *RESPHandler {
 	return &RESPHandler{
@@ -28,6 +37,19 @@ func NewRESPHandler(coordinator *Coordinator, refresh *RefreshController, repo *
 		refresh:     refresh,
 		repo:        repo,
 	}
+}
+
+// IsClientClusterCommand reports whether a CLUSTER command is for authenticated CPA clients.
+func IsClientClusterCommand(args []string) bool {
+	return len(args) >= 2 && strings.EqualFold(strings.TrimSpace(args[0]), "CLUSTER") && strings.EqualFold(strings.TrimSpace(args[1]), "NODES")
+}
+
+// UpdateClientCount stores the current active CPA client count for this node.
+func (h *RESPHandler) UpdateClientCount(ctx context.Context, clientCount int) error {
+	if h == nil || h.coordinator == nil {
+		return nil
+	}
+	return h.coordinator.UpdateClientCount(ctx, clientCount)
 }
 
 // Handle handles handle.
@@ -47,6 +69,11 @@ func (h *RESPHandler) Handle(ctx context.Context, args []string, remoteIP string
 	}
 
 	switch strings.ToUpper(strings.TrimSpace(args[1])) {
+	case "NODES":
+		if len(args) != 2 {
+			return nil, fmt.Errorf("cluster resp: wrong number of arguments for 'cluster nodes'")
+		}
+		return h.nodesPayload(ctx)
 	case "PING":
 		if len(args) != 3 {
 			return nil, fmt.Errorf("cluster resp: wrong number of arguments for 'cluster ping'")
@@ -77,6 +104,58 @@ func (h *RESPHandler) Handle(ctx context.Context, args []string, remoteIP string
 	default:
 		return nil, fmt.Errorf("cluster resp: unsupported subcommand")
 	}
+}
+
+// nodesPayload returns live cluster nodes for authenticated CPA clients.
+func (h *RESPHandler) nodesPayload(ctx context.Context) ([]byte, error) {
+	if h == nil || h.repo == nil {
+		return nil, fmt.Errorf("cluster resp: repository is nil")
+	}
+	timeout := defaultHeartbeatTimeout
+	if h.coordinator != nil && h.coordinator.heartbeatTimeout > 0 {
+		timeout = h.coordinator.heartbeatTimeout
+	}
+	cutoff := time.Now().UTC().Add(-timeout)
+	nodes, errNodes := h.repo.ListLiveClusterNodes(ctx, cutoff)
+	if errNodes != nil {
+		return nil, errNodes
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		leftCount := nodes[i].ClientCount
+		rightCount := nodes[j].ClientCount
+		if leftCount < 0 {
+			leftCount = 0
+		}
+		if rightCount < 0 {
+			rightCount = 0
+		}
+		if leftCount != rightCount {
+			return leftCount < rightCount
+		}
+		if !nodes[i].StartedAt.Equal(nodes[j].StartedAt) {
+			return nodes[i].StartedAt.Before(nodes[j].StartedAt)
+		}
+		return nodeSortKey(nodes[i]) < nodeSortKey(nodes[j])
+	})
+
+	payloadNodes := make([]clientNodePayload, 0, len(nodes))
+	for _, node := range nodes {
+		clientCount := node.ClientCount
+		if clientCount < 0 {
+			clientCount = 0
+		}
+		payloadNodes = append(payloadNodes, clientNodePayload{
+			IP:          node.IP,
+			Port:        node.Port,
+			ClientCount: clientCount,
+			IsMaster:    node.IsMaster,
+			LastSeenAt:  node.LastSeenAt,
+		})
+	}
+	return json.Marshal(map[string]any{
+		"ok":    true,
+		"nodes": payloadNodes,
+	})
 }
 
 // authorizeNode authorizes a node.

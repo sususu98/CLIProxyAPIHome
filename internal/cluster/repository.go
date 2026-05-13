@@ -286,6 +286,27 @@ func (r *Repository) LiveClusterNodeByIPAndSecret(ctx context.Context, ip string
 	return record, nil
 }
 
+// ListLiveClusterNodes returns live cluster nodes.
+func (r *Repository) ListLiveClusterNodes(ctx context.Context, cutoff time.Time) ([]ClusterNodeRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	if cutoff.IsZero() {
+		cutoff = time.Now().UTC().Add(-defaultHeartbeatTimeout)
+	}
+
+	var records []ClusterNodeRecord
+	errFind := db.WithContext(contextOrBackground(ctx)).
+		Where("port > ? AND last_seen_at >= ?", 0, cutoff).
+		Order("client_count ASC, started_at ASC, ip ASC, port ASC").
+		Find(&records).Error
+	if errFind != nil {
+		return nil, errFind
+	}
+	return records, nil
+}
+
 // ListAuths returns an auths.
 func (r *Repository) ListAuths(ctx context.Context) ([]*coreauth.Auth, error) {
 	// Normalize auth state before updating runtime indexes.

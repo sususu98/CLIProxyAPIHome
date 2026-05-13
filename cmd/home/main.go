@@ -96,12 +96,15 @@ func run() int {
 			log.Errorf("failed to migrate cluster database: %v", errMigrate)
 			return 1
 		}
-		clientAddr, errClientAddr := cluster.ClientAddr(runCtx, clusterDB)
-		if errClientAddr != nil {
-			log.Errorf("failed to get cluster client address: %v", errClientAddr)
-			return 1
+		clusterClientAddr = strings.TrimSpace(clusterCfg.Node.ExternalIP)
+		if clusterClientAddr == "" {
+			clientAddr, errClientAddr := cluster.ClientAddr(runCtx, clusterDB)
+			if errClientAddr != nil {
+				log.Errorf("failed to get cluster client address: %v", errClientAddr)
+				return 1
+			}
+			clusterClientAddr = clientAddr
 		}
-		clusterClientAddr = clientAddr
 		localCfg, errLocalConfig := loadLocalConfigForCluster(configPath)
 		if errLocalConfig != nil {
 			log.Errorf("failed to load local config %s: %v", configPath, errLocalConfig)

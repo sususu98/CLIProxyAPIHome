@@ -11,6 +11,8 @@ pgsql:
   sslmode: "disable"
 
 node:
+  # Optional public address advertised to other Home nodes and CPA clients.
+  # external-ip: "203.0.113.10"
   port: 8327
   heartbeat-interval: "5s"
   heartbeat-timeout: "20s"

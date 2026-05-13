@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -134,6 +135,27 @@ func (c *Coordinator) NodeSecret() string {
 	return strings.TrimSpace(c.node.Secret)
 }
 
+// UpdateClientCount stores the current active CPA client count for this node.
+func (c *Coordinator) UpdateClientCount(ctx context.Context, clientCount int) error {
+	if c == nil {
+		return fmt.Errorf("cluster coordinator is nil")
+	}
+	if c.repo == nil {
+		return fmt.Errorf("cluster coordinator repository is nil")
+	}
+	if clientCount < 0 {
+		clientCount = 0
+	}
+	db, errDB := c.repo.database()
+	if errDB != nil {
+		return errDB
+	}
+	return db.WithContext(contextOrBackground(ctx)).
+		Model(&ClusterNodeRecord{}).
+		Where("ip = ? AND port = ?", c.node.IP, c.node.Port).
+		Update("client_count", clientCount).Error
+}
+
 // SetOnMasterChanged sets an on master changed.
 func (c *Coordinator) SetOnMasterChanged(callback func(bool)) {
 	if c == nil {
@@ -199,11 +221,12 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context) error {
 	now := time.Now().UTC()
 	cutoff := now.Add(-c.heartbeatTimeout)
 	record := ClusterNodeRecord{
-		IP:         c.node.IP,
-		Port:       c.node.Port,
-		SecretHash: nodeSecretHash(c.node.Secret),
-		StartedAt:  c.node.StartedAt,
-		LastSeenAt: now,
+		IP:          c.node.IP,
+		Port:        c.node.Port,
+		SecretHash:  nodeSecretHash(c.node.Secret),
+		ClientCount: node.GlobalRegistry().TotalCount(),
+		StartedAt:   c.node.StartedAt,
+		LastSeenAt:  now,
 	}
 
 	var elected *ClusterNodeRecord
@@ -217,6 +240,7 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context) error {
 				"started_at":   record.StartedAt,
 				"last_seen_at": record.LastSeenAt,
 				"secret_hash":  record.SecretHash,
+				"client_count": record.ClientCount,
 			}),
 		}).Create(&record).Error; errUpsert != nil {
 			return errUpsert

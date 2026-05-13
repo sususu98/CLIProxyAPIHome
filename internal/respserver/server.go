@@ -45,6 +45,15 @@ func (s *Server) SetClusterHandler(handler *cluster.RESPHandler) {
 	s.cluster = handler
 }
 
+func (s *Server) syncClusterClientCount(ctx context.Context) {
+	if s == nil || s.cluster == nil {
+		return
+	}
+	if errSync := s.cluster.UpdateClientCount(ctx, node.GlobalRegistry().TotalCount()); errSync != nil {
+		log.Warnf("failed to sync cluster client count: %v", errSync)
+	}
+}
+
 // ListenAndServe returns an en and serve.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	// Decode the wire frame before dispatching command handling.
@@ -131,6 +140,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 		}
 		if addedNode {
 			node.GlobalRegistry().Remove(clientIP)
+			s.syncClusterClientCount(ctx)
 			addedNode = false
 		}
 		if errClose := conn.Close(); errClose != nil {
@@ -156,6 +166,19 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 		if cmd == clusterCommand {
 			if s.cluster == nil {
 				_ = writer.WriteRedisError("ERR cluster disabled")
+				continue
+			}
+			if cluster.IsClientClusterCommand(args) && !authed {
+				if s.auth != nil {
+					_, statusCode, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, "")
+					if statusCode == http.StatusForbidden && strings.HasPrefix(errMsg, "IP banned due to too many failed attempts") {
+						_ = writer.WriteRedisError("ERR " + errMsg)
+					} else {
+						_ = writer.WriteRedisError("NOAUTH Authentication required.")
+					}
+				} else {
+					_ = writer.WriteRedisError("NOAUTH Authentication required.")
+				}
 				continue
 			}
 			payload, errCluster := s.cluster.Handle(ctx, args, clientIP)
@@ -249,6 +272,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 						}
 						if !addedNode {
 							node.GlobalRegistry().Add(clientIP, connectedAt)
+							s.syncClusterClientCount(ctx)
 							addedNode = true
 						}
 						unsubscribeConfig = s.runtime.SubscribeConfigYAML(func(payload []byte) error {
@@ -268,6 +292,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 						unsubscribeConfig = nil
 						if addedNode {
 							node.GlobalRegistry().Remove(clientIP)
+							s.syncClusterClientCount(ctx)
 							addedNode = false
 						}
 						return 0, nil
