@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: cliproxy-api-home-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cliproxy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+      POSTGRES_DB: ${POSTGRES_DB:-cliproxy_home}
+    volumes:
+      - ${CLI_PROXY_HOME_PGDATA_PATH:-./postgres-data}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cliproxy} -d ${POSTGRES_DB:-cliproxy_home}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  home:
+    image: ${CLI_PROXY_HOME_IMAGE:-eceasy/cli-proxy-api-home:latest}
+    pull_policy: always
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-none}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    container_name: cliproxy-api-home
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DEPLOY: ${DEPLOY:-}
+    ports:
+      - "8327:8327"
+    volumes:
+      - ${CLI_PROXY_HOME_PROJECT_ROOT_PATH:-./}:/project-root
+      - ${CLI_PROXY_HOME_CLUSTER_PATH:-./cluster.yaml}:/CLIProxyAPIHome/cluster.yaml
+      - ${CLI_PROXY_HOME_AUTH_PATH:-./auths}:/root/.cli-proxy-api
+      - ${CLI_PROXY_HOME_LOG_PATH:-./logs}:/CLIProxyAPIHome/logs
+    command: >
+      sh -eu -c '
+        if [ -f /project-root/config.yaml ]; then
+          cp /project-root/config.yaml /CLIProxyAPIHome/config.yaml
+        fi
+
+        ./CLIProxyAPIHome &
+        pid=$!
+
+        if [ -f /project-root/config.yaml ]; then
+          while kill -0 "$$pid" 2>/dev/null; do
+            if [ ! -e /CLIProxyAPIHome/config.yaml ]; then
+              rm -f /project-root/config.yaml
+              break
+            fi
+            sleep 1
+          done
+        fi
+
+        wait "$$pid"
+      '
+    restart: unless-stopped
+

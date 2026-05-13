@@ -2,6 +2,8 @@
 # This file enables PGSQL-backed cluster mode when copied to cluster.yaml.
 pgsql:
   host: "127.0.0.1"
+  # When running PostgreSQL in docker compose, use the service/container name instead of 127.0.0.1.
+  # host: "postgres"
   port: 5432
   user: "cliproxy"
   password: "secret"
@@ -9,7 +11,7 @@ pgsql:
   sslmode: "disable"
 
 node:
-  port: 8317
+  port: 8327
   heartbeat-interval: "5s"
   heartbeat-timeout: "20s"
   event-poll-interval: "3s"
