@@ -1,10 +1,13 @@
 package auth
 
 import (
+	"encoding/json"
 	"strings"
 
 	internalconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
 )
+
+const homeConfigModelsMetadataKey = "home_config_models"
 
 // rewriteModelForAuth returns a rewrite model for auth.
 func rewriteModelForAuth(model string, auth *Auth) string {
@@ -62,7 +65,90 @@ func (m *Manager) applyAPIKeyModelAlias(auth *Auth, requestedModel string) strin
 	if upstreamModel != "" {
 		return upstreamModel
 	}
+	upstreamModel = resolveUpstreamModelFromAuthConfigModels(auth, requestedModel)
+	if upstreamModel != "" {
+		return upstreamModel
+	}
 	return requestedModel
+}
+
+type metadataModelAliasEntry struct {
+	name  string
+	alias string
+}
+
+// GetName returns the upstream model name.
+func (m metadataModelAliasEntry) GetName() string { return m.name }
+
+// GetAlias returns the client-visible model alias.
+func (m metadataModelAliasEntry) GetAlias() string { return m.alias }
+
+// resolveUpstreamModelFromAuthConfigModels resolves alias metadata stored on cluster auth records.
+func resolveUpstreamModelFromAuthConfigModels(auth *Auth, requestedModel string) string {
+	if auth == nil || auth.Metadata == nil {
+		return ""
+	}
+	raw := auth.Metadata[homeConfigModelsMetadataKey]
+	entries := modelAliasEntriesFromMetadata(raw)
+	if len(entries) == 0 {
+		return ""
+	}
+	return resolveModelAliasFromConfigModels(requestedModel, entries)
+}
+
+// modelAliasEntriesFromMetadata converts Home model metadata into alias entries.
+func modelAliasEntriesFromMetadata(raw any) []modelAliasEntry {
+	if raw == nil {
+		return nil
+	}
+	data, errMarshal := json.Marshal(raw)
+	if errMarshal != nil || len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	var items []map[string]any
+	if errUnmarshal := json.Unmarshal(data, &items); errUnmarshal != nil {
+		return nil
+	}
+	out := make([]modelAliasEntry, 0, len(items))
+	for _, item := range items {
+		if !metadataBool(item["user_defined"]) {
+			continue
+		}
+		alias := strings.TrimSpace(metadataString(item["id"]))
+		name := strings.TrimSpace(metadataString(item["name"]))
+		if name == "" {
+			name = strings.TrimSpace(metadataString(item["display_name"]))
+		}
+		if alias == "" || name == "" {
+			continue
+		}
+		out = append(out, metadataModelAliasEntry{name: name, alias: alias})
+	}
+	return out
+}
+
+// metadataString derives a string from metadata values.
+func metadataString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case []byte:
+		return string(typed)
+	default:
+		return ""
+	}
+}
+
+// metadataBool derives a bool from metadata values.
+func metadataBool(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true") || strings.TrimSpace(typed) == "1"
+	default:
+		return false
+	}
 }
 
 type apiKeyConfigEntry interface {

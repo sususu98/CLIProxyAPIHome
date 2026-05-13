@@ -169,16 +169,17 @@ func (OAuthSessionRecord) TableName() string {
 }
 
 type AuthIndex struct {
-	UUID        string
-	ID          string
-	Index       string
-	Provider    string
-	Label       string
-	Prefix      string
-	Status      coreauth.Status
-	Disabled    bool
-	Unavailable bool
-	BaseURL     string
-	ModelsHash  string
-	Attributes  map[string]string
+	UUID          string
+	ID            string
+	Index         string
+	Provider      string
+	Label         string
+	Prefix        string
+	Status        coreauth.Status
+	Disabled      bool
+	Unavailable   bool
+	BaseURL       string
+	ModelsHash    string
+	Attributes    map[string]string
+	ModelMetadata map[string]any
 }

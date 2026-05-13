@@ -12,6 +12,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const homeConfigModelsMetadataKey = "home_config_models"
+
 type RuntimeAdapter struct {
 	repo      *Repository
 	index     map[string]AuthIndex
@@ -54,6 +56,7 @@ func (a *RuntimeAdapter) LoadIndex(ctx context.Context) error {
 		item.ID = uuid
 		item.Index = uuid
 		item.Attributes = cloneStringMap(item.Attributes)
+		item.ModelMetadata = cloneModelMetadata(item.ModelMetadata)
 		next[uuid] = item
 	}
 
@@ -126,6 +129,7 @@ func (a *RuntimeAdapter) Save(ctx context.Context, auth *coreauth.Auth) (string,
 		a.index = make(map[string]AuthIndex)
 	}
 	item.Attributes = cloneStringMap(item.Attributes)
+	item.ModelMetadata = cloneModelMetadata(item.ModelMetadata)
 	a.index[auth.ID] = item
 	if a.fullCache == nil {
 		a.fullCache = make(map[string]*coreauth.Auth)
@@ -177,6 +181,7 @@ func (a *RuntimeAdapter) RefreshAuthIndex(ctx context.Context, uuid string) erro
 		a.index = make(map[string]AuthIndex)
 	}
 	item.Attributes = cloneStringMap(item.Attributes)
+	item.ModelMetadata = cloneModelMetadata(item.ModelMetadata)
 	a.index[uuid] = item
 	if a.fullCache != nil {
 		delete(a.fullCache, uuid)
@@ -335,6 +340,7 @@ func authIndexFromRecord(record *AuthRecord, auth *coreauth.Auth) AuthIndex {
 			item.Index = item.UUID
 		}
 		item.Attributes = cloneStringMap(auth.Attributes)
+		item.ModelMetadata = modelMetadataFromAuth(auth)
 	}
 	return item
 }
@@ -360,6 +366,7 @@ func authFromIndex(item AuthIndex) *coreauth.Auth {
 			attrs["models_hash"] = item.ModelsHash
 		}
 	}
+	metadata := cloneModelMetadata(item.ModelMetadata)
 	return &coreauth.Auth{
 		ID:          uuid,
 		Index:       uuid,
@@ -370,7 +377,32 @@ func authFromIndex(item AuthIndex) *coreauth.Auth {
 		Disabled:    item.Disabled,
 		Unavailable: item.Unavailable,
 		Attributes:  attrs,
+		Metadata:    metadata,
 	}
+}
+
+// modelMetadataFromAuth keeps only Home-owned metadata needed for model registration.
+func modelMetadataFromAuth(auth *coreauth.Auth) map[string]any {
+	if auth == nil || auth.Metadata == nil {
+		return nil
+	}
+	raw, ok := auth.Metadata[homeConfigModelsMetadataKey]
+	if !ok || raw == nil {
+		return nil
+	}
+	return map[string]any{homeConfigModelsMetadataKey: raw}
+}
+
+// cloneModelMetadata clones model metadata.
+func cloneModelMetadata(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 // cloneStringMap clones a string map.
