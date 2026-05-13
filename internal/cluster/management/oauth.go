@@ -184,18 +184,18 @@ func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
 		return
 	}
 	disabled := *req.Disabled
-	auth.Disabled = disabled
-	if disabled {
-		auth.Status = coreauth.StatusDisabled
-		auth.StatusMessage = "disabled via management API"
-	} else {
-		auth.Status = coreauth.StatusActive
-		auth.StatusMessage = ""
-	}
-	auth.UpdatedAt = time.Now()
-	if _, errUpsert := h.repo.UpsertAuth(ctx, auth, "update"); errUpsert != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", errUpsert)})
+	auths, errAuths := h.repo.ListAuths(ctx)
+	if errAuths != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", errAuths)})
 		return
+	}
+	targets := authStatusUpdateTargets(auth, auths)
+	for _, target := range targets {
+		applyAuthDisabledStatus(target, disabled)
+		if _, errUpsert := h.repo.UpsertAuth(ctx, target, "update"); errUpsert != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", errUpsert)})
+			return
+		}
 	}
 	if errRefresh := h.refreshAuths(ctx); errRefresh != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", errRefresh)})
@@ -477,6 +477,11 @@ func findOAuthAuthInList(auths []*coreauth.Auth, identifier authIdentifier) *cor
 	}
 	if identifier.Name != "" {
 		for _, auth := range filtered {
+			if authFileDisplayName(auth) == identifier.Name {
+				return auth
+			}
+		}
+		for _, auth := range filtered {
 			if authFileName(auth) == identifier.Name && !isVirtualOAuthAuth(auth) {
 				return auth
 			}
@@ -513,21 +518,94 @@ func isVirtualOAuthAuth(auth *coreauth.Auth) bool {
 	return auth.Attributes != nil && strings.EqualFold(auth.Attributes["runtime_only"], "true")
 }
 
+// isGeminiVirtualPrimaryAuth reports whether auth is the source record for virtual Gemini auths.
+func isGeminiVirtualPrimaryAuth(auth *coreauth.Auth) bool {
+	if auth == nil || auth.Attributes == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(auth.Attributes["gemini_virtual_primary"]), "true")
+}
+
+// authStatusUpdateTargets returns the auth records affected by a status toggle.
+func authStatusUpdateTargets(auth *coreauth.Auth, auths []*coreauth.Auth) []*coreauth.Auth {
+	if auth == nil {
+		return nil
+	}
+	targets := []*coreauth.Auth{auth}
+	if !isGeminiVirtualPrimaryAuth(auth) {
+		return targets
+	}
+	seen := map[string]struct{}{strings.TrimSpace(auth.ID): {}}
+	for _, child := range auths {
+		if child == nil || child.Attributes == nil {
+			continue
+		}
+		if strings.TrimSpace(child.Attributes["gemini_virtual_parent"]) != auth.ID {
+			continue
+		}
+		childID := strings.TrimSpace(child.ID)
+		if _, ok := seen[childID]; ok {
+			continue
+		}
+		seen[childID] = struct{}{}
+		targets = append(targets, child)
+	}
+	return targets
+}
+
+// applyAuthDisabledStatus updates disabled status fields and persisted metadata.
+func applyAuthDisabledStatus(auth *coreauth.Auth, disabled bool) {
+	if auth == nil {
+		return
+	}
+	auth.Disabled = disabled
+	if disabled {
+		auth.Status = coreauth.StatusDisabled
+		auth.StatusMessage = "disabled via management API"
+	} else {
+		auth.Status = coreauth.StatusActive
+		auth.StatusMessage = ""
+	}
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	auth.Metadata["disabled"] = disabled
+	auth.UpdatedAt = time.Now()
+}
+
 // authFileEntry handles an auth file entry.
 func authFileEntry(auth *coreauth.Auth) gin.H {
 	// Validate request inputs before mutating persisted state.
 	entry := gin.H{
-		"id":           auth.ID,
-		"auth_index":   auth.ID,
-		"name":         authFileName(auth),
-		"type":         auth.Provider,
-		"provider":     auth.Provider,
-		"label":        auth.Label,
-		"status":       auth.Status,
-		"disabled":     auth.Disabled,
-		"unavailable":  auth.Unavailable,
-		"runtime_only": auth.Attributes != nil && strings.EqualFold(auth.Attributes["runtime_only"], "true"),
-		"source":       "db",
+		"id":             auth.ID,
+		"auth_index":     auth.ID,
+		"name":           authFileDisplayName(auth),
+		"file_name":      authFileName(auth),
+		"type":           auth.Provider,
+		"provider":       auth.Provider,
+		"label":          auth.Label,
+		"status":         auth.Status,
+		"status_message": auth.StatusMessage,
+		"disabled":       auth.Disabled,
+		"unavailable":    auth.Unavailable,
+		"runtime_only":   auth.Attributes != nil && strings.EqualFold(auth.Attributes["runtime_only"], "true"),
+		"source":         "db",
+	}
+	if isGeminiVirtualPrimaryAuth(auth) {
+		entry["virtual_primary"] = true
+		if auth.Attributes != nil {
+			entry["virtual_children"] = strings.TrimSpace(auth.Attributes["virtual_children"])
+		}
+	}
+	if isVirtualOAuthAuth(auth) {
+		entry["virtual"] = true
+		if parentID := geminiVirtualParentID(auth); parentID != "" {
+			entry["virtual_parent_id"] = parentID
+		}
+		if projectID := geminiVirtualProjectID(auth); projectID != "" {
+			entry["virtual_project"] = projectID
+			entry["project_id"] = projectID
+		}
 	}
 	if email := stringFromAny(auth.Metadata["email"]); email != "" {
 		entry["email"] = email
@@ -559,6 +637,57 @@ func authFileName(auth *coreauth.Auth) string {
 		}
 	}
 	return strings.TrimSpace(auth.ID) + ".json"
+}
+
+// authFileDisplayName returns a stable management-list name for the auth entry.
+func authFileDisplayName(auth *coreauth.Auth) string {
+	name := authFileName(auth)
+	if !isVirtualOAuthAuth(auth) {
+		return name
+	}
+	projectID := geminiVirtualProjectID(auth)
+	if projectID == "" {
+		return name
+	}
+	baseName := strings.TrimSpace(name)
+	if baseName == "" {
+		baseName = strings.TrimSpace(auth.ID) + ".json"
+	}
+	return baseName + "::" + sanitizeVirtualDisplayPart(projectID)
+}
+
+// sanitizeVirtualDisplayPart normalizes virtual auth display suffixes.
+func sanitizeVirtualDisplayPart(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "project"
+	}
+	replacer := strings.NewReplacer("/", "_", "\\", "_", " ", "_")
+	return replacer.Replace(value)
+}
+
+// geminiVirtualParentID returns the parent auth id for a virtual Gemini auth.
+func geminiVirtualParentID(auth *coreauth.Auth) string {
+	if auth == nil || auth.Attributes == nil {
+		return ""
+	}
+	return strings.TrimSpace(auth.Attributes["gemini_virtual_parent"])
+}
+
+// geminiVirtualProjectID returns the project id for a virtual Gemini auth.
+func geminiVirtualProjectID(auth *coreauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	if auth.Attributes != nil {
+		if projectID := strings.TrimSpace(auth.Attributes["gemini_virtual_project"]); projectID != "" {
+			return projectID
+		}
+	}
+	if auth.Metadata != nil {
+		return stringFromAny(auth.Metadata["project_id"])
+	}
+	return ""
 }
 
 // applyOAuthFieldPatch applies an o auth field patch.

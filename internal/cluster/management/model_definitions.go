@@ -30,7 +30,7 @@ func (h *Handler) GetAuthFileModels(c *gin.Context) {
 		if auth == nil {
 			continue
 		}
-		if auth.ID == name || auth.Index == name || authFileName(auth) == name {
+		if auth.ID == name || auth.Index == name || authFileDisplayName(auth) == name || authFileName(auth) == name {
 			authID = auth.ID
 			break
 		}

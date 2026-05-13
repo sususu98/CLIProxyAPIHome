@@ -201,6 +201,7 @@ func SynthesizeGeminiVirtualAuths(primary *coreauth.Auth, metadata map[string]an
 	}
 	email, _ := metadata["email"].(string)
 	shared := geminicli.NewSharedCredential(primary.ID, email, metadata, projects)
+	primaryDisabled := primary.Disabled || primary.Status == coreauth.StatusDisabled
 	primary.Disabled = true
 	primary.Status = coreauth.StatusDisabled
 	primary.Runtime = shared
@@ -221,6 +222,10 @@ func SynthesizeGeminiVirtualAuths(primary *coreauth.Auth, metadata map[string]an
 	}
 	virtuals := make([]*coreauth.Auth, 0, len(projects))
 	for _, projectID := range projects {
+		status := coreauth.StatusActive
+		if primaryDisabled {
+			status = coreauth.StatusDisabled
+		}
 		attrs := map[string]string{
 			"runtime_only":           "true",
 			"gemini_virtual_parent":  primary.ID,
@@ -252,6 +257,9 @@ func SynthesizeGeminiVirtualAuths(primary *coreauth.Auth, metadata map[string]an
 			"virtual_parent_id": primary.ID,
 			"type":              metadata["type"],
 		}
+		if primaryDisabled {
+			metadataCopy["disabled"] = true
+		}
 		if v, ok := metadata["disable_cooling"]; ok {
 			metadataCopy["disable_cooling"] = v
 		} else if v, ok := metadata["disable-cooling"]; ok {
@@ -270,7 +278,8 @@ func SynthesizeGeminiVirtualAuths(primary *coreauth.Auth, metadata map[string]an
 			ID:         buildGeminiVirtualID(primary.ID, projectID),
 			Provider:   originalProvider,
 			Label:      fmt.Sprintf("%s [%s]", label, projectID),
-			Status:     coreauth.StatusActive,
+			Status:     status,
+			Disabled:   primaryDisabled,
 			Attributes: attrs,
 			Metadata:   metadataCopy,
 			ProxyURL:   primary.ProxyURL,

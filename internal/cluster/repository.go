@@ -229,12 +229,21 @@ func (r *Repository) ListAuthIndex(ctx context.Context) ([]AuthIndex, error) {
 		return nil, errFind
 	}
 
-	out := make([]AuthIndex, 0, len(records))
+	auths := make([]*coreauth.Auth, 0, len(records))
 	for _, record := range records {
 		auth, errAuth := RecordToAuth(&record)
 		if errAuth != nil {
 			return nil, errAuth
 		}
+		auth.ID = record.UUID
+		auth.Index = record.UUID
+		auths = append(auths, auth)
+	}
+	applyGeminiVirtualParentStatus(auths)
+
+	out := make([]AuthIndex, 0, len(records))
+	for i, record := range records {
+		auth := auths[i]
 		out = append(out, AuthIndex{
 			UUID:          record.UUID,
 			ID:            record.ID,
@@ -242,9 +251,9 @@ func (r *Repository) ListAuthIndex(ctx context.Context) ([]AuthIndex, error) {
 			Provider:      record.Provider,
 			Label:         record.Label,
 			Prefix:        record.Prefix,
-			Status:        record.Status,
-			Disabled:      record.Disabled,
-			Unavailable:   record.Unavailable,
+			Status:        auth.Status,
+			Disabled:      auth.Disabled,
+			Unavailable:   auth.Unavailable,
 			BaseURL:       record.BaseURL,
 			ModelsHash:    record.ModelsHash,
 			Attributes:    auth.Attributes,
@@ -331,6 +340,7 @@ func (r *Repository) ListAuths(ctx context.Context) ([]*coreauth.Auth, error) {
 		auth.Index = record.UUID
 		auths = append(auths, auth)
 	}
+	applyGeminiVirtualParentStatus(auths)
 	hydrateAuthListRuntimes(auths)
 	return auths, nil
 }
@@ -760,6 +770,9 @@ func (r *Repository) hydrateAuthRuntime(ctx context.Context, db *gorm.DB, auth *
 		parent = parentAuth
 	}
 
+	if geminiVirtualParentExplicitlyDisabled(parent) {
+		disableGeminiVirtualAuth(auth, parent)
+	}
 	applyGeminiVirtualRuntime(auth, parent)
 	return nil
 }
@@ -814,6 +827,99 @@ func hydrateAuthListRuntimes(auths []*coreauth.Auth) {
 			continue
 		}
 		auth.Runtime = geminicli.NewVirtualCredential(projectID, shared)
+	}
+}
+
+// applyGeminiVirtualParentStatus disables virtual auths when their source parent
+// was explicitly disabled by configuration or the management API.
+func applyGeminiVirtualParentStatus(auths []*coreauth.Auth) {
+	if len(auths) == 0 {
+		return
+	}
+
+	byID := make(map[string]*coreauth.Auth, len(auths))
+	for _, auth := range auths {
+		if auth == nil {
+			continue
+		}
+		authID := strings.TrimSpace(auth.ID)
+		if authID == "" {
+			continue
+		}
+		byID[authID] = auth
+	}
+
+	for _, auth := range auths {
+		if auth == nil {
+			continue
+		}
+		parentID := geminiVirtualParentID(auth)
+		if parentID == "" {
+			continue
+		}
+		parent := byID[parentID]
+		if !geminiVirtualParentExplicitlyDisabled(parent) {
+			continue
+		}
+		disableGeminiVirtualAuth(auth, parent)
+	}
+}
+
+// disableGeminiVirtualAuth applies the effective disabled state inherited from parent auth.
+func disableGeminiVirtualAuth(auth *coreauth.Auth, parent *coreauth.Auth) {
+	if auth == nil {
+		return
+	}
+	auth.Disabled = true
+	auth.Status = coreauth.StatusDisabled
+	if strings.TrimSpace(auth.StatusMessage) == "" {
+		statusMessage := ""
+		if parent != nil {
+			statusMessage = strings.TrimSpace(parent.StatusMessage)
+		}
+		if statusMessage == "" {
+			statusMessage = "disabled via management API"
+		}
+		auth.StatusMessage = statusMessage
+	}
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	auth.Metadata["disabled"] = true
+}
+
+// geminiVirtualParentExplicitlyDisabled distinguishes operator-disabled parents
+// from synthetic virtual primaries, which are disabled only to prevent dispatch.
+func geminiVirtualParentExplicitlyDisabled(auth *coreauth.Auth) bool {
+	if auth == nil {
+		return false
+	}
+	if boolFromMetadata(auth.Metadata, "disabled") {
+		return true
+	}
+	if !(auth.Disabled || auth.Status == coreauth.StatusDisabled) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(auth.StatusMessage), "disabled via management API")
+}
+
+// boolFromMetadata reads boolean-like metadata values.
+func boolFromMetadata(metadata map[string]any, key string) bool {
+	if metadata == nil {
+		return false
+	}
+	raw, ok := metadata[key]
+	if !ok || raw == nil {
+		return false
+	}
+	switch value := raw.(type) {
+	case bool:
+		return value
+	case string:
+		trimmed := strings.TrimSpace(value)
+		return strings.EqualFold(trimmed, "true") || trimmed == "1"
+	default:
+		return false
 	}
 }
 
