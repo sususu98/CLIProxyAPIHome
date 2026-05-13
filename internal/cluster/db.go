@@ -2,6 +2,8 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -51,7 +53,55 @@ func AutoMigrate(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("database connection is nil")
 	}
-	return db.AutoMigrate(&AuthRecord{}, &ConfigRecord{}, &ClusterNodeRecord{}, &ClusterEventRecord{}, &UsageRecord{}, &OAuthSessionRecord{})
+	if errMigrate := db.AutoMigrate(&AuthRecord{}, &ConfigRecord{}, &APIKeyRecord{}, &ClusterNodeRecord{}, &ClusterEventRecord{}, &UsageRecord{}, &OAuthSessionRecord{}); errMigrate != nil {
+		return errMigrate
+	}
+	return migrateLegacyAPIKeys(db)
+}
+
+func migrateLegacyAPIKeys(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+
+	record := ConfigRecord{}
+	errFirst := db.Where("key = ?", configAPIKeysRootKey).First(&record).Error
+	switch {
+	case errors.Is(errFirst, gorm.ErrRecordNotFound):
+		return nil
+	case errFirst != nil:
+		return errFirst
+	}
+
+	var apiKeys []string
+	if len(record.Value) > 0 {
+		if errUnmarshal := json.Unmarshal([]byte(record.Value), &apiKeys); errUnmarshal != nil {
+			var rawList []any
+			if errUnmarshalList := json.Unmarshal([]byte(record.Value), &rawList); errUnmarshalList != nil {
+				return errUnmarshal
+			}
+			apiKeys = make([]string, 0, len(rawList))
+			for _, item := range rawList {
+				str, ok := item.(string)
+				if !ok {
+					continue
+				}
+				apiKeys = append(apiKeys, str)
+			}
+		}
+	}
+	apiKeys = normalizeAPIKeys(apiKeys)
+
+	ctx := context.Background()
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errReplace := replaceAPIKeysTx(ctx, tx, apiKeys); errReplace != nil {
+			return errReplace
+		}
+		if errDelete := tx.Delete(&ConfigRecord{}, "key = ?", configAPIKeysRootKey).Error; errDelete != nil {
+			return errDelete
+		}
+		return appendEvent(tx, "config", "migrate", configAPIKeysRootKey, 1)
+	})
 }
 
 // DSN returns the PostgreSQL connection string.

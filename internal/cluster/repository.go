@@ -339,6 +339,116 @@ func (r *Repository) SoftDeleteAuth(ctx context.Context, uuid string) error {
 	})
 }
 
+const configAPIKeysRootKey = "api-keys"
+
+// normalizeAPIKeys normalizes API keys sourced from config.yaml.
+func normalizeAPIKeys(keys []string) []string {
+	if len(keys) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		if _, exists := seen[trimmedKey]; exists {
+			continue
+		}
+		seen[trimmedKey] = struct{}{}
+		normalized = append(normalized, trimmedKey)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+// normalizeAPIKeysFromAny converts a config.yaml api-keys value into a normalized string slice.
+func normalizeAPIKeysFromAny(value any) []string {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case string:
+		return normalizeAPIKeys([]string{typed})
+	case []string:
+		return normalizeAPIKeys(typed)
+	case []any:
+		keys := make([]string, 0, len(typed))
+		for _, item := range typed {
+			str, ok := item.(string)
+			if !ok {
+				continue
+			}
+			keys = append(keys, str)
+		}
+		return normalizeAPIKeys(keys)
+	default:
+		return nil
+	}
+}
+
+// replaceAPIKeysTx replaces the active API keys in the api_key table using soft deletes.
+func replaceAPIKeysTx(ctx context.Context, tx *gorm.DB, keys []string) error {
+	// Normalize source data before building the derived payload.
+	if tx == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	keys = normalizeAPIKeys(keys)
+
+	var existing []APIKeyRecord
+	if errFind := tx.WithContext(contextOrBackground(ctx)).Unscoped().Order("id").Find(&existing).Error; errFind != nil {
+		return errFind
+	}
+
+	existingByKey := make(map[string]*APIKeyRecord, len(existing))
+	for i := range existing {
+		record := &existing[i]
+		key := strings.TrimSpace(record.APIKey)
+		if key == "" {
+			continue
+		}
+		existingByKey[key] = record
+	}
+
+	keep := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		keep[key] = struct{}{}
+		if record := existingByKey[key]; record != nil {
+			if record.DeletedAt.Valid {
+				if errRestore := tx.WithContext(contextOrBackground(ctx)).Unscoped().
+					Model(&APIKeyRecord{}).
+					Where("id = ?", record.ID).
+					Updates(map[string]any{"deleted_at": nil}).Error; errRestore != nil {
+					return errRestore
+				}
+			}
+			continue
+		}
+		if errCreate := tx.WithContext(contextOrBackground(ctx)).Create(&APIKeyRecord{APIKey: key}).Error; errCreate != nil {
+			return errCreate
+		}
+	}
+
+	for _, record := range existing {
+		key := strings.TrimSpace(record.APIKey)
+		if key == "" {
+			continue
+		}
+		if _, ok := keep[key]; ok {
+			continue
+		}
+		if record.DeletedAt.Valid {
+			continue
+		}
+		if errDelete := tx.WithContext(contextOrBackground(ctx)).Delete(&APIKeyRecord{}, "id = ?", record.ID).Error; errDelete != nil {
+			return errDelete
+		}
+	}
+	return nil
+}
+
 // UpsertConfigValue inserts or updates a config value.
 func (r *Repository) UpsertConfigValue(ctx context.Context, key string, value any) error {
 	// Normalize source data before building the derived payload.
@@ -346,8 +456,23 @@ func (r *Repository) UpsertConfigValue(ctx context.Context, key string, value an
 	if errDB != nil {
 		return errDB
 	}
-	if strings.TrimSpace(key) == "" {
+	key = strings.TrimSpace(key)
+	if key == "" {
 		return fmt.Errorf("config key is required")
+	}
+
+	if key == configAPIKeysRootKey {
+		ctx = contextOrBackground(ctx)
+		apiKeys := normalizeAPIKeysFromAny(value)
+		return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if errReplace := replaceAPIKeysTx(ctx, tx, apiKeys); errReplace != nil {
+				return errReplace
+			}
+			if errDelete := tx.Delete(&ConfigRecord{}, "key = ?", configAPIKeysRootKey).Error; errDelete != nil {
+				return errDelete
+			}
+			return appendEvent(tx, "config", "upsert", configAPIKeysRootKey, time.Now().UTC().UnixNano())
+		})
 	}
 
 	rawJSON, errMarshal := json.Marshal(value)
@@ -386,10 +511,14 @@ func (r *Repository) ReplaceConfigSnapshot(ctx context.Context, values map[strin
 		return errDB
 	}
 
+	apiKeys := normalizeAPIKeysFromAny(values[configAPIKeysRootKey])
 	clean := make(map[string]json.RawMessage, len(values))
 	for key, value := range values {
 		key = strings.TrimSpace(key)
 		if key == "" {
+			continue
+		}
+		if key == configAPIKeysRootKey {
 			continue
 		}
 		rawJSON, errMarshal := json.Marshal(value)
@@ -401,6 +530,10 @@ func (r *Repository) ReplaceConfigSnapshot(ctx context.Context, values map[strin
 
 	ctx = contextOrBackground(ctx)
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errReplaceAPIKeys := replaceAPIKeysTx(ctx, tx, apiKeys); errReplaceAPIKeys != nil {
+			return errReplaceAPIKeys
+		}
+
 		var existing []ConfigRecord
 		if errFind := tx.Find(&existing).Error; errFind != nil {
 			return errFind
@@ -463,9 +596,35 @@ func (r *Repository) LoadConfigSnapshot(ctx context.Context) (map[string]json.Ra
 		return nil, errFind
 	}
 
-	out := make(map[string]json.RawMessage, len(records))
+	out := make(map[string]json.RawMessage, len(records)+1)
 	for _, record := range records {
+		if strings.TrimSpace(record.Key) == configAPIKeysRootKey {
+			continue
+		}
 		out[record.Key] = json.RawMessage(record.Value)
+	}
+
+	var apiKeyRecords []APIKeyRecord
+	if errFind := db.WithContext(contextOrBackground(ctx)).Order("id").Find(&apiKeyRecords).Error; errFind != nil {
+		return nil, errFind
+	}
+	if len(apiKeyRecords) > 0 {
+		keys := make([]string, 0, len(apiKeyRecords))
+		for _, record := range apiKeyRecords {
+			key := strings.TrimSpace(record.APIKey)
+			if key == "" {
+				continue
+			}
+			keys = append(keys, key)
+		}
+		keys = normalizeAPIKeys(keys)
+		if len(keys) > 0 {
+			rawJSON, errMarshal := json.Marshal(keys)
+			if errMarshal != nil {
+				return nil, errMarshal
+			}
+			out[configAPIKeysRootKey] = rawJSON
+		}
 	}
 	return out, nil
 }

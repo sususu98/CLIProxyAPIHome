@@ -85,11 +85,15 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) error {
 // bootstrapConfig handles a bootstrap config.
 func bootstrapConfig(ctx context.Context, repo *Repository, configPath string, configExists bool) (bool, error) {
 	// Normalize source data before building the derived payload.
-	snapshot, errSnapshot := repo.LoadConfigSnapshot(ctx)
-	if errSnapshot != nil {
-		return false, errSnapshot
+	db, errDB := repo.database()
+	if errDB != nil {
+		return false, errDB
 	}
-	if len(snapshot) != 0 || !configExists {
+	var configCount int64
+	if errCount := db.WithContext(contextOrBackground(ctx)).Model(&ConfigRecord{}).Count(&configCount).Error; errCount != nil {
+		return false, errCount
+	}
+	if configCount != 0 || !configExists {
 		return false, nil
 	}
 

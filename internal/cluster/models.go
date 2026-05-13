@@ -109,6 +109,19 @@ func (ConfigRecord) TableName() string {
 	return "config"
 }
 
+type APIKeyRecord struct {
+	ID        uint           `gorm:"column:id;primaryKey;autoIncrement"`
+	APIKey    string         `gorm:"column:api_key;not null;uniqueIndex"`
+	CreatedAt time.Time      `gorm:"column:created_at"`
+	UpdatedAt time.Time      `gorm:"column:updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"column:deleted_at;index"`
+}
+
+// TableName returns the database table name.
+func (APIKeyRecord) TableName() string {
+	return "api_key"
+}
+
 type ClusterNodeRecord struct {
 	IP         string    `gorm:"column:ip;primaryKey;index:idx_cluster_auth_lookup,priority:1;index:idx_cluster_live_nodes,priority:3;index:idx_cluster_master_nodes,priority:4"`
 	Port       int       `gorm:"column:port;primaryKey;index:idx_cluster_auth_lookup,priority:5;index:idx_cluster_live_nodes,priority:4;index:idx_cluster_master_nodes,priority:5"`
