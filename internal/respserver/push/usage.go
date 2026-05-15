@@ -30,13 +30,12 @@ func handleUsage(ctx context.Context, env dispatch.Env, args []string) dispatch.
 		return dispatch.Err("invalid usage json")
 	}
 
-	// Always update scheduler state before writing the usage log so cooldowns are applied even if log persistence fails.
+	// Always update scheduler state before queuing persistence so cooldowns are applied even if log persistence fails.
 	if env.Runtime != nil {
 		env.Runtime.RecordUsagePayload(ctx, payload)
 		persisted, errPersist := env.Runtime.PersistClusterUsagePayload(ctx, payload)
 		if errPersist != nil {
 			log.Errorf("usage database write error: %v", errPersist)
-			return dispatch.Err("usage database write failed")
 		}
 		if persisted {
 			return dispatch.Integer(1)
