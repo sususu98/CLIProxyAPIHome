@@ -178,7 +178,7 @@ func (h *Handler) apiCallAuthByIndex(ctx context.Context, authIndex string) (*co
 		if item == nil {
 			continue
 		}
-		if strings.TrimSpace(item.ID) == authIndex || strings.TrimSpace(item.Index) == authIndex || strings.TrimSpace(item.EnsureIndex()) == authIndex {
+		if apiCallAuthMatches(item, authIndex) {
 			return item, nil
 		}
 	}
@@ -206,7 +206,7 @@ func (h *Handler) apiCallTransport(auth *coreauth.Auth) http.RoundTripper {
 	// Validate request inputs before mutating persisted state.
 	proxyCandidates := make([]string, 0, 2)
 	if auth != nil {
-		if proxyStr := strings.TrimSpace(auth.ProxyURL); proxyStr != "" {
+		if proxyStr := apiCallAuthProxyURL(auth); proxyStr != "" {
 			proxyCandidates = append(proxyCandidates, proxyStr)
 		}
 	}
@@ -236,6 +236,49 @@ func (h *Handler) apiCallTransport(auth *coreauth.Auth) http.RoundTripper {
 	clone := transport.Clone()
 	clone.Proxy = nil
 	return clone
+}
+
+// apiCallAuthMatches reports whether an API call auth selector refers to auth.
+func apiCallAuthMatches(auth *coreauth.Auth, authIndex string) bool {
+	if auth == nil {
+		return false
+	}
+	authIndex = strings.TrimSpace(authIndex)
+	if authIndex == "" {
+		return false
+	}
+	for _, candidate := range []string{
+		strings.TrimSpace(auth.ID),
+		strings.TrimSpace(auth.Index),
+		strings.TrimSpace(auth.EnsureIndex()),
+		authFileDisplayName(auth),
+		authFileName(auth),
+		strings.TrimSuffix(authFileName(auth), ".json"),
+	} {
+		if strings.TrimSpace(candidate) == authIndex {
+			return true
+		}
+	}
+	return false
+}
+
+// apiCallAuthProxyURL returns the effective auth-scoped proxy URL.
+func apiCallAuthProxyURL(auth *coreauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	if proxyStr := strings.TrimSpace(auth.ProxyURL); proxyStr != "" {
+		return proxyStr
+	}
+	if auth.Metadata == nil {
+		return ""
+	}
+	for _, key := range []string{"proxy_url", "proxy-url"} {
+		if proxyStr := stringFromAny(auth.Metadata[key]); proxyStr != "" {
+			return proxyStr
+		}
+	}
+	return ""
 }
 
 // apiCallHeadersNeedToken converts api call headers need token.

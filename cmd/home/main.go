@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
@@ -26,6 +27,19 @@ import (
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
 )
+
+var (
+	Version   = "dev"
+	Commit    = "none"
+	BuildDate = "unknown"
+)
+
+// init copies main package build metadata into shared build info.
+func init() {
+	buildinfo.Version = Version
+	buildinfo.Commit = Commit
+	buildinfo.BuildDate = BuildDate
+}
 
 // main starts the home command entrypoint.
 func main() {

@@ -773,6 +773,7 @@ func (r *Repository) hydrateAuthRuntime(ctx context.Context, db *gorm.DB, auth *
 	if geminiVirtualParentExplicitlyDisabled(parent) {
 		disableGeminiVirtualAuth(auth, parent)
 	}
+	applyGeminiVirtualInheritedFields(auth, parent)
 	applyGeminiVirtualRuntime(auth, parent)
 	return nil
 }
@@ -813,6 +814,7 @@ func hydrateAuthListRuntimes(auths []*coreauth.Auth) {
 		if parent == nil {
 			continue
 		}
+		applyGeminiVirtualInheritedFields(auth, parent)
 		shared := sharedByID[parentID]
 		if shared == nil {
 			shared = geminiSharedCredential(parent, geminiVirtualProjectID(auth))
@@ -941,6 +943,18 @@ func applyGeminiVirtualRuntime(auth *coreauth.Auth, parent *coreauth.Auth) {
 		parent.Runtime = shared
 	}
 	auth.Runtime = geminicli.NewVirtualCredential(projectID, shared)
+}
+
+// applyGeminiVirtualInheritedFields mirrors inherited prefix and proxy settings on virtual Gemini auths.
+func applyGeminiVirtualInheritedFields(auth *coreauth.Auth, parent *coreauth.Auth) {
+	if auth == nil || parent == nil {
+		return
+	}
+	if geminiVirtualParentID(auth) == "" {
+		return
+	}
+	auth.ProxyURL = strings.TrimSpace(parent.ProxyURL)
+	auth.Prefix = strings.TrimSpace(parent.Prefix)
 }
 
 // geminiSharedCredential handles a gemini shared credential.
