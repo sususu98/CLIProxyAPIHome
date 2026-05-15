@@ -366,7 +366,7 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 		cfg.AuthDir = resolvedAuthDir
 	}
 
-	tokenStore := cpasdkauth.GetTokenStore()
+	tokenStore := newMetadataProxyStore(cpasdkauth.GetTokenStore())
 	if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok && strings.TrimSpace(cfg.AuthDir) != "" {
 		dirSetter.SetBaseDir(cfg.AuthDir)
 	}

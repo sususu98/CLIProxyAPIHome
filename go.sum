@@ -91,8 +91,8 @@ github.com/refraction-networking/utls v1.8.2 h1:j4Q1gJj0xngdeH+Ox/qND11aEfhpgoEv
 github.com/refraction-networking/utls v1.8.2/go.mod h1:jkSOEkLqn+S/jtpEHPOsVv/4V4EVnelwbMQl4vCWXAM=
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
-github.com/router-for-me/CLIProxyAPI/v7 v7.0.0 h1:X/PvhtCOZdUYzPZNtqkwj53OrSnngVqqRduatwbwQR8=
-github.com/router-for-me/CLIProxyAPI/v7 v7.0.0/go.mod h1:KStZY1n8qsYyqjZAmgq16jXnCRquXgMB0VZq3U7pQGk=
+github.com/router-for-me/CLIProxyAPI/v7 v7.0.6 h1:DUbFaQmOblYvfaxeeZG6jGrpfIhxiTRsfohL0F/6km4=
+github.com/router-for-me/CLIProxyAPI/v7 v7.0.6/go.mod h1:KStZY1n8qsYyqjZAmgq16jXnCRquXgMB0VZq3U7pQGk=
 github.com/sirupsen/logrus v1.9.3 h1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=
 github.com/sirupsen/logrus v1.9.3/go.mod h1:naHLuLoDiP4jHNo9R0sCBMtWGeIprob74mVsIT4qYEQ=
 github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 h1:JIAuq3EEf9cgbU6AtGPK4CTG3Zf6CKMNqf0MHTggAUA=
