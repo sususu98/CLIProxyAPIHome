@@ -27,6 +27,8 @@ type Server struct {
 	cluster  *cluster.RESPHandler
 }
 
+const clusterSubscriptionUpdateInterval = 30 * time.Second
+
 // New creates a new.
 func New(addr string, runtime *home.Runtime) *Server {
 	return &Server{
@@ -52,6 +54,62 @@ func (s *Server) syncClusterClientCount(ctx context.Context) {
 	if errSync := s.cluster.UpdateClientCount(ctx, node.GlobalRegistry().TotalCount()); errSync != nil {
 		log.Warnf("failed to sync cluster client count: %v", errSync)
 	}
+}
+
+func (s *Server) startClusterSubscriptionUpdates(ctx context.Context, writer *safeWriter) context.CancelFunc {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	if s == nil || s.cluster == nil || writer == nil {
+		return cancel
+	}
+
+	go func() {
+		ticker := time.NewTicker(clusterSubscriptionUpdateInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-ticker.C:
+				if errSend := s.writeClusterSubscriptionUpdate(runCtx, writer); errSend != nil {
+					log.Warnf("failed to publish cluster update to subscriber: %v", errSend)
+					return
+				}
+			}
+		}
+	}()
+
+	return cancel
+}
+
+func (s *Server) writeClusterSubscriptionUpdate(ctx context.Context, writer *safeWriter) error {
+	if s == nil || s.cluster == nil || writer == nil {
+		return nil
+	}
+	s.syncClusterClientCount(ctx)
+	payload, errPayload := s.cluster.Handle(ctx, []string{clusterCommand, "NODES"}, "")
+	if errPayload != nil {
+		if ctx != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		log.Warnf("failed to build cluster update for subscriber: %v", errPayload)
+		return nil
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+	return writer.WriteDispatchReply(subscriptionMessage(clusterSubscriptionChannel, payload))
+}
+
+func subscriptionMessage(channel string, payload []byte) dispatch.Reply {
+	return dispatch.Array(
+		dispatch.BulkString([]byte("message")),
+		dispatch.BulkString([]byte(channel)),
+		dispatch.BulkString(payload),
+	)
 }
 
 // ListenAndServe returns an en and serve.
@@ -133,7 +191,12 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 	connectedAt := time.Now()
 	addedNode := false
 	var unsubscribeConfig func()
+	var cancelClusterUpdates context.CancelFunc
 	defer func() {
+		if cancelClusterUpdates != nil {
+			cancelClusterUpdates()
+			cancelClusterUpdates = nil
+		}
 		if unsubscribeConfig != nil {
 			unsubscribeConfig()
 			unsubscribeConfig = nil
@@ -276,17 +339,18 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 							addedNode = true
 						}
 						unsubscribeConfig = s.runtime.SubscribeConfigYAML(func(payload []byte) error {
-							return writer.WriteDispatchReply(dispatch.Array(
-								dispatch.BulkString([]byte("message")),
-								dispatch.BulkString([]byte("config")),
-								dispatch.BulkString(payload),
-							))
+							return writer.WriteDispatchReply(subscriptionMessage(configSubscriptionChannel, payload))
 						})
+						cancelClusterUpdates = s.startClusterSubscriptionUpdates(ctx, writer)
 						return 1, nil
 					},
 					UnsubscribeConfigYAML: func() (int64, error) {
 						if unsubscribeConfig == nil {
 							return 0, nil
+						}
+						if cancelClusterUpdates != nil {
+							cancelClusterUpdates()
+							cancelClusterUpdates = nil
 						}
 						unsubscribeConfig()
 						unsubscribeConfig = nil
