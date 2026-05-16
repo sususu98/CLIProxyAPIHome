@@ -29,6 +29,7 @@ type PGSQLConfig struct {
 
 type NodeConfig struct {
 	ExternalIP        string        `yaml:"external-ip"`
+	ExternalPort      int           `yaml:"external-port"`
 	Port              int           `yaml:"port"`
 	HeartbeatInterval time.Duration `yaml:"heartbeat-interval"`
 	HeartbeatTimeout  time.Duration `yaml:"heartbeat-timeout"`
@@ -42,6 +43,7 @@ type rawConfig struct {
 
 type rawNode struct {
 	ExternalIP        string       `yaml:"external-ip"`
+	ExternalPort      int          `yaml:"external-port"`
 	Port              int          `yaml:"port"`
 	HeartbeatInterval yamlDuration `yaml:"heartbeat-interval"`
 	HeartbeatTimeout  yamlDuration `yaml:"heartbeat-timeout"`
@@ -97,6 +99,7 @@ func LoadConfigOptional(path string) (*Config, bool, error) {
 		PGSQL: raw.PGSQL,
 		Node: NodeConfig{
 			ExternalIP:        strings.TrimSpace(raw.Node.ExternalIP),
+			ExternalPort:      raw.Node.ExternalPort,
 			Port:              raw.Node.Port,
 			HeartbeatInterval: time.Duration(raw.Node.HeartbeatInterval),
 			HeartbeatTimeout:  time.Duration(raw.Node.HeartbeatTimeout),
@@ -140,6 +143,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Node.Port <= 0 {
 		return fmt.Errorf("node.port must be greater than 0")
+	}
+	if c.Node.ExternalPort < 0 {
+		return fmt.Errorf("node.external-port must be greater than 0 when set")
 	}
 	if c.Node.HeartbeatInterval <= 0 {
 		return fmt.Errorf("node.heartbeat-interval must be greater than 0")

@@ -24,7 +24,7 @@ Home enables PGSQL-backed cluster mode when `cluster.yaml` exists in the working
 
 Copy `cluster.example.yaml` to `cluster.yaml`, then adjust it for the target environment. PGSQL connections must use a TCP `host` and `port`; Unix sockets are not supported. After cluster mode starts and completes migration, Home deletes the imported local credential files and `config.yaml` so it will not keep reading stale local state.
 
-In cluster mode, the Management API operates directly on data stored in PGSQL. The default listen port comes from `node.port` in `cluster.yaml`; the startup `-addr` flag can override the listen address, but the effective cluster node port always follows the final listen port.
+In cluster mode, the Management API operates directly on data stored in PGSQL. The default listen port comes from `node.port` in `cluster.yaml`; the startup `-addr` flag can override the listen address. Set `node.external-port` when a reverse proxy changes the port that clients must use; when omitted, the advertised cluster node port follows the final listen port.
 
 ## Contributing
 
