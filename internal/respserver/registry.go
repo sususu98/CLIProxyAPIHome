@@ -10,6 +10,8 @@ import (
 )
 
 const clusterCommand = "CLUSTER"
+const configSubscriptionChannel = "config"
+const clusterSubscriptionChannel = "cluster"
 
 // buildRegistry builds a registry.
 func buildRegistry() *dispatch.Registry {
