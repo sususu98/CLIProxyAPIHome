@@ -213,11 +213,20 @@ func run() int {
 		return 1
 	}
 	addr = listenAddr
+	clusterAdvertisedPort := listenPort
+	if clusterExists {
+		var errAdvertisedPort error
+		clusterAdvertisedPort, errAdvertisedPort = resolveClusterAdvertisedPort(clusterCfg, listenPort)
+		if errAdvertisedPort != nil {
+			log.Errorf("failed to resolve cluster advertised port: %v", errAdvertisedPort)
+			return 1
+		}
+	}
 
 	if clusterRepo != nil {
 		coordinator = cluster.NewCoordinator(clusterRepo, cluster.NodeIdentity{
 			IP:        clusterClientAddr,
-			Port:      listenPort,
+			Port:      clusterAdvertisedPort,
 			StartedAt: clusterStartedAt,
 		}, cluster.CoordinatorOptions{
 			HeartbeatInterval: clusterCfg.Node.HeartbeatInterval,
@@ -443,6 +452,21 @@ func resolveListenAddress(addr string, cfg *config.Config, clusterCfg *cluster.C
 		}
 	}
 	return addr, port, nil
+}
+
+// resolveClusterAdvertisedPort resolves the externally reachable cluster port.
+func resolveClusterAdvertisedPort(clusterCfg *cluster.Config, listenPort int) (int, error) {
+	if clusterCfg == nil {
+		return 0, fmt.Errorf("cluster config is nil")
+	}
+	port := listenPort
+	if clusterCfg.Node.ExternalPort > 0 {
+		port = clusterCfg.Node.ExternalPort
+	}
+	if port <= 0 {
+		return 0, fmt.Errorf("cluster advertised port must be greater than 0")
+	}
+	return port, nil
 }
 
 // listenPortFromAddress derives listen port from address.
