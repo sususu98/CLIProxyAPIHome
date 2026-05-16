@@ -429,7 +429,7 @@ func resolveListenAddress(addr string, cfg *config.Config, clusterCfg *cluster.C
 		if host == "" {
 			addr = ":" + strconv.Itoa(port)
 		} else {
-			addr = fmt.Sprintf("%s:%d", host, port)
+			addr = net.JoinHostPort(host, strconv.Itoa(port))
 		}
 	}
 
