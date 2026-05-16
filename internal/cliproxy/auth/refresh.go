@@ -14,6 +14,7 @@ import (
 	claudeauth "github.com/router-for-me/CLIProxyAPIHome/internal/auth/claude"
 	codexauth "github.com/router-for-me/CLIProxyAPIHome/internal/auth/codex"
 	kimiauth "github.com/router-for-me/CLIProxyAPIHome/internal/auth/kimi"
+	xaiauth "github.com/router-for-me/CLIProxyAPIHome/internal/auth/xai"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/runtime/geminicli"
 	log "github.com/sirupsen/logrus"
@@ -42,6 +43,8 @@ func refreshCredential(ctx context.Context, cfg *config.Config, auth *Auth, rt h
 		return refreshKimi(ctx, cfg, auth)
 	case "antigravity":
 		return refreshAntigravity(ctx, cfg, auth, rt)
+	case "xai":
+		return refreshXAI(ctx, cfg, auth)
 	default:
 		return auth, nil
 	}
@@ -382,6 +385,61 @@ func refreshAntigravity(ctx context.Context, cfg *config.Config, auth *Auth, rt 
 	auth.Metadata["expired"] = now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339)
 	auth.Metadata["type"] = "antigravity"
 	auth.Metadata["last_refresh"] = now.Format(time.RFC3339)
+	return auth, nil
+}
+
+// refreshXAI refreshes an xAI OAuth credential.
+func refreshXAI(ctx context.Context, cfg *config.Config, auth *Auth) (*Auth, error) {
+	// Resolve credential context before calling upstream OAuth services.
+	refreshToken := metaStringValue(auth.Metadata, "refresh_token")
+	if refreshToken == "" {
+		return auth, nil
+	}
+	tokenEndpoint := metaStringValue(auth.Metadata, "token_endpoint")
+	svc := xaiauth.NewXAIAuthWithProxyURL(cfg, auth.ProxyURL)
+	if tokenEndpoint == "" {
+		discovery, errDiscover := svc.Discover(ctx)
+		if errDiscover != nil {
+			return nil, errDiscover
+		}
+		tokenEndpoint = discovery.TokenEndpoint
+	}
+	td, errRefresh := svc.RefreshTokens(ctx, refreshToken, tokenEndpoint)
+	if errRefresh != nil {
+		return nil, errRefresh
+	}
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	auth.Metadata["access_token"] = td.AccessToken
+	if td.RefreshToken != "" {
+		auth.Metadata["refresh_token"] = td.RefreshToken
+	}
+	if td.IDToken != "" {
+		auth.Metadata["id_token"] = td.IDToken
+	}
+	if td.TokenType != "" {
+		auth.Metadata["token_type"] = td.TokenType
+	}
+	if td.ExpiresIn > 0 {
+		auth.Metadata["expires_in"] = td.ExpiresIn
+	}
+	if td.Expire != "" {
+		auth.Metadata["expired"] = td.Expire
+	}
+	if td.Email != "" {
+		auth.Metadata["email"] = td.Email
+	}
+	if td.Subject != "" {
+		auth.Metadata["sub"] = td.Subject
+	}
+	auth.Metadata["token_endpoint"] = tokenEndpoint
+	if _, ok := auth.Metadata["base_url"]; !ok {
+		auth.Metadata["base_url"] = xaiauth.DefaultAPIBaseURL
+	}
+	auth.Metadata["type"] = "xai"
+	auth.Metadata["auth_kind"] = "oauth"
+	auth.Metadata["last_refresh"] = time.Now().Format(time.RFC3339)
 	return auth, nil
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/auth/codex"
 	kimiauth "github.com/router-for-me/CLIProxyAPIHome/internal/auth/kimi"
+	xaiauth "github.com/router-for-me/CLIProxyAPIHome/internal/auth/xai"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
@@ -232,6 +233,68 @@ func (h *Handler) RequestKimiToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
 }
 
+// RequestXAIToken handles request xAI token.
+func (h *Handler) RequestXAIToken(c *gin.Context) {
+	// Resolve credential context before calling upstream OAuth services.
+	ctx, cancel := context.WithTimeout(requestContextOrBackground(c), 30*time.Second)
+	defer cancel()
+
+	pkceCodes, errPKCE := xaiauth.GeneratePKCECodes()
+	if errPKCE != nil {
+		log.Errorf("cluster oauth: failed to generate xai PKCE codes: %v", errPKCE)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate PKCE codes"})
+		return
+	}
+	state, errState := generateOAuthState("xai")
+	if errState != nil {
+		log.Errorf("cluster oauth: failed to generate xai state: %v", errState)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state parameter"})
+		return
+	}
+	nonce, errNonce := randomURLSafe(24)
+	if errNonce != nil {
+		log.Errorf("cluster oauth: failed to generate xai nonce: %v", errNonce)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate nonce parameter"})
+		return
+	}
+
+	authSvc := xaiauth.NewXAIAuth(h.oauthConfig())
+	discovery, errDiscover := authSvc.Discover(ctx)
+	if errDiscover != nil {
+		log.Errorf("cluster oauth: failed to discover xai OAuth endpoints: %v", errDiscover)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to discover oauth endpoints"})
+		return
+	}
+
+	redirectURI := fmt.Sprintf("http://%s:%d%s", xaiauth.RedirectHost, xaiauth.CallbackPort, xaiauth.RedirectPath)
+	authURL, errAuthURL := xaiauth.BuildAuthorizeURL(xaiauth.AuthorizeURLParams{
+		AuthorizationEndpoint: discovery.AuthorizationEndpoint,
+		RedirectURI:           redirectURI,
+		CodeChallenge:         pkceCodes.CodeChallenge,
+		State:                 state,
+		Nonce:                 nonce,
+	})
+	if errAuthURL != nil {
+		log.Errorf("cluster oauth: failed to generate xai authorization URL: %v", errAuthURL)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate authorization url"})
+		return
+	}
+
+	if errRegister := h.registerOAuthSession(c, "xai", state, map[string]any{
+		"code_verifier":          pkceCodes.CodeVerifier,
+		"code_challenge":         pkceCodes.CodeChallenge,
+		"nonce":                  nonce,
+		"redirect_uri":           redirectURI,
+		"authorization_endpoint": discovery.AuthorizationEndpoint,
+		"token_endpoint":         discovery.TokenEndpoint,
+	}); errRegister != nil {
+		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errRegister)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
+}
+
 // GetAuthStatus returns an auth status.
 func (h *Handler) GetAuthStatus(c *gin.Context) {
 	// Validate request inputs before mutating persisted state.
@@ -394,6 +457,8 @@ func (h *Handler) processOAuthCallback(provider, state, code string) {
 		errProcess = h.exchangeGeminiCallback(ctx, code, data)
 	case "antigravity":
 		errProcess = h.exchangeAntigravityCallback(ctx, code, data)
+	case "xai":
+		errProcess = h.exchangeXAICallback(ctx, code, data)
 	default:
 		errProcess = fmt.Errorf("unsupported provider: %s", provider)
 	}
@@ -752,6 +817,55 @@ func (h *Handler) exchangeAntigravityCallback(ctx context.Context, code string, 
 		metadata["project_id"] = projectID
 	}
 	return h.storeOAuthMetadataWithContext(ctx, metadata, antigravityCredentialFileName(email))
+}
+
+// exchangeXAICallback handles an exchange xAI callback.
+func (h *Handler) exchangeXAICallback(ctx context.Context, code string, data map[string]any) error {
+	// Validate request inputs before mutating persisted state.
+	pkce := &xaiauth.PKCECodes{
+		CodeVerifier:  stringFromAny(data["code_verifier"]),
+		CodeChallenge: stringFromAny(data["code_challenge"]),
+	}
+	if pkce.CodeVerifier == "" {
+		return fmt.Errorf("missing PKCE verifier")
+	}
+	redirectURI := stringFromAny(data["redirect_uri"])
+	if redirectURI == "" {
+		redirectURI = fmt.Sprintf("http://%s:%d%s", xaiauth.RedirectHost, xaiauth.CallbackPort, xaiauth.RedirectPath)
+	}
+	tokenEndpoint := stringFromAny(data["token_endpoint"])
+
+	authSvc := xaiauth.NewXAIAuth(h.oauthConfig())
+	bundle, errExchange := authSvc.ExchangeCodeForTokens(ctx, strings.TrimSpace(code), redirectURI, pkce, tokenEndpoint)
+	if errExchange != nil {
+		return errExchange
+	}
+	if bundle == nil || strings.TrimSpace(bundle.TokenData.AccessToken) == "" {
+		return fmt.Errorf("token exchange returned empty access token")
+	}
+
+	tokenData := bundle.TokenData
+	metadata := map[string]any{
+		"type":           "xai",
+		"access_token":   tokenData.AccessToken,
+		"refresh_token":  tokenData.RefreshToken,
+		"id_token":       tokenData.IDToken,
+		"token_type":     tokenData.TokenType,
+		"expires_in":     tokenData.ExpiresIn,
+		"expired":        tokenData.Expire,
+		"last_refresh":   bundle.LastRefresh,
+		"base_url":       firstNonEmptyString(bundle.BaseURL, xaiauth.DefaultAPIBaseURL),
+		"redirect_uri":   bundle.RedirectURI,
+		"token_endpoint": bundle.TokenEndpoint,
+		"auth_kind":      "oauth",
+	}
+	if tokenData.Email != "" {
+		metadata["email"] = tokenData.Email
+	}
+	if tokenData.Subject != "" {
+		metadata["sub"] = tokenData.Subject
+	}
+	return h.storeOAuthMetadataWithContext(ctx, metadata, xaiauth.CredentialFileName(tokenData.Email, tokenData.Subject))
 }
 
 // storeOAuthMetadataWithContext stores an o auth metadata with context.
@@ -1501,6 +1615,8 @@ func normalizeOAuthProvider(provider string) (string, error) {
 		return "antigravity", nil
 	case "kimi":
 		return "kimi", nil
+	case "xai", "x-ai", "x.ai", "grok":
+		return "xai", nil
 	default:
 		return "", errUnsupportedProvider
 	}
@@ -1512,7 +1628,7 @@ func authStatusMessage(provider string, err error) string {
 		return ""
 	}
 	switch provider {
-	case "anthropic", "codex":
+	case "anthropic", "codex", "xai":
 		return "Failed to exchange authorization code for tokens"
 	case "gemini", "antigravity":
 		return "Failed to exchange token"
@@ -1610,6 +1726,15 @@ func antigravityCredentialFileName(email string) string {
 		return "antigravity.json"
 	}
 	return fmt.Sprintf("antigravity-%s.json", email)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 // geminiCLIUserAgent handles a gemini cli user agent.

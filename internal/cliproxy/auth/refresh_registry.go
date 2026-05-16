@@ -9,6 +9,7 @@ var (
 	claudeRefreshLead      = 4 * time.Hour
 	antigravityRefreshLead = 5 * time.Minute
 	kimiRefreshLead        = 5 * time.Minute
+	xaiRefreshLead         = 5 * time.Minute
 )
 
 // init prepares package-level state.
@@ -19,6 +20,7 @@ func init() {
 	registerRefreshLead("gemini-cli", nil)
 	registerRefreshLead("antigravity", &antigravityRefreshLead)
 	registerRefreshLead("kimi", &kimiRefreshLead)
+	registerRefreshLead("xai", &xaiRefreshLead)
 }
 
 // registerRefreshLead handles a register refresh lead.

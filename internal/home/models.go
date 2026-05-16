@@ -239,6 +239,9 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 	case "kimi":
 		models = registry.GetKimiModels()
 		models = applyExcludedModels(models, excluded)
+	case "xai":
+		models = registry.GetXAIModels()
+		models = applyExcludedModels(models, excluded)
 	default:
 		if len(configModels) > 0 {
 			providerKey := provider

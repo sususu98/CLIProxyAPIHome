@@ -150,6 +150,7 @@ func (h *Handler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/codex-auth-url", h.RequestCodexToken)
 	group.GET("/gemini-cli-auth-url", h.RequestGeminiCLIToken)
 	group.GET("/kimi-auth-url", h.RequestKimiToken)
+	group.GET("/xai-auth-url", h.RequestXAIToken)
 	group.GET("/get-auth-status", h.GetAuthStatus)
 	group.POST("/vertex/import", h.ImportVertexCredential)
 	group.POST("/api-call", h.APICall)

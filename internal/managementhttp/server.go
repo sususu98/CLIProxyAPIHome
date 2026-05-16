@@ -268,6 +268,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodGet, "/codex-auth-url", handler.RequestCodexToken)
 	r.Set(http.MethodGet, "/gemini-cli-auth-url", handler.RequestGeminiCLIToken)
 	r.Set(http.MethodGet, "/kimi-auth-url", handler.RequestKimiToken)
+	r.Set(http.MethodGet, "/xai-auth-url", handler.RequestXAIToken)
 	r.Set(http.MethodGet, "/get-auth-status", handler.GetAuthStatus)
 	r.Set(http.MethodPost, "/vertex/import", handler.ImportVertexCredential)
 	r.Set(http.MethodPost, "/api-call", handler.APICall)
