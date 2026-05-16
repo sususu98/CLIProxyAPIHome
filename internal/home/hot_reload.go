@@ -12,6 +12,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/diff"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -71,6 +72,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
+	oldCfg := r.Config()
 
 	currentLevel := log.GetLevel()
 	if cfg.Debug {
@@ -81,6 +83,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 	if nextLevel := log.GetLevel(); nextLevel != currentLevel {
 		log.Infof("log level changed from %s to %s (debug=%t)", currentLevel, nextLevel, cfg.Debug)
 	}
+	logConfigChanges(oldCfg, cfg)
 
 	store := coreauth.GetTokenStore()
 	if dirSetter, ok := store.(interface{ SetBaseDir(string) }); ok {
@@ -120,4 +123,18 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 // ApplyConfigFromCluster updates apply config from cluster.
 func (r *Runtime) ApplyConfigFromCluster(ctx context.Context, cfg *config.Config) error {
 	return r.applyConfigAndReloadAuths(ctx, cfg)
+}
+
+func logConfigChanges(oldCfg, newCfg *config.Config) {
+	if oldCfg == nil || newCfg == nil {
+		return
+	}
+	details := diff.BuildConfigChangeDetails(oldCfg, newCfg)
+	if len(details) == 0 {
+		return
+	}
+	log.Infof("config changes detected:")
+	for _, detail := range details {
+		log.Infof("  %s", detail)
+	}
 }

@@ -132,6 +132,10 @@ func (h *Handler) RegisterRoutes(group *gin.RouterGroup) {
 	group.PUT("/oauth-model-alias", h.PutOAuthModelAlias)
 	group.PATCH("/oauth-model-alias", h.PatchOAuthModelAlias)
 	group.DELETE("/oauth-model-alias", h.DeleteOAuthModelAlias)
+	group.GET("/payload", h.GetConfigRoot("/payload"))
+	group.PUT("/payload", h.PutConfigRoot("/payload"))
+	group.PATCH("/payload", h.PutConfigRoot("/payload"))
+	group.DELETE("/payload", h.DeleteConfigRoot("/payload"))
 
 	group.GET("/auth-files", h.ListAuthFiles)
 	group.GET("/auth-files/models", h.GetAuthFileModels)
