@@ -23,6 +23,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/logging"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/managementhttp"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/protocolmux"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/proxyproto"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
@@ -279,6 +280,7 @@ func run() int {
 		log.Errorf("failed to listen on %s: %v", addr, errListen)
 		return 1
 	}
+	baseListener = proxyproto.NewListener(baseListener)
 
 	if cfg.TLS.Enable {
 		certPath := strings.TrimSpace(cfg.TLS.Cert)

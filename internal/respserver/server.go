@@ -15,6 +15,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/proxyproto"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
 	log "github.com/sirupsen/logrus"
 )
@@ -129,6 +130,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if errListen != nil {
 		return errListen
 	}
+	listener = proxyproto.NewListener(listener)
 	defer func() {
 		if errClose := listener.Close(); errClose != nil {
 			log.Errorf("resp listener close error: %v", errClose)
@@ -173,6 +175,16 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	peerAddr := conn.RemoteAddr()
+	var errProxy error
+	conn, errProxy = proxyproto.NewConnAndRead(conn)
+	if errProxy != nil {
+		log.Warnf("resp proxy protocol header rejected from %s: %v", peerAddr, errProxy)
+		if errClose := conn.Close(); errClose != nil {
+			log.Errorf("resp proxy protocol connection close error: %v", errClose)
+		}
+		return
 	}
 
 	clientIP, localClient := resolveRemoteIP(conn.RemoteAddr())
