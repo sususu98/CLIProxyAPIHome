@@ -206,6 +206,7 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context) error {
 		IP:          c.node.IP,
 		Port:        c.node.Port,
 		SecretHash:  nodeSecretHash(c.node.Secret),
+		IsMaster:    c.IsMaster(),
 		ClientCount: node.GlobalRegistry().TotalCount(),
 		StartedAt:   c.node.StartedAt,
 		LastSeenAt:  now,
@@ -218,6 +219,7 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context) error {
 			"last_seen_at": record.LastSeenAt,
 			"secret_hash":  record.SecretHash,
 			"client_count": record.ClientCount,
+			"is_master":    record.IsMaster,
 		}),
 	}).Create(&record).Error; errUpsert != nil {
 		return errUpsert
