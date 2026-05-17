@@ -128,6 +128,14 @@ func (h *RESPHandler) nodesPayload(ctx context.Context) ([]byte, error) {
 	if errNodes != nil {
 		return nil, errNodes
 	}
+	var master *ClusterNodeRecord
+	if h.coordinator != nil {
+		currentMaster, errMaster := h.coordinator.CurrentMaster(ctx)
+		if errMaster != nil {
+			return nil, errMaster
+		}
+		master = currentMaster
+	}
 	sort.Slice(nodes, func(i, j int) bool {
 		leftCount := nodes[i].ClientCount
 		rightCount := nodes[j].ClientCount
@@ -156,7 +164,7 @@ func (h *RESPHandler) nodesPayload(ctx context.Context) ([]byte, error) {
 			IP:          node.IP,
 			Port:        node.Port,
 			ClientCount: clientCount,
-			IsMaster:    node.IsMaster,
+			IsMaster:    master != nil && clusterNodeMatches(node, master.IP, master.Port),
 			LastSeenAt:  node.LastSeenAt,
 		})
 	}
