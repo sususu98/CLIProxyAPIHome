@@ -88,6 +88,7 @@ func run() int {
 	var eventWatcher *cluster.EventWatcher
 	var eventWatcherErrCh <-chan error
 	var clusterRESPHandler *cluster.RESPHandler
+	var clusterTLSConfig *tls.Config
 	if clusterExists {
 		startedAt := time.Now().UTC()
 		clusterStartedAt = startedAt
@@ -131,6 +132,12 @@ func run() int {
 
 		repo := cluster.NewRepository(clusterDB)
 		clusterRepo = repo
+		tlsConfig, errCertificates := repo.EnsureClusterCertificates(runCtx, clusterClientAddr)
+		if errCertificates != nil {
+			log.Errorf("failed to init cluster certificates: %v", errCertificates)
+			return 1
+		}
+		clusterTLSConfig = tlsConfig
 		if errBootstrap := cluster.Bootstrap(runCtx, cluster.BootstrapOptions{
 			ConfigPath: configPath,
 			AuthDir:    localAuthDir,
@@ -260,6 +267,8 @@ func run() int {
 			Enabled:    true,
 			Repository: clusterRepo,
 			Runtime:    rt,
+			NodeIP:     clusterClientAddr,
+			NodePort:   clusterAdvertisedPort,
 		}))
 	}
 	mgmtBuild, errMgmt := managementhttp.Build(cfgPath, mgmtOpts...)
@@ -280,7 +289,12 @@ func run() int {
 		return 1
 	}
 
-	if cfg.TLS.Enable {
+	if clusterTLSConfig != nil {
+		httpSrv.TLSConfig = clusterTLSConfig
+		if errHTTP2 := http2.ConfigureServer(httpSrv, &http2.Server{}); errHTTP2 != nil {
+			log.Warnf("failed to configure HTTP/2: %v", errHTTP2)
+		}
+	} else if cfg.TLS.Enable {
 		certPath := strings.TrimSpace(cfg.TLS.Cert)
 		keyPath := strings.TrimSpace(cfg.TLS.Key)
 		if certPath == "" || keyPath == "" {
@@ -346,7 +360,7 @@ func run() int {
 	go func() {
 		acceptErrCh <- protocolmux.Serve(runCtx, baseListener, httpListener, func(conn net.Conn) {
 			go respSrv.HandleConn(runCtx, conn)
-		}, nil)
+		}, nil, clusterTLSConfig)
 	}()
 
 	go func() {

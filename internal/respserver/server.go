@@ -3,6 +3,7 @@ package respserver
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +29,12 @@ type Server struct {
 }
 
 const clusterSubscriptionUpdateInterval = 30 * time.Second
+
+const (
+	respAuthSourceNone = "none"
+	respAuthSourceAuth = "auth"
+	respAuthSourceMTLS = "mtls"
+)
 
 // New creates a new.
 func New(addr string, runtime *home.Runtime) *Server {
@@ -102,6 +109,34 @@ func (s *Server) writeClusterSubscriptionUpdate(ctx context.Context, writer *saf
 		return nil
 	}
 	return writer.WriteDispatchReply(subscriptionMessage(clusterSubscriptionChannel, payload))
+}
+
+func (s *Server) writeNoAuth(writer *safeWriter, clientIP string, localClient bool) {
+	if writer == nil {
+		return
+	}
+	if s != nil && s.auth != nil {
+		_, statusCode, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, "")
+		if statusCode == http.StatusForbidden && strings.HasPrefix(errMsg, "IP banned due to too many failed attempts") {
+			_ = writer.WriteRedisError("ERR " + errMsg)
+			return
+		}
+	}
+	_ = writer.WriteRedisError("NOAUTH Authentication required.")
+}
+
+func isRESPAuthenticated(source string) bool {
+	source = strings.TrimSpace(source)
+	return source == respAuthSourceAuth || source == respAuthSourceMTLS
+}
+
+func isMTLSAuthenticated(conn net.Conn) bool {
+	stater, ok := conn.(interface{ ConnectionState() tls.ConnectionState })
+	if !ok {
+		return false
+	}
+	state := stater.ConnectionState()
+	return len(state.PeerCertificates) > 0 && len(state.VerifiedChains) > 0
 }
 
 func subscriptionMessage(channel string, payload []byte) dispatch.Reply {
@@ -185,7 +220,10 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 	}
-	authed := false
+	authSource := respAuthSourceNone
+	if isMTLSAuthenticated(conn) {
+		authSource = respAuthSourceMTLS
+	}
 	reader := bufio.NewReader(conn)
 	writer := newSafeWriter(bufio.NewWriter(conn))
 	connectedAt := time.Now()
@@ -226,22 +264,35 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 
 		cmd := strings.ToUpper(strings.TrimSpace(args[0]))
 
+		if cmd == "CERTIFICATE" {
+			if authSource != respAuthSourceNone {
+				_ = writer.WriteRedisError("ERR certificate request is only allowed before authentication")
+				continue
+			}
+			if s.cluster == nil {
+				_ = writer.WriteRedisError("ERR cluster disabled")
+				continue
+			}
+			if len(args) != 4 || !strings.EqualFold(strings.TrimSpace(args[1]), "REQUEST") {
+				_ = writer.WriteRedisError("ERR wrong number of arguments for 'certificate request' command")
+				continue
+			}
+			payload, errCertificate := s.cluster.RequestClientCertificate(ctx, args[2], []byte(args[3]))
+			if errCertificate != nil {
+				_ = writer.WriteRedisError("ERR " + errCertificate.Error())
+				continue
+			}
+			_ = writer.WriteRedisBulkString(payload)
+			continue
+		}
+
 		if cmd == clusterCommand {
 			if s.cluster == nil {
 				_ = writer.WriteRedisError("ERR cluster disabled")
 				continue
 			}
-			if cluster.IsClientClusterCommand(args) && !authed {
-				if s.auth != nil {
-					_, statusCode, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, "")
-					if statusCode == http.StatusForbidden && strings.HasPrefix(errMsg, "IP banned due to too many failed attempts") {
-						_ = writer.WriteRedisError("ERR " + errMsg)
-					} else {
-						_ = writer.WriteRedisError("NOAUTH Authentication required.")
-					}
-				} else {
-					_ = writer.WriteRedisError("NOAUTH Authentication required.")
-				}
+			if cluster.IsClientClusterCommand(args) && !isRESPAuthenticated(authSource) {
+				s.writeNoAuth(writer, clientIP, localClient)
 				continue
 			}
 			payload, errCluster := s.cluster.Handle(ctx, args, clientIP)
@@ -250,6 +301,11 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 				continue
 			}
 			_ = writer.WriteRedisBulkString(payload)
+			continue
+		}
+
+		if cmd != "AUTH" && !isRESPAuthenticated(authSource) {
+			s.writeNoAuth(writer, clientIP, localClient)
 			continue
 		}
 
@@ -279,21 +335,11 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 			continue
 		}
 
-		if cmd != "AUTH" && !authed {
-			if s.auth != nil {
-				_, statusCode, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, "")
-				if statusCode == http.StatusForbidden && strings.HasPrefix(errMsg, "IP banned due to too many failed attempts") {
-					_ = writer.WriteRedisError("ERR " + errMsg)
-				} else {
-					_ = writer.WriteRedisError("NOAUTH Authentication required.")
-				}
-			} else {
-				_ = writer.WriteRedisError("NOAUTH Authentication required.")
-			}
-			continue
-		}
-
 		if cmd == "AUTH" {
+			if authSource == respAuthSourceMTLS {
+				_ = writer.WriteRedisSimpleString("OK")
+				continue
+			}
 			password, ok := parseAuthPassword(args)
 			if !ok {
 				if s.auth != nil {
@@ -315,7 +361,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 				_ = writer.WriteRedisError("ERR " + errMsg)
 				continue
 			}
-			authed = true
+			authSource = respAuthSourceAuth
 			_ = writer.WriteRedisSimpleString("OK")
 			continue
 		}

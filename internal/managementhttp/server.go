@@ -99,6 +99,8 @@ type ClusterManagementOption struct {
 	Enabled    bool
 	Repository *cluster.Repository
 	Runtime    *home.Runtime
+	NodeIP     string
+	NodePort   int
 }
 
 // WithRoute applies the route option.
@@ -129,7 +131,7 @@ func WithClusterManagement(opt ClusterManagementOption) RouteOption {
 		}
 		optCopy := opt
 		r.clusterManagement = &optCopy
-		registerClusterManagementRoutes(r, clustermanagement.NewHandler(opt.Repository, opt.Runtime))
+		registerClusterManagementRoutes(r, clustermanagement.NewHandler(opt.Repository, opt.Runtime, opt.NodeIP, opt.NodePort))
 	}
 }
 
@@ -142,6 +144,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 
 	r.Set(http.MethodGet, "/nodes", handler.ListNodes)
 	r.Set(http.MethodGet, "/latest-version", handler.GetLatestVersion)
+	r.Set(http.MethodPost, "/certificates/clients", handler.CreateClientCertificate)
 	r.Set(http.MethodGet, "/config", handler.GetConfig)
 	r.Set(http.MethodGet, "/config.yaml", handler.GetConfigYAML)
 	r.Set(http.MethodPut, "/config.yaml", handler.PutConfigYAML)

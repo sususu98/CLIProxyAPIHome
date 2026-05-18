@@ -23,7 +23,7 @@ func IsRESPPrefix(prefix byte) bool {
 }
 
 // Serve handles serve.
-func Serve(ctx context.Context, listener net.Listener, httpListener *Listener, onRESPConn func(net.Conn), onHTTPConn func(net.Conn)) error {
+func Serve(ctx context.Context, listener net.Listener, httpListener *Listener, onRESPConn func(net.Conn), onHTTPConn func(net.Conn), tlsConfig *tls.Config) error {
 	// Decode the wire frame before dispatching command handling.
 	if listener == nil {
 		return net.ErrClosed
@@ -41,25 +41,8 @@ func Serve(ctx context.Context, listener net.Listener, httpListener *Listener, o
 			continue
 		}
 
-		if tlsConn, ok := conn.(*tls.Conn); ok {
-			if errHandshake := tlsConn.Handshake(); errHandshake != nil {
-				if errClose := conn.Close(); errClose != nil {
-					log.Errorf("protocol mux: close conn after TLS handshake error: %v", errClose)
-				}
-				continue
-			}
-
-			proto := strings.TrimSpace(tlsConn.ConnectionState().NegotiatedProtocol)
-			if proto == "h2" || proto == "http/1.1" {
-				if onHTTPConn != nil {
-					onHTTPConn(tlsConn)
-				} else if httpListener != nil {
-					_ = httpListener.Put(tlsConn)
-				} else {
-					_ = conn.Close()
-				}
-				continue
-			}
+		if routed := routeTLSConn(conn, httpListener, onHTTPConn); routed {
+			continue
 		}
 
 		reader := bufio.NewReader(conn)
@@ -69,6 +52,28 @@ func Serve(ctx context.Context, listener net.Listener, httpListener *Listener, o
 				log.Errorf("protocol mux: close conn after peek error: %v", errClose)
 			}
 			continue
+		}
+
+		if tlsConfig != nil && isTLSClientHello(prefix[0]) {
+			tlsConn := tls.Server(&BufferedConn{Conn: conn, reader: reader}, tlsConfig)
+			if errHandshake := tlsConn.Handshake(); errHandshake != nil {
+				if errClose := conn.Close(); errClose != nil {
+					log.Errorf("protocol mux: close conn after TLS handshake error: %v", errClose)
+				}
+				continue
+			}
+			if routed := routeTLSConn(tlsConn, httpListener, onHTTPConn); routed {
+				continue
+			}
+			reader = bufio.NewReader(tlsConn)
+			prefix, errPeek = reader.Peek(1)
+			if errPeek != nil {
+				if errClose := tlsConn.Close(); errClose != nil {
+					log.Errorf("protocol mux: close tls conn after peek error: %v", errClose)
+				}
+				continue
+			}
+			conn = tlsConn
 		}
 
 		wrapped := &BufferedConn{Conn: conn, reader: reader}
@@ -95,6 +100,35 @@ func Serve(ctx context.Context, listener net.Listener, httpListener *Listener, o
 			}
 		}
 	}
+}
+
+func routeTLSConn(conn net.Conn, httpListener *Listener, onHTTPConn func(net.Conn)) bool {
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return false
+	}
+	if errHandshake := tlsConn.Handshake(); errHandshake != nil {
+		if errClose := conn.Close(); errClose != nil {
+			log.Errorf("protocol mux: close conn after TLS handshake error: %v", errClose)
+		}
+		return true
+	}
+	proto := strings.TrimSpace(tlsConn.ConnectionState().NegotiatedProtocol)
+	if proto != "h2" && proto != "http/1.1" {
+		return false
+	}
+	if onHTTPConn != nil {
+		onHTTPConn(tlsConn)
+	} else if httpListener != nil {
+		_ = httpListener.Put(tlsConn)
+	} else {
+		_ = conn.Close()
+	}
+	return true
+}
+
+func isTLSClientHello(prefix byte) bool {
+	return prefix == 0x16
 }
 
 // NormalizeServeError normalizes a serve error.

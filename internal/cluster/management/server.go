@@ -13,13 +13,15 @@ import (
 )
 
 type Handler struct {
-	repo    *cluster.Repository
-	runtime *home.Runtime
+	repo     *cluster.Repository
+	runtime  *home.Runtime
+	nodeIP   string
+	nodePort int
 }
 
 // NewHandler creates a new handler.
-func NewHandler(repo *cluster.Repository, runtime *home.Runtime) *Handler {
-	return &Handler{repo: repo, runtime: runtime}
+func NewHandler(repo *cluster.Repository, runtime *home.Runtime, nodeIP string, nodePort int) *Handler {
+	return &Handler{repo: repo, runtime: runtime, nodeIP: strings.TrimSpace(nodeIP), nodePort: nodePort}
 }
 
 // RegisterRoutes handles a register routes.
@@ -30,6 +32,7 @@ func (h *Handler) RegisterRoutes(group *gin.RouterGroup) {
 	}
 	group.GET("/nodes", h.ListNodes)
 	group.GET("/latest-version", h.GetLatestVersion)
+	group.POST("/certificates/clients", h.CreateClientCertificate)
 	group.GET("/config", h.GetConfig)
 	group.GET("/config.yaml", h.GetConfigYAML)
 	group.PUT("/config.yaml", h.PutConfigYAML)
