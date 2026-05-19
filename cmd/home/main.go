@@ -57,6 +57,7 @@ func run() int {
 	var sqlitePath string
 	var importState bool
 	var exportState bool
+	var exportDir string
 	var authDir string
 	var disbandCluster bool
 	flag.StringVar(&configPath, "config", "config.yaml", "Config file path")
@@ -64,6 +65,7 @@ func run() int {
 	flag.StringVar(&sqlitePath, "sqlite-path", "", "SQLite database path")
 	flag.BoolVar(&importState, "import", false, "Import config and auth files into database, then exit")
 	flag.BoolVar(&exportState, "export", false, "Export config and auth files from database, then exit")
+	flag.StringVar(&exportDir, "export-dir", "", "Override output directory used by export")
 	flag.StringVar(&authDir, "auth-dir", "", "Override auth directory used by import")
 	flag.BoolVar(&disbandCluster, "disband-cluster", false, "Restore config and auth files from cluster database, then exit")
 	flag.Parse()
@@ -146,7 +148,10 @@ func run() int {
 		return 0
 	}
 	if exportState {
-		stats, errExport := cluster.ExportLocalState(runCtx, cluster.ExportOptions{Repository: repo})
+		stats, errExport := cluster.ExportLocalState(runCtx, cluster.ExportOptions{
+			OutputDir:  exportDir,
+			Repository: repo,
+		})
 		if errExport != nil {
 			log.Errorf("failed to export local state: %v", errExport)
 			return 1

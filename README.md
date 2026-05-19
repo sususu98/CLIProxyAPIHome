@@ -38,7 +38,7 @@ To export database state back to files, run:
 ./CLIProxyAPIHome -export
 ```
 
-Export writes `./config.yaml` and credential files under `./auth/`. It refuses to overwrite an existing `config.yaml` or a non-empty `auth/` directory.
+Export writes `./config.yaml` and credential files under `./auth/` by default. Use `-export-dir <path>` to write both outputs under another directory. It refuses to overwrite an existing `config.yaml` or a non-empty `auth/` directory in the selected output directory.
 
 In cluster mode, the Management API operates directly on database data. The default listen port comes from `node.port` in `cluster.yaml`; the startup `-addr` flag can override the listen address. Set `node.external-port` when a reverse proxy changes the port that clients must use; when omitted, the advertised cluster node port follows the final listen port.
 
