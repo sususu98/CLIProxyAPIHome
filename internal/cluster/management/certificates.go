@@ -25,12 +25,12 @@ func (h *Handler) CreateClientCertificate(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "certificate_jwt_target_invalid", nil)
 		return
 	}
-	certificateID, errCreate := h.repo.CreatePendingClientCertificate(ctx)
+	certificateID, enrollmentSecret, errCreate := h.repo.CreatePendingClientCertificate(ctx)
 	if errCreate != nil {
 		respondError(c, http.StatusInternalServerError, "certificate_create_failed", errCreate)
 		return
 	}
-	token, errJWT := h.repo.CreateHomeJWT(ctx, certificateID, ip, port)
+	token, errJWT := h.repo.CreateHomeJWT(ctx, certificateID, ip, port, enrollmentSecret)
 	if errJWT != nil {
 		respondError(c, http.StatusInternalServerError, "certificate_jwt_failed", errJWT)
 		return

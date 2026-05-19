@@ -53,11 +53,11 @@ func (h *RESPHandler) UpdateClientCount(ctx context.Context, clientCount int) er
 }
 
 // RequestClientCertificate signs a pending client certificate request.
-func (h *RESPHandler) RequestClientCertificate(ctx context.Context, certificateID string, csrPEM []byte) ([]byte, error) {
+func (h *RESPHandler) RequestClientCertificate(ctx context.Context, certificateID string, enrollmentSecret string, csrPEM []byte) ([]byte, error) {
 	if h == nil || h.repo == nil {
 		return nil, fmt.Errorf("cluster resp: repository is nil")
 	}
-	return h.repo.SignClientCertificateRequestJSON(ctx, certificateID, csrPEM)
+	return h.repo.SignClientCertificateRequestJSON(ctx, certificateID, enrollmentSecret, csrPEM)
 }
 
 // Handle handles handle.

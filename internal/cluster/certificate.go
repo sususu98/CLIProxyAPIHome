@@ -6,10 +6,12 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -23,6 +25,7 @@ import (
 )
 
 const certificateKeyBits = 2048
+const enrollmentSecretBytes = 32
 
 type certificateRequestResponse struct {
 	OK          bool   `json:"ok"`
@@ -31,10 +34,13 @@ type certificateRequestResponse struct {
 }
 
 type homeJWTClaims struct {
-	CertificateID string `json:"certificate_id"`
-	IP            string `json:"ip"`
-	Port          int    `json:"port"`
-	IssuedAt      int64  `json:"iat"`
+	CertificateID    string `json:"certificate_id"`
+	ClusterID        string `json:"cluster_id"`
+	CAFingerprint    string `json:"ca_fingerprint"`
+	EnrollmentSecret string `json:"enrollment_secret"`
+	IP               string `json:"ip"`
+	Port             int    `json:"port"`
+	IssuedAt         int64  `json:"iat"`
 }
 
 // EnsureClusterCertificates makes sure the cluster CA and this node server certificate exist.
@@ -61,22 +67,38 @@ func (r *Repository) EnsureClusterCertificates(ctx context.Context, ip string) (
 }
 
 // CreatePendingClientCertificate creates an empty client certificate slot.
-func (r *Repository) CreatePendingClientCertificate(ctx context.Context) (string, error) {
+func (r *Repository) CreatePendingClientCertificate(ctx context.Context) (string, string, error) {
 	db, errDB := r.database()
 	if errDB != nil {
-		return "", errDB
+		return "", "", errDB
+	}
+	ctx = contextOrBackground(ctx)
+	ca, errCA := r.ensureCARecord(ctx, db)
+	if errCA != nil {
+		return "", "", errCA
+	}
+	caFingerprint, errFingerprint := certificateFingerprintPEM([]byte(ca.CertificatePEM))
+	if errFingerprint != nil {
+		return "", "", errFingerprint
+	}
+	secret, errSecret := randomEnrollmentSecret()
+	if errSecret != nil {
+		return "", "", errSecret
 	}
 	id, errID := randomUUID()
 	if errID != nil {
-		return "", errID
+		return "", "", errID
 	}
 	record := &CertificateRecord{
-		ID: id,
+		ID:                   id,
+		ClusterID:            ca.ID,
+		CAFingerprint:        caFingerprint,
+		EnrollmentSecretHash: hashEnrollmentSecret(secret),
 	}
-	if errCreate := db.WithContext(contextOrBackground(ctx)).Create(record).Error; errCreate != nil {
-		return "", errCreate
+	if errCreate := db.WithContext(ctx).Create(record).Error; errCreate != nil {
+		return "", "", errCreate
 	}
-	return id, nil
+	return id, secret, nil
 }
 
 // CurrentMasterNode returns the current master node if one is recorded.
@@ -100,7 +122,7 @@ func (r *Repository) CurrentMasterNode(ctx context.Context) (*ClusterNodeRecord,
 }
 
 // CreateHomeJWT creates a signed Home JWT with the client certificate id and target node.
-func (r *Repository) CreateHomeJWT(ctx context.Context, certificateID string, ip string, port int) (string, error) {
+func (r *Repository) CreateHomeJWT(ctx context.Context, certificateID string, ip string, port int, enrollmentSecret string) (string, error) {
 	db, errDB := r.database()
 	if errDB != nil {
 		return "", errDB
@@ -109,6 +131,10 @@ func (r *Repository) CreateHomeJWT(ctx context.Context, certificateID string, ip
 	ip = strings.TrimSpace(ip)
 	if certificateID == "" {
 		return "", fmt.Errorf("certificate id is required")
+	}
+	enrollmentSecret = strings.TrimSpace(enrollmentSecret)
+	if enrollmentSecret == "" {
+		return "", fmt.Errorf("enrollment secret is required")
 	}
 	if ip == "" || port <= 0 {
 		return "", fmt.Errorf("home jwt target address is invalid")
@@ -121,17 +147,24 @@ func (r *Repository) CreateHomeJWT(ctx context.Context, certificateID string, ip
 	if errKey != nil {
 		return "", errKey
 	}
+	caFingerprint, errFingerprint := certificateFingerprintPEM([]byte(ca.CertificatePEM))
+	if errFingerprint != nil {
+		return "", errFingerprint
+	}
 	claims := homeJWTClaims{
-		CertificateID: certificateID,
-		IP:            ip,
-		Port:          port,
-		IssuedAt:      time.Now().UTC().Unix(),
+		CertificateID:    certificateID,
+		ClusterID:        ca.ID,
+		CAFingerprint:    caFingerprint,
+		EnrollmentSecret: enrollmentSecret,
+		IP:               ip,
+		Port:             port,
+		IssuedAt:         time.Now().UTC().Unix(),
 	}
 	return signHomeJWT(key, claims)
 }
 
 // SignClientCertificateRequest signs a client CSR exactly once and returns the client certificate plus CA.
-func (r *Repository) SignClientCertificateRequest(ctx context.Context, certificateID string, csrPEM []byte) ([]byte, []byte, error) {
+func (r *Repository) SignClientCertificateRequest(ctx context.Context, certificateID string, enrollmentSecret string, csrPEM []byte) ([]byte, []byte, error) {
 	db, errDB := r.database()
 	if errDB != nil {
 		return nil, nil, errDB
@@ -139,6 +172,10 @@ func (r *Repository) SignClientCertificateRequest(ctx context.Context, certifica
 	certificateID = strings.TrimSpace(certificateID)
 	if certificateID == "" {
 		return nil, nil, fmt.Errorf("certificate id is required")
+	}
+	enrollmentSecret = strings.TrimSpace(enrollmentSecret)
+	if enrollmentSecret == "" {
+		return nil, nil, fmt.Errorf("enrollment secret is required")
 	}
 	csr, errCSR := parseCertificateRequestPEM(csrPEM)
 	if errCSR != nil {
@@ -179,6 +216,9 @@ func (r *Repository) SignClientCertificateRequest(ctx context.Context, certifica
 		if record.IsCA || record.IsServer {
 			return fmt.Errorf("certificate id is not a pending client certificate")
 		}
+		if !verifyEnrollmentSecret(record.EnrollmentSecretHash, enrollmentSecret) {
+			return fmt.Errorf("enrollment secret is invalid")
+		}
 
 		now := time.Now().UTC()
 		serial, errSerial := randomSerialNumber()
@@ -205,6 +245,7 @@ func (r *Repository) SignClientCertificateRequest(ctx context.Context, certifica
 		record.CertificatePEM = string(certPEM)
 		record.CSRPEM = string(csrPEM)
 		record.PrivateKeyPEM = ""
+		record.EnrollmentSecretHash = ""
 		record.IsClient = true
 		record.IsCA = false
 		record.IsServer = false
@@ -220,8 +261,8 @@ func (r *Repository) SignClientCertificateRequest(ctx context.Context, certifica
 }
 
 // SignClientCertificateRequestJSON signs a CSR and returns the RESP JSON payload.
-func (r *Repository) SignClientCertificateRequestJSON(ctx context.Context, certificateID string, csrPEM []byte) ([]byte, error) {
-	certPEM, caPEM, errSign := r.SignClientCertificateRequest(ctx, certificateID, csrPEM)
+func (r *Repository) SignClientCertificateRequestJSON(ctx context.Context, certificateID string, enrollmentSecret string, csrPEM []byte) ([]byte, error) {
+	certPEM, caPEM, errSign := r.SignClientCertificateRequest(ctx, certificateID, enrollmentSecret, csrPEM)
 	if errSign != nil {
 		return nil, errSign
 	}
@@ -411,6 +452,28 @@ func randomSerialNumber() (*big.Int, error) {
 	return serial, nil
 }
 
+func randomEnrollmentSecret() (string, error) {
+	raw := make([]byte, enrollmentSecretBytes)
+	if _, errRead := rand.Read(raw); errRead != nil {
+		return "", errRead
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func hashEnrollmentSecret(secret string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(secret)))
+	return hex.EncodeToString(sum[:])
+}
+
+func verifyEnrollmentSecret(storedHash string, secret string) bool {
+	storedHash = strings.TrimSpace(storedHash)
+	if storedHash == "" {
+		return false
+	}
+	expected := hashEnrollmentSecret(secret)
+	return subtle.ConstantTimeCompare([]byte(storedHash), []byte(expected)) == 1
+}
+
 func encodeCertificatePEM(der []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
@@ -425,6 +488,15 @@ func parseCertificatePEM(raw []byte) (*x509.Certificate, error) {
 		return nil, fmt.Errorf("certificate pem is invalid")
 	}
 	return x509.ParseCertificate(block.Bytes)
+}
+
+func certificateFingerprintPEM(raw []byte) (string, error) {
+	cert, errCert := parseCertificatePEM(raw)
+	if errCert != nil {
+		return "", errCert
+	}
+	sum := sha256.Sum256(cert.Raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func parseRSAPrivateKeyPEM(raw []byte) (*rsa.PrivateKey, error) {

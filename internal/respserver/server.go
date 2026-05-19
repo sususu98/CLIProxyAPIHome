@@ -273,11 +273,11 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 				_ = writer.WriteRedisError("ERR cluster disabled")
 				continue
 			}
-			if len(args) != 4 || !strings.EqualFold(strings.TrimSpace(args[1]), "REQUEST") {
+			if len(args) != 5 || !strings.EqualFold(strings.TrimSpace(args[1]), "REQUEST") {
 				_ = writer.WriteRedisError("ERR wrong number of arguments for 'certificate request' command")
 				continue
 			}
-			payload, errCertificate := s.cluster.RequestClientCertificate(ctx, args[2], []byte(args[3]))
+			payload, errCertificate := s.cluster.RequestClientCertificate(ctx, args[2], args[3], []byte(args[4]))
 			if errCertificate != nil {
 				_ = writer.WriteRedisError("ERR " + errCertificate.Error())
 				continue
