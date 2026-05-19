@@ -8,9 +8,30 @@ import (
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
 
 type JSONB []byte
+
+// GormDataType returns the logical GORM data type.
+func (JSONB) GormDataType() string {
+	return "json"
+}
+
+// GormDBDataType returns the dialect-specific database type.
+func (JSONB) GormDBDataType(db *gorm.DB, _ *schema.Field) string {
+	if db == nil || db.Dialector == nil {
+		return "text"
+	}
+	switch db.Dialector.Name() {
+	case "postgres":
+		return "jsonb"
+	case "sqlite":
+		return "text"
+	default:
+		return "text"
+	}
+}
 
 // Value converts the value for database storage.
 func (j JSONB) Value() (driver.Value, error) {
@@ -68,8 +89,8 @@ func (j *JSONB) UnmarshalJSON(data []byte) error {
 }
 
 type AuthRecord struct {
-	UUID             string          `gorm:"column:uuid;primaryKey;type:uuid"`
-	AuthJSON         JSONB           `gorm:"column:auth_json;type:jsonb;not null"`
+	UUID             string          `gorm:"column:uuid;primaryKey"`
+	AuthJSON         JSONB           `gorm:"column:auth_json;not null"`
 	Version          int64           `gorm:"column:version;not null;default:1"`
 	ID               string          `gorm:"column:id;index:idx_auth_active_order,priority:2"`
 	Index            string          `gorm:"column:index"`
@@ -98,7 +119,7 @@ func (AuthRecord) TableName() string {
 
 type ConfigRecord struct {
 	Key       string    `gorm:"column:key;primaryKey"`
-	Value     JSONB     `gorm:"column:value;type:jsonb;not null"`
+	Value     JSONB     `gorm:"column:value;not null"`
 	Version   int64     `gorm:"column:version;not null;default:1"`
 	CreatedAt time.Time `gorm:"column:created_at"`
 	UpdatedAt time.Time `gorm:"column:updated_at"`
@@ -156,7 +177,7 @@ type OAuthSessionRecord struct {
 	Provider    string     `gorm:"column:provider;index"`
 	Status      string     `gorm:"column:status"`
 	Error       string     `gorm:"column:error"`
-	Data        JSONB      `gorm:"column:data;type:jsonb"`
+	Data        JSONB      `gorm:"column:data"`
 	CreatedAt   time.Time  `gorm:"column:created_at"`
 	UpdatedAt   time.Time  `gorm:"column:updated_at"`
 	ExpiresAt   time.Time  `gorm:"column:expires_at;index"`

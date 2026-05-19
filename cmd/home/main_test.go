@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
@@ -40,5 +42,62 @@ func TestResolveClusterAdvertisedPortFallsBackToListenPort(t *testing.T) {
 	}
 	if port != 18327 {
 		t.Fatalf("advertised port = %d, want 18327", port)
+	}
+}
+
+func TestResolveSQLitePath_UsesFlagOverride(t *testing.T) {
+	t.Parallel()
+
+	got := resolveSQLitePath("flag.db", "config.db")
+	if got != "flag.db" {
+		t.Fatalf("resolveSQLitePath() = %q, want flag.db", got)
+	}
+}
+
+func TestResolveSQLitePath_UsesConfigFallback(t *testing.T) {
+	t.Parallel()
+
+	got := resolveSQLitePath("", "config.db")
+	if got != "config.db" {
+		t.Fatalf("resolveSQLitePath() = %q, want config.db", got)
+	}
+}
+
+func TestResolveSQLitePath_UsesDefault(t *testing.T) {
+	t.Parallel()
+
+	got := resolveSQLitePath("", "")
+	if got != "home.db" {
+		t.Fatalf("resolveSQLitePath() = %q, want home.db", got)
+	}
+}
+
+func TestResolveDatabaseNodeIP_RejectsClusterSQLiteWithoutExternalIP(t *testing.T) {
+	t.Parallel()
+
+	cfg := &cluster.Config{
+		SQLite: cluster.SQLiteConfig{Path: "home.db"},
+	}
+	got, errNodeIP := resolveDatabaseNodeIP(context.Background(), nil, cluster.DatabaseBackendSQLite, cfg, true)
+	if errNodeIP == nil {
+		t.Fatalf("resolveDatabaseNodeIP() error = nil, want node.external-ip error")
+	}
+	if got != "" {
+		t.Fatalf("resolveDatabaseNodeIP() = %q, want empty ip on error", got)
+	}
+	if !strings.Contains(errNodeIP.Error(), "node.external-ip is required when cluster uses sqlite backend") {
+		t.Fatalf("resolveDatabaseNodeIP() error = %v, want node.external-ip sqlite error", errNodeIP)
+	}
+}
+
+func TestResolveDatabaseNodeIP_UsesLoopbackForNonClusterSQLite(t *testing.T) {
+	t.Parallel()
+
+	got, errNodeIP := resolveDatabaseNodeIP(context.Background(), nil, cluster.DatabaseBackendSQLite, nil, false)
+	if errNodeIP != nil {
+		t.Fatalf("resolveDatabaseNodeIP() error = %v", errNodeIP)
+	}
+	if got != "127.0.0.1" {
+		t.Fatalf("resolveDatabaseNodeIP() = %q, want 127.0.0.1", got)
 	}
 }

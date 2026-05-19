@@ -17,7 +17,7 @@ services:
     ports:
       - "8327:8327"
     volumes:
-      - ${CLI_PROXY_HOME_CONFIG_PATH:-./config.yaml}:/CLIProxyAPIHome/config.yaml
-      - ${CLI_PROXY_HOME_AUTH_PATH:-./auths}:/root/.cli-proxy-api
+      - ${CLI_PROXY_HOME_DATA_PATH:-./data}:/CLIProxyAPIHome/data
       - ${CLI_PROXY_HOME_LOG_PATH:-./logs}:/CLIProxyAPIHome/logs
+    command: ["./CLIProxyAPIHome", "-sqlite-path", "/CLIProxyAPIHome/data/home.db"]
     restart: unless-stopped

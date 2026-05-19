@@ -101,7 +101,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 		r.accessManager.SetProviders(access.RegisteredProviders())
 	}
 
-	if strings.TrimSpace(cfg.AuthDir) != "" {
+	if !r.clusterAutoRefreshGated() && strings.TrimSpace(cfg.AuthDir) != "" {
 		if errEnsure := os.MkdirAll(cfg.AuthDir, 0o755); errEnsure != nil {
 			return fmt.Errorf("home runtime: ensure auth dir: %w", errEnsure)
 		}

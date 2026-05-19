@@ -158,7 +158,7 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	r.cancel = cancel
 	r.startClusterUsageWriter(runCtx)
 
-	if strings.TrimSpace(r.authDir) != "" {
+	if !r.clusterAutoRefreshGated() && strings.TrimSpace(r.authDir) != "" {
 		if errEnsureAuthDir := os.MkdirAll(r.authDir, 0o755); errEnsureAuthDir != nil {
 			return fmt.Errorf("home runtime: ensure auth dir: %w", errEnsureAuthDir)
 		}

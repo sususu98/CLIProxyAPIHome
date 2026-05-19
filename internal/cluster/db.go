@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/glebarez/sqlite"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -40,6 +41,32 @@ func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
 		return nil, errPing
 	}
 
+	return db, nil
+}
+
+// OpenSQLite opens a SQLite database.
+func OpenSQLite(ctx context.Context, path string) (*gorm.DB, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = "home.db"
+	}
+	db, errOpen := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	if errOpen != nil {
+		return nil, errOpen
+	}
+	sqlDB, errDB := db.DB()
+	if errDB != nil {
+		return nil, errDB
+	}
+	if errPing := sqlDB.PingContext(ctx); errPing != nil {
+		if errClose := sqlDB.Close(); errClose != nil {
+			return nil, fmt.Errorf("ping sqlite: %w; close sql db: %v", errPing, errClose)
+		}
+		return nil, errPing
+	}
 	return db, nil
 }
 

@@ -631,6 +631,15 @@ func authAttribute(auth *coreauth.Auth, key string) string {
 
 // writeDisbandAuthFiles writes a disband auth files.
 func writeDisbandAuthFiles(auths []*coreauth.Auth, authDir string) (int, error) {
+	return writeDisbandAuthFilesWithMode(auths, authDir, true)
+}
+
+// writeDisbandAuthFilesExclusive writes disband auth files without overwriting existing files.
+func writeDisbandAuthFilesExclusive(auths []*coreauth.Auth, authDir string) (int, error) {
+	return writeDisbandAuthFilesWithMode(auths, authDir, false)
+}
+
+func writeDisbandAuthFilesWithMode(auths []*coreauth.Auth, authDir string, allowOverwrite bool) (int, error) {
 	// Normalize auth state before updating runtime indexes.
 	authDir = strings.TrimSpace(authDir)
 	if authDir == "" {
@@ -671,8 +680,14 @@ func writeDisbandAuthFiles(auths []*coreauth.Auth, authDir string) (int, error) 
 			return count, errMarshal
 		}
 		raw = append(raw, '\n')
-		if errWrite := writeDisbandFile(fullPath, raw, 0o600); errWrite != nil {
-			return count, errWrite
+		if allowOverwrite {
+			if errWrite := writeDisbandFile(fullPath, raw, 0o600); errWrite != nil {
+				return count, errWrite
+			}
+		} else {
+			if errWrite := writeExportFileExclusive(fullPath, relName, raw, 0o600); errWrite != nil {
+				return count, errWrite
+			}
 		}
 		count++
 	}

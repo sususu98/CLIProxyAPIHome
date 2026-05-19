@@ -310,11 +310,18 @@ func (r *Repository) ensureServerCertificateRecord(ctx context.Context, db *gorm
 	record := &CertificateRecord{}
 	errFirst := db.WithContext(ctx).Where("is_server = ? AND ip = ?", true, ip).First(record).Error
 	if errFirst == nil {
-		return record, nil
+		if certificateRecordSupportsNodeMTLS(record) {
+			return record, nil
+		}
+		return r.writeServerCertificateRecord(ctx, db, ca, ip, record)
 	}
 	if errFirst != nil && errFirst != gorm.ErrRecordNotFound {
 		return nil, errFirst
 	}
+	return r.writeServerCertificateRecord(ctx, db, ca, ip, nil)
+}
+
+func (r *Repository) writeServerCertificateRecord(ctx context.Context, db *gorm.DB, ca *CertificateRecord, ip string, record *CertificateRecord) (*CertificateRecord, error) {
 	caCert, errCACert := parseCertificatePEM([]byte(ca.CertificatePEM))
 	if errCACert != nil {
 		return nil, errCACert
@@ -328,6 +335,26 @@ func (r *Repository) ensureServerCertificateRecord(ctx context.Context, db *gorm
 	if errCreate != nil {
 		return nil, errCreate
 	}
+	notAfter := now.AddDate(100, 0, 0)
+	if record != nil && strings.TrimSpace(record.ID) != "" {
+		updates := map[string]any{
+			"certificate_pem": string(certPEM),
+			"private_key_pem": string(keyPEM),
+			"serial_number":   serial,
+			"not_before":      now,
+			"not_after":       notAfter,
+		}
+		if errUpdate := db.WithContext(ctx).Model(record).Updates(updates).Error; errUpdate != nil {
+			return nil, errUpdate
+		}
+		record.CertificatePEM = string(certPEM)
+		record.PrivateKeyPEM = string(keyPEM)
+		record.SerialNumber = serial
+		record.NotBefore = now
+		record.NotAfter = notAfter
+		return record, nil
+	}
+
 	id, errID := randomUUID()
 	if errID != nil {
 		return nil, errID
@@ -340,12 +367,35 @@ func (r *Repository) ensureServerCertificateRecord(ctx context.Context, db *gorm
 		IsServer:       true,
 		SerialNumber:   serial,
 		NotBefore:      now,
-		NotAfter:       now.AddDate(100, 0, 0),
+		NotAfter:       notAfter,
 	}
 	if errCreateRecord := db.WithContext(ctx).Create(record).Error; errCreateRecord != nil {
 		return nil, errCreateRecord
 	}
 	return record, nil
+}
+
+func certificateRecordSupportsNodeMTLS(record *CertificateRecord) bool {
+	if record == nil {
+		return false
+	}
+	cert, errCert := parseCertificatePEM([]byte(record.CertificatePEM))
+	if errCert != nil {
+		return false
+	}
+	return hasExtKeyUsage(cert, x509.ExtKeyUsageServerAuth) && hasExtKeyUsage(cert, x509.ExtKeyUsageClientAuth)
+}
+
+func hasExtKeyUsage(cert *x509.Certificate, usage x509.ExtKeyUsage) bool {
+	if cert == nil {
+		return false
+	}
+	for _, existingUsage := range cert.ExtKeyUsage {
+		if existingUsage == usage {
+			return true
+		}
+	}
+	return false
 }
 
 func firstCARecord(ctx context.Context, db *gorm.DB) (*CertificateRecord, error) {
@@ -368,15 +418,16 @@ func tlsConfigFromCertificateRecords(ca *CertificateRecord, server *CertificateR
 	if errPair != nil {
 		return nil, errPair
 	}
-	clientCAs := x509.NewCertPool()
-	if !clientCAs.AppendCertsFromPEM([]byte(ca.CertificatePEM)) {
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM([]byte(ca.CertificatePEM)) {
 		return nil, fmt.Errorf("cluster ca certificate is invalid")
 	}
 	return &tls.Config{
 		MinVersion:   tls.VersionTLS12,
 		Certificates: []tls.Certificate{certPair},
 		ClientAuth:   tls.VerifyClientCertIfGiven,
-		ClientCAs:    clientCAs,
+		ClientCAs:    caPool,
+		RootCAs:      caPool,
 		NextProtos:   []string{"h2", "http/1.1"},
 	}, nil
 }
@@ -425,7 +476,7 @@ func createServerCertificate(now time.Time, ca *x509.Certificate, caKey *rsa.Pri
 		NotBefore:             now,
 		NotAfter:              now.AddDate(100, 0, 0),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 	}
 	if ip := net.ParseIP(host); ip != nil {

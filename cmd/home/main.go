@@ -26,6 +26,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
+	"gorm.io/gorm"
 )
 
 var (
@@ -53,16 +54,29 @@ func run() int {
 
 	var configPath string
 	var addr string
+	var sqlitePath string
+	var importState bool
+	var exportState bool
+	var authDir string
 	var disbandCluster bool
 	flag.StringVar(&configPath, "config", "config.yaml", "Config file path")
 	flag.StringVar(&addr, "addr", "", "Override RESP listen address (host:port)")
+	flag.StringVar(&sqlitePath, "sqlite-path", "", "SQLite database path")
+	flag.BoolVar(&importState, "import", false, "Import config and auth files into database, then exit")
+	flag.BoolVar(&exportState, "export", false, "Export config and auth files from database, then exit")
+	flag.StringVar(&authDir, "auth-dir", "", "Override auth directory used by import")
 	flag.BoolVar(&disbandCluster, "disband-cluster", false, "Restore config and auth files from cluster database, then exit")
 	flag.Parse()
+	if importState && exportState {
+		log.Errorf("only one of -import or -export can be used")
+		return 1
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
+	startedAt := time.Now().UTC()
 
 	clusterCfg, clusterExists, errClusterCfg := cluster.LoadConfigOptional("")
 	if errClusterCfg != nil {
@@ -74,14 +88,13 @@ func run() int {
 			log.Infof("cluster config not found; nothing to disband")
 			return 0
 		}
-		return runDisbandCluster(runCtx, clusterCfg, configPath)
+		return runDisbandCluster(runCtx, clusterCfg, sqlitePath, configPath)
 	}
 
 	var cfg *config.Config
 	var rt *home.Runtime
 	var coordinator *cluster.Coordinator
 	var clusterRepo *cluster.Repository
-	var clusterStartedAt time.Time
 	var clusterClientAddr string
 	var clusterAdapter *cluster.RuntimeAdapter
 	var coordinatorErrCh <-chan error
@@ -89,129 +102,127 @@ func run() int {
 	var eventWatcherErrCh <-chan error
 	var clusterRESPHandler *cluster.RESPHandler
 	var clusterTLSConfig *tls.Config
-	if clusterExists {
-		startedAt := time.Now().UTC()
-		clusterStartedAt = startedAt
-		clusterDB, errClusterOpen := cluster.Open(runCtx, clusterCfg.PGSQL)
-		if errClusterOpen != nil {
-			log.Errorf("failed to open cluster database: %v", errClusterOpen)
-			return 1
+	clusterDB, dbBackend, errClusterOpen := openRuntimeDatabase(runCtx, clusterCfg, clusterExists, sqlitePath)
+	if errClusterOpen != nil {
+		log.Errorf("failed to open database: %v", errClusterOpen)
+		return 1
+	}
+	sqlDB, errSQLDB := clusterDB.DB()
+	if errSQLDB != nil {
+		log.Errorf("failed to get sql db: %v", errSQLDB)
+		return 1
+	}
+	defer func() {
+		if errCloseSQL := sqlDB.Close(); errCloseSQL != nil {
+			log.Warnf("failed to close sql db: %v", errCloseSQL)
 		}
-		sqlDB, errSQLDB := clusterDB.DB()
-		if errSQLDB != nil {
-			log.Errorf("failed to get cluster sql db: %v", errSQLDB)
-			return 1
-		}
-		defer func() {
-			if errCloseSQL := sqlDB.Close(); errCloseSQL != nil {
-				log.Warnf("failed to close cluster sql db: %v", errCloseSQL)
-			}
-		}()
-		if errMigrate := cluster.AutoMigrate(clusterDB); errMigrate != nil {
-			log.Errorf("failed to migrate cluster database: %v", errMigrate)
-			return 1
-		}
-		clusterClientAddr = strings.TrimSpace(clusterCfg.Node.ExternalIP)
-		if clusterClientAddr == "" {
-			clientAddr, errClientAddr := cluster.ClientAddr(runCtx, clusterDB)
-			if errClientAddr != nil {
-				log.Errorf("failed to get cluster client address: %v", errClientAddr)
-				return 1
-			}
-			clusterClientAddr = clientAddr
-		}
-		localCfg, errLocalConfig := loadLocalConfigForCluster(configPath)
-		if errLocalConfig != nil {
-			log.Errorf("failed to load local config %s: %v", configPath, errLocalConfig)
-			return 1
-		}
-		localAuthDir := ""
-		if localCfg != nil {
-			localAuthDir = localCfg.AuthDir
-		}
+	}()
+	if errMigrate := cluster.AutoMigrate(clusterDB); errMigrate != nil {
+		log.Errorf("failed to migrate database: %v", errMigrate)
+		return 1
+	}
+	repo := cluster.NewRepository(clusterDB)
+	clusterRepo = repo
 
-		repo := cluster.NewRepository(clusterDB)
-		clusterRepo = repo
-		tlsConfig, errCertificates := repo.EnsureClusterCertificates(runCtx, clusterClientAddr)
-		if errCertificates != nil {
-			log.Errorf("failed to init cluster certificates: %v", errCertificates)
-			return 1
-		}
-		clusterTLSConfig = tlsConfig
-		if errBootstrap := cluster.Bootstrap(runCtx, cluster.BootstrapOptions{
+	if importState {
+		stats, errImport := cluster.ImportLocalState(runCtx, cluster.ImportOptions{
 			ConfigPath: configPath,
-			AuthDir:    localAuthDir,
-			Config:     localCfg,
+			AuthDir:    authDir,
 			Repository: repo,
-			Now:        startedAt,
-		}); errBootstrap != nil {
-			log.Errorf("failed to bootstrap cluster database: %v", errBootstrap)
-			return 1
-		}
-
-		runtimeCfg, _, errRuntimeConfig := repo.LoadConfigAsRuntimeConfig(runCtx)
-		if errRuntimeConfig != nil {
-			log.Errorf("failed to load cluster runtime config: %v", errRuntimeConfig)
-			return 1
-		}
-		cfg = runtimeCfg
-		applyLogLevel(cfg)
-
-		var errRuntime error
-		rt, errRuntime = home.NewRuntime(cfg)
-		if errRuntime != nil {
-			log.Errorf("failed to init runtime: %v", errRuntime)
-			return 1
-		}
-
-		adapter := cluster.NewRuntimeAdapter(repo)
-		clusterAdapter = adapter
-		rt.SetClusterAdapter(adapter)
-		lastSeenID, errMaxEventID := repo.MaxEventID(runCtx)
-		if errMaxEventID != nil {
-			log.Errorf("failed to get cluster max event id: %v", errMaxEventID)
-			return 1
-		}
-		eventWatcher = cluster.NewEventWatcherFrom(repo, clusterCfg.Node.EventPollInterval, lastSeenID, func(eventCtx context.Context, event cluster.ClusterEventRecord) error {
-			if strings.EqualFold(strings.TrimSpace(event.Scope), "config") {
-				nextConfig, payload, errConfig := repo.LoadConfigAsRuntimeConfig(eventCtx)
-				if errConfig != nil {
-					return errConfig
-				}
-				if reflect.DeepEqual(rt.Config(), nextConfig) {
-					return nil
-				}
-				if errApply := rt.ApplyConfigFromCluster(eventCtx, nextConfig); errApply != nil {
-					return errApply
-				}
-				rt.PublishConfigYAML(payload)
-				return nil
-			}
-			if errApplyEvent := adapter.ApplyEvent(eventCtx, event); errApplyEvent != nil {
-				return errApplyEvent
-			}
-			return rt.ReloadAuths(eventCtx)
 		})
-	} else {
-		loadedConfig, errLoad := config.LoadConfigOptional(configPath, false)
-		if errLoad != nil {
-			log.Errorf("failed to load config %s: %v", configPath, errLoad)
+		if errImport != nil {
+			log.Errorf("failed to import local state: %v", errImport)
 			return 1
 		}
-		cfg = loadedConfig
-		applyLogLevel(cfg)
+		log.Infof(
+			"database import completed created=%d updated=%d unchanged=%d restored=%d overwritten=%d skipped=%d",
+			stats.Created,
+			stats.Updated,
+			stats.Unchanged,
+			stats.Restored,
+			stats.Overwritten,
+			stats.Skipped,
+		)
+		return 0
+	}
+	if exportState {
+		stats, errExport := cluster.ExportLocalState(runCtx, cluster.ExportOptions{Repository: repo})
+		if errExport != nil {
+			log.Errorf("failed to export local state: %v", errExport)
+			return 1
+		}
+		log.Infof("database export completed config_bytes=%d auth_files=%d", stats.ConfigBytes, stats.AuthFiles)
+		return 0
+	}
 
-		var errRuntime error
-		rt, errRuntime = home.NewRuntime(cfg)
-		if errRuntime != nil {
-			log.Errorf("failed to init runtime: %v", errRuntime)
-			return 1
-		}
+	snapshot, errSnapshot := repo.LoadConfigSnapshot(runCtx)
+	if errSnapshot != nil {
+		log.Errorf("failed to load database config snapshot: %v", errSnapshot)
+		return 1
+	}
+	if len(snapshot) == 0 {
+		log.Errorf("database config is empty; run with -import first")
+		return 1
+	}
+	runtimeCfg, _, errRuntimeConfig := repo.LoadConfigAsRuntimeConfig(runCtx)
+	if errRuntimeConfig != nil {
+		log.Errorf("failed to load database runtime config: %v", errRuntimeConfig)
+		return 1
+	}
+	cfg = runtimeCfg
+	applyLogLevel(cfg)
+
+	var errRuntime error
+	rt, errRuntime = home.NewRuntime(cfg)
+	if errRuntime != nil {
+		log.Errorf("failed to init runtime: %v", errRuntime)
+		return 1
 	}
 	if rt == nil {
 		log.Errorf("failed to init runtime")
 		return 1
 	}
+
+	clusterClientAddr, errClusterClientAddr := resolveDatabaseNodeIP(runCtx, clusterDB, dbBackend, clusterCfg, clusterExists)
+	if errClusterClientAddr != nil {
+		log.Errorf("failed to resolve database node ip: %v", errClusterClientAddr)
+		return 1
+	}
+	tlsConfig, errCertificates := repo.EnsureClusterCertificates(runCtx, clusterClientAddr)
+	if errCertificates != nil {
+		log.Errorf("failed to init runtime certificates: %v", errCertificates)
+		return 1
+	}
+	clusterTLSConfig = tlsConfig
+	adapter := cluster.NewRuntimeAdapter(repo)
+	clusterAdapter = adapter
+	rt.SetClusterAdapter(adapter)
+	nodeCfg := resolveDatabaseNodeConfig(clusterCfg, clusterExists)
+	lastSeenID, errMaxEventID := repo.MaxEventID(runCtx)
+	if errMaxEventID != nil {
+		log.Errorf("failed to get database max event id: %v", errMaxEventID)
+		return 1
+	}
+	eventWatcher = cluster.NewEventWatcherFrom(repo, nodeCfg.EventPollInterval, lastSeenID, func(eventCtx context.Context, event cluster.ClusterEventRecord) error {
+		if strings.EqualFold(strings.TrimSpace(event.Scope), "config") {
+			nextConfig, payload, errConfig := repo.LoadConfigAsRuntimeConfig(eventCtx)
+			if errConfig != nil {
+				return errConfig
+			}
+			if reflect.DeepEqual(rt.Config(), nextConfig) {
+				return nil
+			}
+			if errApply := rt.ApplyConfigFromCluster(eventCtx, nextConfig); errApply != nil {
+				return errApply
+			}
+			rt.PublishConfigYAML(payload)
+			return nil
+		}
+		if errApplyEvent := adapter.ApplyEvent(eventCtx, event); errApplyEvent != nil {
+			return errApplyEvent
+		}
+		return rt.ReloadAuths(eventCtx)
+	})
 	defer rt.Stop()
 
 	listenAddr, listenPort, errListenAddr := resolveListenAddress(addr, cfg, clusterCfg, clusterExists)
@@ -229,17 +240,21 @@ func run() int {
 			return 1
 		}
 	}
+	if clusterAdvertisedPort <= 0 {
+		log.Errorf("failed to resolve database node port: listen port must be greater than 0")
+		return 1
+	}
 
 	if clusterRepo != nil {
 		coordinator = cluster.NewCoordinator(clusterRepo, cluster.NodeIdentity{
 			IP:        clusterClientAddr,
 			Port:      clusterAdvertisedPort,
-			StartedAt: clusterStartedAt,
+			StartedAt: startedAt,
 		}, cluster.CoordinatorOptions{
-			HeartbeatInterval: clusterCfg.Node.HeartbeatInterval,
-			HeartbeatTimeout:  clusterCfg.Node.HeartbeatTimeout,
+			HeartbeatInterval: nodeCfg.HeartbeatInterval,
+			HeartbeatTimeout:  nodeCfg.HeartbeatTimeout,
 		})
-		refreshController := cluster.NewRefreshController(coordinator, rt, clusterRepo)
+		refreshController := cluster.NewRefreshController(coordinator, rt, clusterRepo, clusterTLSConfig)
 		coordinator.SetOnMasterChanged(refreshController.OnMasterChanged)
 		rt.SetClusterRefreshHandler(refreshController.RefreshNow)
 		clusterRESPHandler = cluster.NewRESPHandler(coordinator, refreshController, clusterRepo)
@@ -263,7 +278,7 @@ func run() int {
 	}
 	mgmtOpts := make([]managementhttp.RouteOption, 0, 1)
 	if clusterRepo != nil {
-		mgmtOpts = append(mgmtOpts, managementhttp.WithClusterManagement(managementhttp.ClusterManagementOption{
+		mgmtOpts = append(mgmtOpts, managementhttp.WithDatabaseManagement(managementhttp.DatabaseManagementOption{
 			Enabled:    true,
 			Repository: clusterRepo,
 			Runtime:    rt,
@@ -432,6 +447,75 @@ func run() int {
 	}
 }
 
+// resolveSQLitePath resolves the SQLite database path from flag and config values.
+func resolveSQLitePath(flagPath string, configPath string) string {
+	flagPath = strings.TrimSpace(flagPath)
+	if flagPath != "" {
+		return flagPath
+	}
+	configPath = strings.TrimSpace(configPath)
+	if configPath != "" {
+		return configPath
+	}
+	return "home.db"
+}
+
+// openRuntimeDatabase opens the database used by the DB-backed runtime.
+func openRuntimeDatabase(ctx context.Context, clusterCfg *cluster.Config, clusterExists bool, sqlitePath string) (*gorm.DB, cluster.DatabaseBackend, error) {
+	if clusterExists {
+		if clusterCfg == nil {
+			return nil, "", fmt.Errorf("cluster config is nil")
+		}
+		switch clusterCfg.DatabaseBackend() {
+		case cluster.DatabaseBackendSQLite:
+			db, errOpenSQLite := cluster.OpenSQLite(ctx, resolveSQLitePath(sqlitePath, clusterCfg.SQLite.Path))
+			return db, cluster.DatabaseBackendSQLite, errOpenSQLite
+		case cluster.DatabaseBackendPostgres:
+			db, errOpenPostgres := cluster.Open(ctx, clusterCfg.PGSQL)
+			return db, cluster.DatabaseBackendPostgres, errOpenPostgres
+		default:
+			return nil, "", fmt.Errorf("unsupported database backend %q", clusterCfg.DatabaseBackend())
+		}
+	}
+	db, errOpenSQLite := cluster.OpenSQLite(ctx, resolveSQLitePath(sqlitePath, ""))
+	return db, cluster.DatabaseBackendSQLite, errOpenSQLite
+}
+
+// resolveDatabaseNodeConfig resolves coordinator and watcher timing settings.
+func resolveDatabaseNodeConfig(clusterCfg *cluster.Config, clusterExists bool) cluster.NodeConfig {
+	nodeCfg := cluster.NodeConfig{}
+	if clusterExists && clusterCfg != nil {
+		nodeCfg = clusterCfg.Node
+	}
+	if nodeCfg.HeartbeatInterval <= 0 {
+		nodeCfg.HeartbeatInterval = 5 * time.Second
+	}
+	if nodeCfg.HeartbeatTimeout <= 0 {
+		nodeCfg.HeartbeatTimeout = 20 * time.Second
+	}
+	if nodeCfg.EventPollInterval <= 0 {
+		nodeCfg.EventPollInterval = 3 * time.Second
+	}
+	return nodeCfg
+}
+
+// resolveDatabaseNodeIP resolves the node identity IP for the selected database backend.
+func resolveDatabaseNodeIP(ctx context.Context, db *gorm.DB, backend cluster.DatabaseBackend, clusterCfg *cluster.Config, clusterExists bool) (string, error) {
+	if clusterExists && clusterCfg != nil {
+		externalIP := strings.TrimSpace(clusterCfg.Node.ExternalIP)
+		if externalIP != "" {
+			return externalIP, nil
+		}
+	}
+	if clusterExists && backend == cluster.DatabaseBackendSQLite {
+		return "", fmt.Errorf("node.external-ip is required when cluster uses sqlite backend")
+	}
+	if backend == cluster.DatabaseBackendPostgres {
+		return cluster.ClientAddr(ctx, db)
+	}
+	return "127.0.0.1", nil
+}
+
 // resolveListenAddress resolves a listen address.
 func resolveListenAddress(addr string, cfg *config.Config, clusterCfg *cluster.Config, clusterEnabled bool) (string, int, error) {
 	// Keep validation before state changes so failures leave existing data intact.
@@ -457,10 +541,10 @@ func resolveListenAddress(addr string, cfg *config.Config, clusterCfg *cluster.C
 	}
 
 	port, errPort := listenPortFromAddress(addr)
+	if errPort != nil {
+		return "", 0, errPort
+	}
 	if clusterEnabled {
-		if errPort != nil {
-			return "", 0, errPort
-		}
 		if port <= 0 {
 			return "", 0, fmt.Errorf("cluster listen port must be greater than 0")
 		}
@@ -512,13 +596,13 @@ func collectServeError(ch <-chan error, timeout time.Duration) error {
 }
 
 // runDisbandCluster runs a disband cluster.
-func runDisbandCluster(ctx context.Context, clusterCfg *cluster.Config, configPath string) int {
+func runDisbandCluster(ctx context.Context, clusterCfg *cluster.Config, sqlitePath string, configPath string) int {
 	// Keep validation before state changes so failures leave existing data intact.
 	if clusterCfg == nil {
 		log.Errorf("failed to disband cluster: cluster config is nil")
 		return 1
 	}
-	clusterDB, errClusterOpen := cluster.Open(ctx, clusterCfg.PGSQL)
+	clusterDB, _, errClusterOpen := openRuntimeDatabase(ctx, clusterCfg, true, sqlitePath)
 	if errClusterOpen != nil {
 		log.Errorf("failed to open cluster database: %v", errClusterOpen)
 		return 1
@@ -605,23 +689,4 @@ func applyLogLevel(cfg *config.Config) {
 	if nextLevel := log.GetLevel(); nextLevel != currentLevel {
 		log.Infof("log level changed from %s to %s (debug=%t)", currentLevel, nextLevel, debugEnabled)
 	}
-}
-
-// loadLocalConfigForCluster loads a local config for cluster.
-func loadLocalConfigForCluster(configPath string) (*config.Config, error) {
-	configPath = strings.TrimSpace(configPath)
-	if configPath == "" {
-		configPath = "config.yaml"
-	}
-	info, errStat := os.Stat(configPath)
-	if os.IsNotExist(errStat) {
-		return nil, nil
-	}
-	if errStat != nil {
-		return nil, errStat
-	}
-	if info.IsDir() {
-		return nil, fmt.Errorf("config path is a directory")
-	}
-	return config.LoadConfigOptional(configPath, false)
 }

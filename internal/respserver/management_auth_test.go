@@ -1,9 +1,92 @@
 package respserver
 
 import (
+	"bufio"
+	"context"
+	"fmt"
 	"net"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 )
+
+const respPipeDeadline = 2 * time.Second
+
+// TestRESPAuthCommandDisabled verifies RESP AUTH is no longer accepted.
+func TestRESPAuthCommandDisabled(t *testing.T) {
+	server, client := net.Pipe()
+	setRESPPipeDeadline(t, server, client)
+	defer func() {
+		if errClose := client.Close(); errClose != nil {
+			t.Fatalf("client close error: %v", errClose)
+		}
+	}()
+
+	srv := New("", nil)
+	go srv.HandleConn(context.Background(), server)
+
+	writeRESPCommand(t, client, "AUTH", "secret")
+	line := readRESPLineFromConn(t, client)
+	if line != "-ERR RESP AUTH disabled; use mTLS" {
+		t.Fatalf("AUTH response = %q, want disabled error", line)
+	}
+}
+
+// TestUnauthenticatedClusterCommandRequiresMTLS verifies CLUSTER commands do not reach the handler without mTLS.
+func TestUnauthenticatedClusterCommandRequiresMTLS(t *testing.T) {
+	server, client := net.Pipe()
+	setRESPPipeDeadline(t, server, client)
+	defer func() {
+		if errClose := client.Close(); errClose != nil {
+			t.Fatalf("client close error: %v", errClose)
+		}
+	}()
+
+	srv := New("", nil)
+	srv.SetClusterHandler(cluster.NewRESPHandler(nil, nil, nil))
+	go srv.HandleConn(context.Background(), server)
+
+	writeRESPCommand(t, client, "CLUSTER", "PING", "secret")
+	line := readRESPLineFromConn(t, client)
+	if line != "-NOAUTH Authentication required." {
+		t.Fatalf("CLUSTER PING response = %q, want NOAUTH", line)
+	}
+}
+
+func setRESPPipeDeadline(t *testing.T, conns ...net.Conn) {
+	t.Helper()
+	deadline := time.Now().Add(respPipeDeadline)
+	for _, conn := range conns {
+		if errSetDeadline := conn.SetDeadline(deadline); errSetDeadline != nil {
+			t.Fatalf("set pipe deadline error: %v", errSetDeadline)
+		}
+	}
+}
+
+func writeRESPCommand(t *testing.T, conn net.Conn, args ...string) {
+	t.Helper()
+	if _, errWrite := fmt.Fprintf(conn, "*%d\r\n", len(args)); errWrite != nil {
+		t.Fatalf("write array header error: %v", errWrite)
+	}
+	for _, arg := range args {
+		if _, errWrite := fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(arg), arg); errWrite != nil {
+			t.Fatalf("write arg error: %v", errWrite)
+		}
+	}
+}
+
+func readRESPLineFromConn(t *testing.T, conn net.Conn) string {
+	t.Helper()
+	line, errRead := bufio.NewReader(conn).ReadString('\n')
+	if errRead != nil {
+		t.Fatalf("read response line error: %v", errRead)
+	}
+	line = strings.TrimSuffix(line, "\n")
+	line = strings.TrimSuffix(line, "\r")
+	return line
+}
 
 // TestNormalizeHostIP verifies test normalize host ip behavior.
 func TestNormalizeHostIP(t *testing.T) {

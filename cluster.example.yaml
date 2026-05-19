@@ -1,5 +1,6 @@
 # CLIProxyAPIHome cluster mode configuration.
-# This file enables PGSQL-backed cluster mode when copied to cluster.yaml.
+# Copy this file to cluster.yaml to enable cluster behavior.
+# PostgreSQL is recommended for multi-node deployments.
 pgsql:
   host: "127.0.0.1"
   # When running PostgreSQL in docker compose, use the service/container name instead of 127.0.0.1.
@@ -9,6 +10,11 @@ pgsql:
   password: "secret"
   database: "cliproxy_home"
   sslmode: "disable"
+
+# SQLite can also be used as the cluster database backend.
+# To use SQLite, remove or comment the pgsql section, enable this section, and set node.external-ip below.
+# sqlite:
+#   path: "home.db"
 
 node:
   # Optional public address advertised to other Home nodes and CPA clients.

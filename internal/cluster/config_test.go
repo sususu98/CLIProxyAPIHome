@@ -42,6 +42,38 @@ node:
 	}
 }
 
+func TestLoadConfigOptional_RejectsBothPGSQLAndSQLite(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "cluster.yaml")
+	content := strings.TrimSpace(`
+pgsql:
+  host: "127.0.0.1"
+  port: 5432
+  user: "cliproxy"
+  password: "secret"
+  database: "cliproxy_home"
+sqlite:
+  path: "home.db"
+node:
+  port: 8327
+`) + "\n"
+	if errWrite := os.WriteFile(configPath, []byte(content), 0o600); errWrite != nil {
+		t.Fatalf("write config: %v", errWrite)
+	}
+
+	_, exists, errLoad := LoadConfigOptional(configPath)
+	if errLoad == nil {
+		t.Fatalf("expected validation error")
+	}
+	if !exists {
+		t.Fatalf("expected config to exist")
+	}
+	if !strings.Contains(errLoad.Error(), "exactly one database backend") {
+		t.Fatalf("unexpected validation error: %v", errLoad)
+	}
+}
+
 func TestConfigValidateRejectsNegativeExternalPort(t *testing.T) {
 	t.Parallel()
 

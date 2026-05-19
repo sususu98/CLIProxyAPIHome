@@ -12,7 +12,7 @@ import (
 
 type UsageRecord struct {
 	ID                  uint      `gorm:"column:id;primaryKey;autoIncrement"`
-	Timestamp           time.Time `gorm:"column:timestamp;type:timestamptz;not null;index:idx_usage_timestamp"`
+	Timestamp           time.Time `gorm:"column:timestamp;not null;index:idx_usage_timestamp"`
 	LatencyMS           int64     `gorm:"column:latency_ms;not null;default:0"`
 	Source              string    `gorm:"column:source;index:idx_usage_source"`
 	AuthIndex           string    `gorm:"column:auth_index;index:idx_usage_auth_index"`
@@ -33,10 +33,10 @@ type UsageRecord struct {
 	AuthType            string    `gorm:"column:auth_type"`
 	APIKey              string    `gorm:"column:api_key"`
 	RequestID           string    `gorm:"column:request_id;index:idx_usage_request_id"`
-	TokensJSON          JSONB     `gorm:"column:tokens;type:jsonb"`
-	FailJSON            JSONB     `gorm:"column:fail;type:jsonb"`
-	PayloadJSON         JSONB     `gorm:"column:payload;type:jsonb;not null"`
-	CreatedAt           time.Time `gorm:"column:created_at;type:timestamptz;not null"`
+	TokensJSON          JSONB     `gorm:"column:tokens"`
+	FailJSON            JSONB     `gorm:"column:fail"`
+	PayloadJSON         JSONB     `gorm:"column:payload;not null"`
+	CreatedAt           time.Time `gorm:"column:created_at;not null"`
 }
 
 // TableName returns the database table name.

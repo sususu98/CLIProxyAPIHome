@@ -1,12 +1,14 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -18,6 +20,27 @@ import (
 
 type Repository struct {
 	db *gorm.DB
+}
+
+type UpsertResult string
+
+const (
+	UpsertResultCreated   UpsertResult = "created"
+	UpsertResultUpdated   UpsertResult = "updated"
+	UpsertResultUnchanged UpsertResult = "unchanged"
+	UpsertResultRestored  UpsertResult = "restored"
+)
+
+type APIKeyUpsertStats struct {
+	Created   int
+	Unchanged int
+	Restored  int
+	Removed   int
+}
+
+// Changed reports whether api key rows were mutated.
+func (s APIKeyUpsertStats) Changed() bool {
+	return s.Created != 0 || s.Restored != 0 || s.Removed != 0
 }
 
 // NewRepository creates a new repository.
@@ -105,20 +128,28 @@ func RecordToAuth(record *AuthRecord) (*coreauth.Auth, error) {
 
 // UpsertAuth inserts or updates an auth.
 func (r *Repository) UpsertAuth(ctx context.Context, auth *coreauth.Auth, op string) (*AuthRecord, error) {
+	record, _, errUpsertAuth := r.UpsertAuthWithResult(ctx, auth, op)
+	return record, errUpsertAuth
+}
+
+// UpsertAuthWithResult inserts or updates an auth and reports the mutation result.
+func (r *Repository) UpsertAuthWithResult(ctx context.Context, auth *coreauth.Auth, op string) (*AuthRecord, UpsertResult, error) {
 	// Normalize auth state before updating runtime indexes.
 	db, errDB := r.database()
 	if errDB != nil {
-		return nil, errDB
+		return nil, "", errDB
 	}
 	record, errRecord := AuthToRecord(auth)
 	if errRecord != nil {
-		return nil, errRecord
+		return nil, "", errRecord
 	}
 	if strings.TrimSpace(op) == "" {
 		op = "upsert"
 	}
 
 	ctx = contextOrBackground(ctx)
+	result := UpsertResultUnchanged
+	out := record
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		existing := AuthRecord{}
 		errFirst := tx.Unscoped().Where("uuid = ?", record.UUID).First(&existing).Error
@@ -128,22 +159,39 @@ func (r *Repository) UpsertAuth(ctx context.Context, auth *coreauth.Auth, op str
 			if errCreate := tx.Create(record).Error; errCreate != nil {
 				return errCreate
 			}
+			result = UpsertResultCreated
+			out = record
 		case errFirst != nil:
 			return errFirst
 		default:
+			sameJSON, errJSONEqual := semanticJSONEqual([]byte(existing.AuthJSON), []byte(record.AuthJSON))
+			if errJSONEqual != nil {
+				return errJSONEqual
+			}
+			if !existing.DeletedAt.Valid && sameJSON {
+				result = UpsertResultUnchanged
+				out = &existing
+				return nil
+			}
 			record.Version = existing.Version + 1
 			record.DeletedAt = gorm.DeletedAt{}
 			if errUpdate := tx.Unscoped().Select("*").Where("uuid = ?", record.UUID).Updates(record).Error; errUpdate != nil {
 				return errUpdate
 			}
+			if existing.DeletedAt.Valid {
+				result = UpsertResultRestored
+			} else {
+				result = UpsertResultUpdated
+			}
+			out = record
 		}
 		return appendEvent(tx, "auth", op, record.UUID, record.Version)
 	})
 	if errTransaction != nil {
-		return nil, errTransaction
+		return nil, "", errTransaction
 	}
 
-	return record, nil
+	return out, result, nil
 }
 
 // GetAuth returns an auth.
@@ -423,17 +471,51 @@ func normalizeAPIKeysFromAny(value any) []string {
 
 // replaceAPIKeysTx replaces the active API keys in the api_key table using soft deletes.
 func replaceAPIKeysTx(ctx context.Context, tx *gorm.DB, keys []string) error {
+	_, errReplace := replaceAPIKeysTxWithStats(ctx, tx, keys)
+	return errReplace
+}
+
+// UpsertAPIKeys inserts or restores API keys without deleting keys missing from the input.
+func (r *Repository) UpsertAPIKeys(ctx context.Context, keys []string) (APIKeyUpsertStats, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return APIKeyUpsertStats{}, errDB
+	}
+
+	ctx = contextOrBackground(ctx)
+	var stats APIKeyUpsertStats
+	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var errUpsertAPIKeys error
+		stats, errUpsertAPIKeys = upsertAPIKeysTxWithStats(ctx, tx, keys)
+		if errUpsertAPIKeys != nil {
+			return errUpsertAPIKeys
+		}
+		deleteResult := tx.Delete(&ConfigRecord{}, "key = ?", configAPIKeysRootKey)
+		if deleteResult.Error != nil {
+			return deleteResult.Error
+		}
+		if !stats.Changed() && deleteResult.RowsAffected == 0 {
+			return nil
+		}
+		return appendEvent(tx, "config", "upsert", configAPIKeysRootKey, time.Now().UTC().UnixNano())
+	})
+	return stats, errTransaction
+}
+
+// replaceAPIKeysTxWithStats replaces the active API keys in the api_key table using soft deletes.
+func replaceAPIKeysTxWithStats(ctx context.Context, tx *gorm.DB, keys []string) (APIKeyUpsertStats, error) {
 	// Normalize source data before building the derived payload.
 	if tx == nil {
-		return fmt.Errorf("database connection is nil")
+		return APIKeyUpsertStats{}, fmt.Errorf("database connection is nil")
 	}
 	keys = normalizeAPIKeys(keys)
 
 	var existing []APIKeyRecord
 	if errFind := tx.WithContext(contextOrBackground(ctx)).Unscoped().Order("id").Find(&existing).Error; errFind != nil {
-		return errFind
+		return APIKeyUpsertStats{}, errFind
 	}
 
+	stats := APIKeyUpsertStats{}
 	existingByKey := make(map[string]*APIKeyRecord, len(existing))
 	for i := range existing {
 		record := &existing[i]
@@ -453,14 +535,18 @@ func replaceAPIKeysTx(ctx context.Context, tx *gorm.DB, keys []string) error {
 					Model(&APIKeyRecord{}).
 					Where("id = ?", record.ID).
 					Updates(map[string]any{"deleted_at": nil}).Error; errRestore != nil {
-					return errRestore
+					return APIKeyUpsertStats{}, errRestore
 				}
+				stats.Restored++
+			} else {
+				stats.Unchanged++
 			}
 			continue
 		}
 		if errCreate := tx.WithContext(contextOrBackground(ctx)).Create(&APIKeyRecord{APIKey: key}).Error; errCreate != nil {
-			return errCreate
+			return APIKeyUpsertStats{}, errCreate
 		}
+		stats.Created++
 	}
 
 	for _, record := range existing {
@@ -475,45 +561,99 @@ func replaceAPIKeysTx(ctx context.Context, tx *gorm.DB, keys []string) error {
 			continue
 		}
 		if errDelete := tx.WithContext(contextOrBackground(ctx)).Delete(&APIKeyRecord{}, "id = ?", record.ID).Error; errDelete != nil {
-			return errDelete
+			return APIKeyUpsertStats{}, errDelete
+		}
+		stats.Removed++
+	}
+	return stats, nil
+}
+
+// upsertAPIKeysTxWithStats inserts or restores API keys without deleting missing keys.
+func upsertAPIKeysTxWithStats(ctx context.Context, tx *gorm.DB, keys []string) (APIKeyUpsertStats, error) {
+	// Normalize source data before building the derived payload.
+	if tx == nil {
+		return APIKeyUpsertStats{}, fmt.Errorf("database connection is nil")
+	}
+	keys = normalizeAPIKeys(keys)
+	stats := APIKeyUpsertStats{}
+	for _, key := range keys {
+		record := APIKeyRecord{}
+		errFirst := tx.WithContext(contextOrBackground(ctx)).Unscoped().Where("api_key = ?", key).First(&record).Error
+		switch {
+		case errors.Is(errFirst, gorm.ErrRecordNotFound):
+			if errCreate := tx.WithContext(contextOrBackground(ctx)).Create(&APIKeyRecord{APIKey: key}).Error; errCreate != nil {
+				return APIKeyUpsertStats{}, errCreate
+			}
+			stats.Created++
+		case errFirst != nil:
+			return APIKeyUpsertStats{}, errFirst
+		case record.DeletedAt.Valid:
+			if errRestore := tx.WithContext(contextOrBackground(ctx)).Unscoped().
+				Model(&APIKeyRecord{}).
+				Where("id = ?", record.ID).
+				Updates(map[string]any{"deleted_at": nil}).Error; errRestore != nil {
+				return APIKeyUpsertStats{}, errRestore
+			}
+			stats.Restored++
+		default:
+			stats.Unchanged++
 		}
 	}
-	return nil
+	return stats, nil
 }
 
 // UpsertConfigValue inserts or updates a config value.
 func (r *Repository) UpsertConfigValue(ctx context.Context, key string, value any) error {
+	_, errUpsertConfigValue := r.UpsertConfigValueWithResult(ctx, key, value)
+	return errUpsertConfigValue
+}
+
+// UpsertConfigValueWithResult inserts or updates a config value and reports the mutation result.
+func (r *Repository) UpsertConfigValueWithResult(ctx context.Context, key string, value any) (UpsertResult, error) {
 	// Normalize source data before building the derived payload.
 	db, errDB := r.database()
 	if errDB != nil {
-		return errDB
+		return "", errDB
 	}
 	key = strings.TrimSpace(key)
 	if key == "" {
-		return fmt.Errorf("config key is required")
+		return "", fmt.Errorf("config key is required")
 	}
 
 	if key == configAPIKeysRootKey {
 		ctx = contextOrBackground(ctx)
 		apiKeys := normalizeAPIKeysFromAny(value)
-		return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			if errReplace := replaceAPIKeysTx(ctx, tx, apiKeys); errReplace != nil {
+		result := UpsertResultUnchanged
+		errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			stats, errReplace := replaceAPIKeysTxWithStats(ctx, tx, apiKeys)
+			if errReplace != nil {
 				return errReplace
 			}
-			if errDelete := tx.Delete(&ConfigRecord{}, "key = ?", configAPIKeysRootKey).Error; errDelete != nil {
-				return errDelete
+			deleteResult := tx.Delete(&ConfigRecord{}, "key = ?", configAPIKeysRootKey)
+			if deleteResult.Error != nil {
+				return deleteResult.Error
+			}
+			if !stats.Changed() && deleteResult.RowsAffected == 0 {
+				result = UpsertResultUnchanged
+				return nil
+			}
+			result = apiKeyStatsResult(stats)
+			if result == UpsertResultUnchanged {
+				result = UpsertResultUpdated
 			}
 			return appendEvent(tx, "config", "upsert", configAPIKeysRootKey, time.Now().UTC().UnixNano())
 		})
+		return result, errTransaction
 	}
 
 	rawJSON, errMarshal := json.Marshal(value)
 	if errMarshal != nil {
-		return errMarshal
+		return "", errMarshal
 	}
 
 	ctx = contextOrBackground(ctx)
-	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	result := UpsertResultUnchanged
+	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		record := ConfigRecord{}
 		errFirst := tx.Where("key = ?", key).First(&record).Error
 		switch {
@@ -522,17 +662,58 @@ func (r *Repository) UpsertConfigValue(ctx context.Context, key string, value an
 			if errCreate := tx.Create(&record).Error; errCreate != nil {
 				return errCreate
 			}
+			result = UpsertResultCreated
 		case errFirst != nil:
 			return errFirst
 		default:
+			sameJSON, errJSONEqual := semanticJSONEqual([]byte(record.Value), rawJSON)
+			if errJSONEqual != nil {
+				return errJSONEqual
+			}
+			if sameJSON {
+				result = UpsertResultUnchanged
+				return nil
+			}
 			record.Value = JSONB(rawJSON)
 			record.Version++
 			if errSave := tx.Save(&record).Error; errSave != nil {
 				return errSave
 			}
+			result = UpsertResultUpdated
 		}
 		return appendEvent(tx, "config", "upsert", key, record.Version)
 	})
+	return result, errTransaction
+}
+
+// apiKeyStatsResult maps API key mutation stats to an upsert result.
+func apiKeyStatsResult(stats APIKeyUpsertStats) UpsertResult {
+	switch {
+	case stats.Created != 0:
+		return UpsertResultCreated
+	case stats.Restored != 0:
+		return UpsertResultRestored
+	case stats.Removed != 0:
+		return UpsertResultUpdated
+	default:
+		return UpsertResultUnchanged
+	}
+}
+
+// semanticJSONEqual compares JSON values after decoding so storage formatting is ignored.
+func semanticJSONEqual(left []byte, right []byte) (bool, error) {
+	if bytes.Equal(left, right) {
+		return true, nil
+	}
+	var leftValue any
+	if errUnmarshalLeft := json.Unmarshal(left, &leftValue); errUnmarshalLeft != nil {
+		return false, fmt.Errorf("unmarshal left json: %w", errUnmarshalLeft)
+	}
+	var rightValue any
+	if errUnmarshalRight := json.Unmarshal(right, &rightValue); errUnmarshalRight != nil {
+		return false, fmt.Errorf("unmarshal right json: %w", errUnmarshalRight)
+	}
+	return reflect.DeepEqual(leftValue, rightValue), nil
 }
 
 // ReplaceConfigSnapshot handles a replace config snapshot.

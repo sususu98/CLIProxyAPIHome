@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +23,6 @@ type Server struct {
 	addr     string
 	runtime  *home.Runtime
 	registry *dispatch.Registry
-	auth     *managementAuthenticator
 	cluster  *cluster.RESPHandler
 }
 
@@ -35,7 +33,6 @@ const (
 
 const (
 	respAuthSourceNone = "none"
-	respAuthSourceAuth = "auth"
 	respAuthSourceMTLS = "mtls"
 )
 
@@ -45,7 +42,6 @@ func New(addr string, runtime *home.Runtime) *Server {
 		addr:     strings.TrimSpace(addr),
 		runtime:  runtime,
 		registry: buildRegistry(),
-		auth:     newManagementAuthenticator(runtime),
 	}
 }
 
@@ -135,23 +131,16 @@ func (s *Server) writeClusterSubscriptionUpdate(ctx context.Context, writer *saf
 	return writer.WriteDispatchReply(subscriptionMessage(clusterSubscriptionChannel, payload))
 }
 
-func (s *Server) writeNoAuth(writer *safeWriter, clientIP string, localClient bool) {
+func (s *Server) writeNoAuth(writer *safeWriter) {
 	if writer == nil {
 		return
-	}
-	if s != nil && s.auth != nil {
-		_, statusCode, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, "")
-		if statusCode == http.StatusForbidden && strings.HasPrefix(errMsg, "IP banned due to too many failed attempts") {
-			_ = writer.WriteRedisError("ERR " + errMsg)
-			return
-		}
 	}
 	_ = writer.WriteRedisError("NOAUTH Authentication required.")
 }
 
 func isRESPAuthenticated(source string) bool {
 	source = strings.TrimSpace(source)
-	return source == respAuthSourceAuth || source == respAuthSourceMTLS
+	return source == respAuthSourceMTLS
 }
 
 func isMTLSAuthenticated(conn net.Conn) bool {
@@ -244,7 +233,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 		ctx = context.Background()
 	}
 
-	clientIP, localClient := resolveRemoteIP(conn.RemoteAddr())
+	clientIP, _ := resolveRemoteIP(conn.RemoteAddr())
 	if s.runtime != nil {
 		if cfg := s.runtime.Config(); cfg != nil && !isClientHostAllowed(clientIP, cfg.AllowHost) {
 			log.Warnf("resp connection rejected from disallowed host %s", clientIP)
@@ -321,12 +310,12 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 		}
 
 		if cmd == clusterCommand {
-			if s.cluster == nil {
-				_ = writer.WriteRedisError("ERR cluster disabled")
+			if !isRESPAuthenticated(authSource) {
+				s.writeNoAuth(writer)
 				continue
 			}
-			if cluster.IsClientClusterCommand(args) && !isRESPAuthenticated(authSource) {
-				s.writeNoAuth(writer, clientIP, localClient)
+			if s.cluster == nil {
+				_ = writer.WriteRedisError("ERR cluster disabled")
 				continue
 			}
 			payload, errCluster := s.cluster.Handle(ctx, args, clientIP)
@@ -339,7 +328,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 		}
 
 		if cmd != "AUTH" && !isRESPAuthenticated(authSource) {
-			s.writeNoAuth(writer, clientIP, localClient)
+			s.writeNoAuth(writer)
 			continue
 		}
 
@@ -370,33 +359,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 		}
 
 		if cmd == "AUTH" {
-			if authSource == respAuthSourceMTLS {
-				_ = writer.WriteRedisSimpleString("OK")
-				continue
-			}
-			password, ok := parseAuthPassword(args)
-			if !ok {
-				if s.auth != nil {
-					_, statusCode, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, "")
-					if statusCode == http.StatusForbidden && strings.HasPrefix(errMsg, "IP banned due to too many failed attempts") {
-						_ = writer.WriteRedisError("ERR " + errMsg)
-						continue
-					}
-				}
-				_ = writer.WriteRedisError("ERR wrong number of arguments for 'auth' command")
-				continue
-			}
-			if s.auth == nil {
-				_ = writer.WriteRedisError("ERR remote management disabled")
-				continue
-			}
-			allowed, _, errMsg := s.auth.AuthenticateManagementKey(clientIP, localClient, password)
-			if !allowed {
-				_ = writer.WriteRedisError("ERR " + errMsg)
-				continue
-			}
-			authSource = respAuthSourceAuth
-			_ = writer.WriteRedisSimpleString("OK")
+			_ = writer.WriteRedisError("ERR RESP AUTH disabled; use mTLS")
 			continue
 		}
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -234,7 +235,7 @@ func (h *RESPHandler) nodePayload(ctx context.Context) ([]byte, error) {
 }
 
 // ForwardRefreshToMaster converts forward refresh to master.
-func ForwardRefreshToMaster(ctx context.Context, master *ClusterNodeRecord, authUUID string, secret string) ([]byte, error) {
+func ForwardRefreshToMaster(ctx context.Context, master *ClusterNodeRecord, authUUID string, secret string, tlsConfig *tls.Config) ([]byte, error) {
 	// Resolve credential context before calling upstream OAuth services.
 	if ctx == nil {
 		ctx = context.Background()
@@ -254,25 +255,52 @@ func ForwardRefreshToMaster(ctx context.Context, master *ClusterNodeRecord, auth
 	if secret == "" {
 		return nil, fmt.Errorf("cluster resp: node secret is required")
 	}
+	respTLSConfig, errTLSConfig := respClientTLSConfig(tlsConfig, host)
+	if errTLSConfig != nil {
+		return nil, errTLSConfig
+	}
 
 	dialer := &net.Dialer{Timeout: clusterRESPTimeout}
 	conn, errDial := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(master.Port)))
 	if errDial != nil {
 		return nil, errDial
 	}
+	tlsConn := tls.Client(conn, respTLSConfig)
 	defer func() {
-		_ = conn.Close()
+		_ = tlsConn.Close()
 	}()
 	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
+		_ = tlsConn.SetDeadline(deadline)
 	} else {
-		_ = conn.SetDeadline(time.Now().Add(clusterRESPTimeout))
+		_ = tlsConn.SetDeadline(time.Now().Add(clusterRESPTimeout))
+	}
+	if errHandshake := tlsConn.HandshakeContext(ctx); errHandshake != nil {
+		return nil, errHandshake
 	}
 
-	if _, errWrite := conn.Write(encodeRESPArray("CLUSTER", "REFRESH", authUUID, secret)); errWrite != nil {
+	if _, errWrite := tlsConn.Write(encodeRESPArray("CLUSTER", "REFRESH", authUUID, secret)); errWrite != nil {
 		return nil, errWrite
 	}
-	return readRESPBulk(bufio.NewReader(conn))
+	return readRESPBulk(bufio.NewReader(tlsConn))
+}
+
+func respClientTLSConfig(tlsConfig *tls.Config, serverName string) (*tls.Config, error) {
+	if tlsConfig == nil {
+		return nil, fmt.Errorf("cluster resp: tls config is required")
+	}
+	cfg := tlsConfig.Clone()
+	cfg.ClientAuth = tls.NoClientCert
+	cfg.NextProtos = nil
+	if strings.TrimSpace(cfg.ServerName) == "" {
+		cfg.ServerName = strings.TrimSpace(serverName)
+	}
+	if cfg.RootCAs == nil {
+		return nil, fmt.Errorf("cluster resp: tls root ca is required")
+	}
+	if len(cfg.Certificates) == 0 && cfg.GetClientCertificate == nil {
+		return nil, fmt.Errorf("cluster resp: client certificate is required")
+	}
+	return cfg, nil
 }
 
 // encodeRESPArray encodes a resp array.

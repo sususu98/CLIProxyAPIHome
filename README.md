@@ -20,11 +20,40 @@ It serves as a centralized hub for managing and scheduling API credentials in la
 
 ## Cluster Mode
 
-Home enables PGSQL-backed cluster mode when `cluster.yaml` exists in the working directory. When `cluster.yaml` is absent, Home keeps the single-node mode and continues using local configuration.
+Home now always runs from a database-backed runtime. When `cluster.yaml` is absent, Home runs the same scheduler, node discovery, leader election, event watcher, management, and RESP logic on a local SQLite database. The default SQLite path is `home.db`; use `-sqlite-path` to override it.
 
-Copy `cluster.example.yaml` to `cluster.yaml`, then adjust it for the target environment. PGSQL connections must use a TCP `host` and `port`; Unix sockets are not supported. After cluster mode starts and completes migration, Home deletes the imported local credential files and `config.yaml` so it will not keep reading stale local state.
+When `cluster.yaml` exists, Home enables cluster mode and uses the database backend declared in that file. PostgreSQL is recommended for multi-node deployments. SQLite is also supported, but cluster SQLite requires `node.external-ip` so other nodes and CPA clients can reach this node.
 
-In cluster mode, the Management API operates directly on data stored in PGSQL. The default listen port comes from `node.port` in `cluster.yaml`; the startup `-addr` flag can override the listen address. Set `node.external-port` when a reverse proxy changes the port that clients must use; when omitted, the advertised cluster node port follows the final listen port.
+`config.yaml` and `auth-dir` are no longer runtime storage. They are import/export exchange formats only. To migrate an existing local setup into the database, run:
+
+```bash
+./CLIProxyAPIHome -import
+```
+
+By default, import reads `./config.yaml` and then resolves credentials from the `auth-dir` value inside that config. Use `-config <path>` to select another config file, `-auth-dir <path>` to override credential discovery, and `-sqlite-path <path>` when importing into a non-default SQLite database. Import is idempotent, so rerunning it with the same files does not duplicate records.
+
+To export database state back to files, run:
+
+```bash
+./CLIProxyAPIHome -export
+```
+
+Export writes `./config.yaml` and credential files under `./auth/`. It refuses to overwrite an existing `config.yaml` or a non-empty `auth/` directory.
+
+In cluster mode, the Management API operates directly on database data. The default listen port comes from `node.port` in `cluster.yaml`; the startup `-addr` flag can override the listen address. Set `node.external-port` when a reverse proxy changes the port that clients must use; when omitted, the advertised cluster node port follows the final listen port.
+
+RESP password authentication has been removed. Home RESP access only accepts mTLS-authenticated clients; CPA should connect with `-home-jwt` or configured TLS material. `allow-host` is only an IP allowlist and is not a password mechanism.
+
+For Docker Compose deployments, run the import command explicitly before normal startup. The compose files persist the database/log directories and no longer copy or delete `config.yaml` automatically.
+
+```bash
+docker compose -f docker-compose.single.yml run --rm \
+  -v "$PWD/config.yaml:/CLIProxyAPIHome/config.yaml:ro" \
+  -v "$PWD/auths:/root/.cli-proxy-api" \
+  home ./CLIProxyAPIHome -sqlite-path /CLIProxyAPIHome/data/home.db -import
+```
+
+For PostgreSQL cluster compose, use `docker-compose.pgsql.yml` and omit `-sqlite-path`.
 
 ## Contributing
 

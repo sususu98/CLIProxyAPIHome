@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"strings"
 
@@ -11,17 +12,19 @@ import (
 )
 
 type RefreshController struct {
-	coordinator *Coordinator
-	runtime     *home.Runtime
-	repo        *Repository
+	coordinator      *Coordinator
+	runtime          *home.Runtime
+	repo             *Repository
+	forwardTLSConfig *tls.Config
 }
 
 // NewRefreshController creates a new refresh controller.
-func NewRefreshController(coordinator *Coordinator, runtime *home.Runtime, repo *Repository) *RefreshController {
+func NewRefreshController(coordinator *Coordinator, runtime *home.Runtime, repo *Repository, forwardTLSConfig *tls.Config) *RefreshController {
 	return &RefreshController{
-		coordinator: coordinator,
-		runtime:     runtime,
-		repo:        repo,
+		coordinator:      coordinator,
+		runtime:          runtime,
+		repo:             repo,
+		forwardTLSConfig: forwardTLSConfig,
 	}
 }
 
@@ -79,7 +82,7 @@ func (c *RefreshController) RefreshNow(ctx context.Context, authIndex string) ([
 			log.Warnf("cluster refresh node secret missing, falling back to local refresh")
 			return c.refreshLocalWithLock(ctx, authIndex)
 		}
-		if payload, errForward := ForwardRefreshToMaster(ctx, master, forwardAuthUUID, nodeSecret); errForward == nil {
+		if payload, errForward := ForwardRefreshToMaster(ctx, master, forwardAuthUUID, nodeSecret, c.forwardTLSConfig); errForward == nil {
 			return payload, nil
 		} else {
 			log.Warnf("cluster refresh forward failed, falling back to local refresh: %v", errForward)

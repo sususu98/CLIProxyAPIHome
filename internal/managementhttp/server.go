@@ -103,6 +103,8 @@ type ClusterManagementOption struct {
 	NodePort   int
 }
 
+type DatabaseManagementOption = ClusterManagementOption
+
 // WithRoute applies the route option.
 func WithRoute(method, path string, handler gin.HandlerFunc) RouteOption {
 	return func(r *RouteRegistry) {
@@ -123,8 +125,8 @@ func WithoutRoute(method, path string) RouteOption {
 	}
 }
 
-// WithClusterManagement applies the cluster management option.
-func WithClusterManagement(opt ClusterManagementOption) RouteOption {
+// WithDatabaseManagement applies the database-backed management option.
+func WithDatabaseManagement(opt DatabaseManagementOption) RouteOption {
 	return func(r *RouteRegistry) {
 		if r == nil || !opt.Enabled || opt.Repository == nil || opt.Runtime == nil {
 			return
@@ -133,6 +135,11 @@ func WithClusterManagement(opt ClusterManagementOption) RouteOption {
 		r.clusterManagement = &optCopy
 		registerClusterManagementRoutes(r, clustermanagement.NewHandler(opt.Repository, opt.Runtime, opt.NodeIP, opt.NodePort))
 	}
+}
+
+// WithClusterManagement applies the cluster management option.
+func WithClusterManagement(opt ClusterManagementOption) RouteOption {
+	return WithDatabaseManagement(opt)
 }
 
 // registerClusterManagementRoutes handles a register cluster management routes.

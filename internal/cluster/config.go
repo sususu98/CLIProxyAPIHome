@@ -13,8 +13,9 @@ import (
 const DefaultConfigPath = "cluster.yaml"
 
 type Config struct {
-	PGSQL PGSQLConfig `yaml:"pgsql"`
-	Node  NodeConfig  `yaml:"node"`
+	PGSQL  PGSQLConfig  `yaml:"pgsql"`
+	SQLite SQLiteConfig `yaml:"sqlite"`
+	Node   NodeConfig   `yaml:"node"`
 }
 
 type PGSQLConfig struct {
@@ -27,6 +28,17 @@ type PGSQLConfig struct {
 	SSLMode  string `yaml:"sslmode"`
 }
 
+type SQLiteConfig struct {
+	Path string `yaml:"path"`
+}
+
+type DatabaseBackend string
+
+const (
+	DatabaseBackendPostgres DatabaseBackend = "postgres"
+	DatabaseBackendSQLite   DatabaseBackend = "sqlite"
+)
+
 type NodeConfig struct {
 	ExternalIP        string        `yaml:"external-ip"`
 	ExternalPort      int           `yaml:"external-port"`
@@ -37,8 +49,9 @@ type NodeConfig struct {
 }
 
 type rawConfig struct {
-	PGSQL PGSQLConfig `yaml:"pgsql"`
-	Node  rawNode     `yaml:"node"`
+	PGSQL  PGSQLConfig  `yaml:"pgsql"`
+	SQLite SQLiteConfig `yaml:"sqlite"`
+	Node   rawNode      `yaml:"node"`
 }
 
 type rawNode struct {
@@ -97,6 +110,9 @@ func LoadConfigOptional(path string) (*Config, bool, error) {
 
 	cfg := &Config{
 		PGSQL: raw.PGSQL,
+		SQLite: SQLiteConfig{
+			Path: strings.TrimSpace(raw.SQLite.Path),
+		},
 		Node: NodeConfig{
 			ExternalIP:        strings.TrimSpace(raw.Node.ExternalIP),
 			ExternalPort:      raw.Node.ExternalPort,
@@ -138,8 +154,18 @@ func (c *Config) applyDefaults() {
 
 // Validate validates validate.
 func (c *Config) Validate() error {
-	if errValidatePGSQL := c.PGSQL.Validate(); errValidatePGSQL != nil {
-		return errValidatePGSQL
+	pgsqlConfigured := c.PGSQL.Configured()
+	sqliteConfigured := c.SQLite.Configured()
+	if pgsqlConfigured && sqliteConfigured {
+		return fmt.Errorf("exactly one database backend must be configured")
+	}
+	if !pgsqlConfigured && !sqliteConfigured {
+		return c.PGSQL.Validate()
+	}
+	if pgsqlConfigured {
+		if errValidatePGSQL := c.PGSQL.Validate(); errValidatePGSQL != nil {
+			return errValidatePGSQL
+		}
 	}
 	if c.Node.Port <= 0 {
 		return fmt.Errorf("node.port must be greater than 0")
@@ -157,6 +183,23 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("node.event-poll-interval must be greater than 0")
 	}
 	return nil
+}
+
+// DatabaseBackend returns the selected database backend.
+func (c *Config) DatabaseBackend() DatabaseBackend {
+	if c != nil && c.SQLite.Configured() {
+		return DatabaseBackendSQLite
+	}
+	return DatabaseBackendPostgres
+}
+
+// Configured reports whether PostgreSQL has cluster database settings.
+func (c PGSQLConfig) Configured() bool {
+	return strings.TrimSpace(c.Host) != "" ||
+		strings.TrimSpace(c.User) != "" ||
+		c.Password != "" ||
+		c.Passowrd != "" ||
+		strings.TrimSpace(c.Database) != ""
 }
 
 // Validate validates validate.
@@ -177,6 +220,11 @@ func (c PGSQLConfig) Validate() error {
 		return fmt.Errorf("pgsql.database is required")
 	}
 	return nil
+}
+
+// Configured reports whether SQLite has cluster database settings.
+func (c SQLiteConfig) Configured() bool {
+	return strings.TrimSpace(c.Path) != ""
 }
 
 // isUnixSocketHost reports whether unix socket host.

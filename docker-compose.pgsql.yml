@@ -34,30 +34,6 @@ services:
     ports:
       - "8327:8327"
     volumes:
-      - ${CLI_PROXY_HOME_PROJECT_ROOT_PATH:-./}:/project-root
-      - ${CLI_PROXY_HOME_CLUSTER_PATH:-./cluster.yaml}:/CLIProxyAPIHome/cluster.yaml
-      - ${CLI_PROXY_HOME_AUTH_PATH:-./auths}:/root/.cli-proxy-api
+      - ${CLI_PROXY_HOME_CLUSTER_PATH:-./cluster.yaml}:/CLIProxyAPIHome/cluster.yaml:ro
       - ${CLI_PROXY_HOME_LOG_PATH:-./logs}:/CLIProxyAPIHome/logs
-    command: >
-      sh -eu -c '
-        if [ -f /project-root/config.yaml ]; then
-          cp /project-root/config.yaml /CLIProxyAPIHome/config.yaml
-        fi
-
-        ./CLIProxyAPIHome &
-        pid=$!
-
-        if [ -f /project-root/config.yaml ]; then
-          while kill -0 "$$pid" 2>/dev/null; do
-            if [ ! -e /CLIProxyAPIHome/config.yaml ]; then
-              rm -f /project-root/config.yaml
-              break
-            fi
-            sleep 1
-          done
-        fi
-
-        wait "$$pid"
-      '
     restart: unless-stopped
-
