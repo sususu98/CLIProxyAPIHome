@@ -28,7 +28,10 @@ type Server struct {
 	cluster  *cluster.RESPHandler
 }
 
-const clusterSubscriptionUpdateInterval = 30 * time.Second
+const (
+	clusterSubscriptionUpdateInterval = 30 * time.Second
+	subscriptionHeartbeatInterval     = time.Second
+)
 
 const (
 	respAuthSourceNone = "none"
@@ -63,31 +66,52 @@ func (s *Server) syncClusterClientCount(ctx context.Context) {
 	}
 }
 
-func (s *Server) startClusterSubscriptionUpdates(ctx context.Context, writer *safeWriter) context.CancelFunc {
+func (s *Server) startSubscriptionUpdates(ctx context.Context, writer *safeWriter) context.CancelFunc {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	if s == nil || s.cluster == nil || writer == nil {
+	if s == nil || writer == nil {
 		return cancel
 	}
 
 	go func() {
-		ticker := time.NewTicker(clusterSubscriptionUpdateInterval)
-		defer ticker.Stop()
+		heartbeatTicker := time.NewTicker(subscriptionHeartbeatInterval)
+		defer heartbeatTicker.Stop()
 
 		for {
 			select {
 			case <-runCtx.Done():
 				return
-			case <-ticker.C:
-				if errSend := s.writeClusterSubscriptionUpdate(runCtx, writer); errSend != nil {
-					log.Warnf("failed to publish cluster update to subscriber: %v", errSend)
+			case <-heartbeatTicker.C:
+				if errSend := writer.WriteDispatchReply(subscriptionPong([]byte{})); errSend != nil {
+					log.Warnf("failed to publish subscription heartbeat: %v", errSend)
+					cancel()
 					return
 				}
 			}
 		}
 	}()
+
+	if s.cluster != nil {
+		go func() {
+			ticker := time.NewTicker(clusterSubscriptionUpdateInterval)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-runCtx.Done():
+					return
+				case <-ticker.C:
+					if errSend := s.writeClusterSubscriptionUpdate(runCtx, writer); errSend != nil {
+						log.Warnf("failed to publish cluster update to subscriber: %v", errSend)
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+	}
 
 	return cancel
 }
@@ -143,6 +167,16 @@ func subscriptionMessage(channel string, payload []byte) dispatch.Reply {
 	return dispatch.Array(
 		dispatch.BulkString([]byte("message")),
 		dispatch.BulkString([]byte(channel)),
+		dispatch.BulkString(payload),
+	)
+}
+
+func subscriptionPong(payload []byte) dispatch.Reply {
+	if payload == nil {
+		payload = []byte{}
+	}
+	return dispatch.Array(
+		dispatch.BulkString([]byte("pong")),
 		dispatch.BulkString(payload),
 	)
 }
@@ -229,11 +263,11 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 	connectedAt := time.Now()
 	addedNode := false
 	var unsubscribeConfig func()
-	var cancelClusterUpdates context.CancelFunc
+	var cancelSubscriptionUpdates context.CancelFunc
 	defer func() {
-		if cancelClusterUpdates != nil {
-			cancelClusterUpdates()
-			cancelClusterUpdates = nil
+		if cancelSubscriptionUpdates != nil {
+			cancelSubscriptionUpdates()
+			cancelSubscriptionUpdates = nil
 		}
 		if unsubscribeConfig != nil {
 			unsubscribeConfig()
@@ -387,16 +421,16 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 						unsubscribeConfig = s.runtime.SubscribeConfigYAML(func(payload []byte) error {
 							return writer.WriteDispatchReply(subscriptionMessage(configSubscriptionChannel, payload))
 						})
-						cancelClusterUpdates = s.startClusterSubscriptionUpdates(ctx, writer)
+						cancelSubscriptionUpdates = s.startSubscriptionUpdates(ctx, writer)
 						return 1, nil
 					},
 					UnsubscribeConfigYAML: func() (int64, error) {
 						if unsubscribeConfig == nil {
 							return 0, nil
 						}
-						if cancelClusterUpdates != nil {
-							cancelClusterUpdates()
-							cancelClusterUpdates = nil
+						if cancelSubscriptionUpdates != nil {
+							cancelSubscriptionUpdates()
+							cancelSubscriptionUpdates = nil
 						}
 						unsubscribeConfig()
 						unsubscribeConfig = nil
