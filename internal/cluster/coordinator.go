@@ -5,7 +5,6 @@ import (
 	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
-	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -181,24 +179,9 @@ func (c *Coordinator) CurrentMaster(ctx context.Context) (*ClusterNodeRecord, er
 	}
 
 	cutoff := time.Now().UTC().Add(-c.heartbeatTimeout)
-	record := &ClusterNodeRecord{}
-	errFirst := db.WithContext(contextOrBackground(ctx)).
-		Where("is_master = ? AND last_seen_at >= ?", true, cutoff).
-		Order("started_at ASC, ip ASC, port ASC").
-		First(record).Error
-	if errFirst != nil {
-		if !errors.Is(errFirst, gorm.ErrRecordNotFound) {
-			return nil, errFirst
-		}
-	}
-	if record.IP != "" {
-		return record, nil
-	}
-
 	var liveNodes []ClusterNodeRecord
 	errFind := db.WithContext(contextOrBackground(ctx)).
 		Where("last_seen_at >= ?", cutoff).
-		Order("started_at ASC, ip ASC, port ASC").
 		Find(&liveNodes).Error
 	if errFind != nil {
 		return nil, errFind
@@ -219,63 +202,38 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context) error {
 	}
 
 	now := time.Now().UTC()
-	cutoff := now.Add(-c.heartbeatTimeout)
 	record := ClusterNodeRecord{
 		IP:          c.node.IP,
 		Port:        c.node.Port,
 		SecretHash:  nodeSecretHash(c.node.Secret),
+		IsMaster:    c.IsMaster(),
 		ClientCount: node.GlobalRegistry().TotalCount(),
 		StartedAt:   c.node.StartedAt,
 		LastSeenAt:  now,
 	}
 
-	var elected *ClusterNodeRecord
-	errTransaction := db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
-		if errLock := tx.Exec(`LOCK TABLE "cluster" IN SHARE ROW EXCLUSIVE MODE`).Error; errLock != nil {
-			return errLock
-		}
-		if errUpsert := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "ip"}, {Name: "port"}},
-			DoUpdates: clause.Assignments(map[string]any{
-				"started_at":   record.StartedAt,
-				"last_seen_at": record.LastSeenAt,
-				"secret_hash":  record.SecretHash,
-				"client_count": record.ClientCount,
-			}),
-		}).Create(&record).Error; errUpsert != nil {
-			return errUpsert
-		}
-
-		var nodes []ClusterNodeRecord
-		errFind := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("last_seen_at >= ?", cutoff).
-			Find(&nodes).Error
-		if errFind != nil {
-			return errFind
-		}
-		if len(nodes) == 0 {
-			return fmt.Errorf("cluster election found no live nodes")
-		}
-
-		sortClusterNodes(nodes)
-		nextMaster := nodes[0]
-		elected = &nextMaster
-
-		if errClear := tx.Model(&ClusterNodeRecord{}).Where("is_master = ?", true).Update("is_master", false).Error; errClear != nil {
-			return errClear
-		}
-		if errSet := tx.Model(&ClusterNodeRecord{}).
-			Where("ip = ? AND port = ?", nextMaster.IP, nextMaster.Port).
-			Update("is_master", true).Error; errSet != nil {
-			return errSet
-		}
-		return nil
-	})
-	if errTransaction != nil {
-		return errTransaction
+	if errUpsert := db.WithContext(contextOrBackground(ctx)).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "ip"}, {Name: "port"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"started_at":   record.StartedAt,
+			"last_seen_at": record.LastSeenAt,
+			"secret_hash":  record.SecretHash,
+			"client_count": record.ClientCount,
+			"is_master":    record.IsMaster,
+		}),
+	}).Create(&record).Error; errUpsert != nil {
+		return errUpsert
 	}
 
-	c.setMaster(elected != nil && elected.IP == c.node.IP && elected.Port == c.node.Port)
+	elected, errMaster := c.CurrentMaster(ctx)
+	if errMaster != nil {
+		return errMaster
+	}
+	if elected == nil {
+		return fmt.Errorf("cluster election found no live nodes")
+	}
+
+	c.setMaster(clusterNodeMatches(*elected, c.node.IP, c.node.Port))
 	return nil
 }
 
@@ -306,6 +264,10 @@ func sortClusterNodes(nodes []ClusterNodeRecord) {
 // nodeSortKey handles a node sort key.
 func nodeSortKey(node ClusterNodeRecord) string {
 	return fmt.Sprintf("%s:%d", strings.TrimSpace(node.IP), node.Port)
+}
+
+func clusterNodeMatches(node ClusterNodeRecord, ip string, port int) bool {
+	return strings.TrimSpace(node.IP) == strings.TrimSpace(ip) && node.Port == port
 }
 
 // generateNodeSecret generates a node secret.
