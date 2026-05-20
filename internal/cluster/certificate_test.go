@@ -1,10 +1,20 @@
 package cluster
 
 import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"net"
+	"path/filepath"
 	"testing"
 	"time"
 )
+
+const clusterTLSHandshakeDeadline = 2 * time.Second
 
 func TestCreateServerCertificateSupportsNodeMTLS(t *testing.T) {
 	t.Parallel()
@@ -71,4 +81,119 @@ func TestTLSConfigFromCertificateRecordsSetsRootCAs(t *testing.T) {
 	if tlsConfig.ClientCAs == nil {
 		t.Fatal("ClientCAs = nil, want cluster CA pool")
 	}
+}
+
+func TestClusterTLSRejectsDeletedClientCertificate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, errOpen := OpenSQLite(ctx, filepath.Join(t.TempDir(), "home.db"))
+	if errOpen != nil {
+		t.Fatalf("OpenSQLite() error = %v", errOpen)
+	}
+	if errMigrate := AutoMigrate(db); errMigrate != nil {
+		t.Fatalf("AutoMigrate() error = %v", errMigrate)
+	}
+	repo := NewRepository(db)
+	serverTLS, errServerTLS := repo.EnsureClusterCertificates(ctx, "127.0.0.1")
+	if errServerTLS != nil {
+		t.Fatalf("EnsureClusterCertificates() error = %v", errServerTLS)
+	}
+
+	certificateID, enrollmentSecret, errPending := repo.CreatePendingClientCertificate(ctx)
+	if errPending != nil {
+		t.Fatalf("CreatePendingClientCertificate() error = %v", errPending)
+	}
+	clientKey, clientCSR := createClientCSR(t, certificateID)
+	clientCertPEM, caPEM, errSign := repo.SignClientCertificateRequest(ctx, certificateID, enrollmentSecret, clientCSR)
+	if errSign != nil {
+		t.Fatalf("SignClientCertificateRequest() error = %v", errSign)
+	}
+	clientTLS := clientTLSConfig(t, clientCertPEM, encodeRSAPrivateKeyPEM(clientKey), caPEM)
+
+	if errHandshake := runTLSHandshake(t, serverTLS, clientTLS); errHandshake != nil {
+		t.Fatalf("handshake with issued certificate error = %v", errHandshake)
+	}
+	if errDelete := db.Where("id = ?", certificateID).Delete(&CertificateRecord{}).Error; errDelete != nil {
+		t.Fatalf("delete client certificate record error = %v", errDelete)
+	}
+	if errHandshake := runTLSHandshake(t, serverTLS, clientTLS); errHandshake == nil {
+		t.Fatal("handshake with deleted certificate error = nil, want failure")
+	}
+}
+
+func createClientCSR(t *testing.T, commonName string) (*rsa.PrivateKey, []byte) {
+	t.Helper()
+	key, errKey := rsa.GenerateKey(rand.Reader, certificateKeyBits)
+	if errKey != nil {
+		t.Fatalf("GenerateKey() error = %v", errKey)
+	}
+	template := &x509.CertificateRequest{
+		Subject: pkix.Name{
+			CommonName: commonName,
+		},
+	}
+	der, errCreate := x509.CreateCertificateRequest(rand.Reader, template, key)
+	if errCreate != nil {
+		t.Fatalf("CreateCertificateRequest() error = %v", errCreate)
+	}
+	return key, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
+}
+
+func clientTLSConfig(t *testing.T, certPEM []byte, keyPEM []byte, caPEM []byte) *tls.Config {
+	t.Helper()
+	certPair, errPair := tls.X509KeyPair(certPEM, keyPEM)
+	if errPair != nil {
+		t.Fatalf("X509KeyPair() error = %v", errPair)
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("AppendCertsFromPEM(ca) = false")
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{certPair},
+		RootCAs:      caPool,
+		ServerName:   "127.0.0.1",
+	}
+}
+
+func runTLSHandshake(t *testing.T, serverConfig *tls.Config, clientConfig *tls.Config) error {
+	t.Helper()
+	serverConn, clientConn := net.Pipe()
+	defer func() {
+		if errClose := serverConn.Close(); errClose != nil {
+			t.Logf("server conn close error: %v", errClose)
+		}
+	}()
+	defer func() {
+		if errClose := clientConn.Close(); errClose != nil {
+			t.Logf("client conn close error: %v", errClose)
+		}
+	}()
+	deadline := time.Now().Add(clusterTLSHandshakeDeadline)
+	if errSetDeadline := serverConn.SetDeadline(deadline); errSetDeadline != nil {
+		t.Fatalf("server conn set deadline error = %v", errSetDeadline)
+	}
+	if errSetDeadline := clientConn.SetDeadline(deadline); errSetDeadline != nil {
+		t.Fatalf("client conn set deadline error = %v", errSetDeadline)
+	}
+
+	serverTLS := tls.Server(serverConn, serverConfig)
+	clientTLS := tls.Client(clientConn, clientConfig)
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- serverTLS.Handshake()
+	}()
+	go func() {
+		errCh <- clientTLS.Handshake()
+	}()
+
+	var firstErr error
+	for i := 0; i < 2; i++ {
+		if errHandshake := <-errCh; errHandshake != nil && firstErr == nil {
+			firstErr = errHandshake
+		}
+	}
+	return firstErr
 }

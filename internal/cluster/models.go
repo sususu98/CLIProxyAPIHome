@@ -190,22 +190,23 @@ func (OAuthSessionRecord) TableName() string {
 }
 
 type CertificateRecord struct {
-	ID                   string    `gorm:"column:id;primaryKey"`
-	ClusterID            string    `gorm:"column:cluster_id;index"`
-	CertificatePEM       string    `gorm:"column:certificate_pem;type:text"`
-	PrivateKeyPEM        string    `gorm:"column:private_key_pem;type:text"`
-	CSRPEM               string    `gorm:"column:csr_pem;type:text"`
-	IP                   string    `gorm:"column:ip;index:idx_certificate_server_ip,priority:2"`
-	CAFingerprint        string    `gorm:"column:ca_fingerprint"`
-	EnrollmentSecretHash string    `gorm:"column:enrollment_secret_hash"`
-	IsCA                 bool      `gorm:"column:is_ca;index"`
-	IsServer             bool      `gorm:"column:is_server;index:idx_certificate_server_ip,priority:1"`
-	IsClient             bool      `gorm:"column:is_client;index"`
-	SerialNumber         string    `gorm:"column:serial_number"`
-	NotBefore            time.Time `gorm:"column:not_before"`
-	NotAfter             time.Time `gorm:"column:not_after"`
-	CreatedAt            time.Time `gorm:"column:created_at"`
-	UpdatedAt            time.Time `gorm:"column:updated_at"`
+	ID                     string    `gorm:"column:id;primaryKey"`
+	ClusterID              string    `gorm:"column:cluster_id;index"`
+	CertificatePEM         string    `gorm:"column:certificate_pem;type:text"`
+	CertificateFingerprint string    `gorm:"column:certificate_fingerprint;index"`
+	PrivateKeyPEM          string    `gorm:"column:private_key_pem;type:text"`
+	CSRPEM                 string    `gorm:"column:csr_pem;type:text"`
+	IP                     string    `gorm:"column:ip;index:idx_certificate_server_ip,priority:2"`
+	CAFingerprint          string    `gorm:"column:ca_fingerprint"`
+	EnrollmentSecretHash   string    `gorm:"column:enrollment_secret_hash"`
+	IsCA                   bool      `gorm:"column:is_ca;index"`
+	IsServer               bool      `gorm:"column:is_server;index:idx_certificate_server_ip,priority:1"`
+	IsClient               bool      `gorm:"column:is_client;index"`
+	SerialNumber           string    `gorm:"column:serial_number"`
+	NotBefore              time.Time `gorm:"column:not_before"`
+	NotAfter               time.Time `gorm:"column:not_after"`
+	CreatedAt              time.Time `gorm:"column:created_at"`
+	UpdatedAt              time.Time `gorm:"column:updated_at"`
 }
 
 // TableName returns the database table name.

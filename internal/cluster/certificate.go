@@ -63,7 +63,14 @@ func (r *Repository) EnsureClusterCertificates(ctx context.Context, ip string) (
 	if errServer != nil {
 		return nil, errServer
 	}
-	return tlsConfigFromCertificateRecords(ca, server)
+	tlsConfig, errTLS := tlsConfigFromCertificateRecords(ca, server)
+	if errTLS != nil {
+		return nil, errTLS
+	}
+	tlsConfig.VerifyConnection = func(state tls.ConnectionState) error {
+		return r.verifyPeerCertificateFingerprint(context.Background(), state)
+	}
+	return tlsConfig, nil
 }
 
 // CreatePendingClientCertificate creates an empty client certificate slot.
@@ -243,6 +250,7 @@ func (r *Repository) SignClientCertificateRequest(ctx context.Context, certifica
 		certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 		caPEM = []byte(ca.CertificatePEM)
 		record.CertificatePEM = string(certPEM)
+		record.CertificateFingerprint = certificateFingerprintDER(der)
 		record.CSRPEM = string(csrPEM)
 		record.PrivateKeyPEM = ""
 		record.EnrollmentSecretHash = ""
@@ -274,6 +282,46 @@ func (r *Repository) SignClientCertificateRequestJSON(ctx context.Context, certi
 	return json.Marshal(payload)
 }
 
+func (r *Repository) verifyPeerCertificateFingerprint(ctx context.Context, state tls.ConnectionState) error {
+	if len(state.PeerCertificates) == 0 {
+		return nil
+	}
+	if len(state.VerifiedChains) == 0 {
+		return fmt.Errorf("cluster certificate peer chain is not verified")
+	}
+	ok, errAllowed := r.peerCertificateFingerprintAllowed(ctx, state.PeerCertificates[0])
+	if errAllowed != nil {
+		return errAllowed
+	}
+	if !ok {
+		return fmt.Errorf("cluster certificate peer fingerprint is revoked or unknown")
+	}
+	return nil
+}
+
+func (r *Repository) peerCertificateFingerprintAllowed(ctx context.Context, cert *x509.Certificate) (bool, error) {
+	if cert == nil {
+		return false, nil
+	}
+	fingerprint := certificateFingerprint(cert)
+	if fingerprint == "" {
+		return false, nil
+	}
+	db, errDB := r.database()
+	if errDB != nil {
+		return false, errDB
+	}
+	var count int64
+	errCount := db.WithContext(contextOrBackground(ctx)).
+		Model(&CertificateRecord{}).
+		Where("certificate_fingerprint = ? AND certificate_pem <> ? AND (is_client = ? OR is_server = ?)", fingerprint, "", true, true).
+		Count(&count).Error
+	if errCount != nil {
+		return false, errCount
+	}
+	return count > 0, nil
+}
+
 func (r *Repository) ensureCARecord(ctx context.Context, db *gorm.DB) (*CertificateRecord, error) {
 	ca, errCA := firstCARecord(ctx, db)
 	if errCA != nil {
@@ -287,18 +335,23 @@ func (r *Repository) ensureCARecord(ctx context.Context, db *gorm.DB) (*Certific
 	if errCreate != nil {
 		return nil, errCreate
 	}
+	fingerprint, errFingerprint := certificateFingerprintPEM(certPEM)
+	if errFingerprint != nil {
+		return nil, errFingerprint
+	}
 	id, errID := randomUUID()
 	if errID != nil {
 		return nil, errID
 	}
 	record := &CertificateRecord{
-		ID:             id,
-		CertificatePEM: string(certPEM),
-		PrivateKeyPEM:  string(keyPEM),
-		IsCA:           true,
-		SerialNumber:   serial,
-		NotBefore:      now,
-		NotAfter:       now.AddDate(100, 0, 0),
+		ID:                     id,
+		CertificatePEM:         string(certPEM),
+		CertificateFingerprint: fingerprint,
+		PrivateKeyPEM:          string(keyPEM),
+		IsCA:                   true,
+		SerialNumber:           serial,
+		NotBefore:              now,
+		NotAfter:               now.AddDate(100, 0, 0),
 	}
 	if errCreateRecord := db.WithContext(ctx).Create(record).Error; errCreateRecord != nil {
 		return nil, errCreateRecord
@@ -335,19 +388,25 @@ func (r *Repository) writeServerCertificateRecord(ctx context.Context, db *gorm.
 	if errCreate != nil {
 		return nil, errCreate
 	}
+	fingerprint, errFingerprint := certificateFingerprintPEM(certPEM)
+	if errFingerprint != nil {
+		return nil, errFingerprint
+	}
 	notAfter := now.AddDate(100, 0, 0)
 	if record != nil && strings.TrimSpace(record.ID) != "" {
 		updates := map[string]any{
-			"certificate_pem": string(certPEM),
-			"private_key_pem": string(keyPEM),
-			"serial_number":   serial,
-			"not_before":      now,
-			"not_after":       notAfter,
+			"certificate_pem":         string(certPEM),
+			"certificate_fingerprint": fingerprint,
+			"private_key_pem":         string(keyPEM),
+			"serial_number":           serial,
+			"not_before":              now,
+			"not_after":               notAfter,
 		}
 		if errUpdate := db.WithContext(ctx).Model(record).Updates(updates).Error; errUpdate != nil {
 			return nil, errUpdate
 		}
 		record.CertificatePEM = string(certPEM)
+		record.CertificateFingerprint = fingerprint
 		record.PrivateKeyPEM = string(keyPEM)
 		record.SerialNumber = serial
 		record.NotBefore = now
@@ -360,14 +419,15 @@ func (r *Repository) writeServerCertificateRecord(ctx context.Context, db *gorm.
 		return nil, errID
 	}
 	record = &CertificateRecord{
-		ID:             id,
-		CertificatePEM: string(certPEM),
-		PrivateKeyPEM:  string(keyPEM),
-		IP:             ip,
-		IsServer:       true,
-		SerialNumber:   serial,
-		NotBefore:      now,
-		NotAfter:       notAfter,
+		ID:                     id,
+		CertificatePEM:         string(certPEM),
+		CertificateFingerprint: fingerprint,
+		PrivateKeyPEM:          string(keyPEM),
+		IP:                     ip,
+		IsServer:               true,
+		SerialNumber:           serial,
+		NotBefore:              now,
+		NotAfter:               notAfter,
 	}
 	if errCreateRecord := db.WithContext(ctx).Create(record).Error; errCreateRecord != nil {
 		return nil, errCreateRecord
@@ -546,8 +606,22 @@ func certificateFingerprintPEM(raw []byte) (string, error) {
 	if errCert != nil {
 		return "", errCert
 	}
-	sum := sha256.Sum256(cert.Raw)
-	return hex.EncodeToString(sum[:]), nil
+	return certificateFingerprint(cert), nil
+}
+
+func certificateFingerprint(cert *x509.Certificate) string {
+	if cert == nil || len(cert.Raw) == 0 {
+		return ""
+	}
+	return certificateFingerprintDER(cert.Raw)
+}
+
+func certificateFingerprintDER(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 func parseRSAPrivateKeyPEM(raw []byte) (*rsa.PrivateKey, error) {

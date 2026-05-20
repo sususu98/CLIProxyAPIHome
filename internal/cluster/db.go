@@ -83,7 +83,34 @@ func AutoMigrate(db *gorm.DB) error {
 	if errMigrate := db.AutoMigrate(&AuthRecord{}, &ConfigRecord{}, &APIKeyRecord{}, &ClusterNodeRecord{}, &ClusterEventRecord{}, &UsageRecord{}, &OAuthSessionRecord{}, &CertificateRecord{}); errMigrate != nil {
 		return errMigrate
 	}
+	if errMigrate := migrateCertificateFingerprints(db); errMigrate != nil {
+		return errMigrate
+	}
 	return migrateLegacyAPIKeys(db)
+}
+
+func migrateCertificateFingerprints(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	var records []CertificateRecord
+	if errFind := db.
+		Where("certificate_pem <> ? AND COALESCE(certificate_fingerprint, '') = ?", "", "").
+		Find(&records).Error; errFind != nil {
+		return errFind
+	}
+	for _, record := range records {
+		fingerprint, errFingerprint := certificateFingerprintPEM([]byte(record.CertificatePEM))
+		if errFingerprint != nil {
+			return errFingerprint
+		}
+		if errUpdate := db.Model(&CertificateRecord{}).
+			Where("id = ?", record.ID).
+			Update("certificate_fingerprint", fingerprint).Error; errUpdate != nil {
+			return errUpdate
+		}
+	}
+	return nil
 }
 
 func migrateLegacyAPIKeys(db *gorm.DB) error {

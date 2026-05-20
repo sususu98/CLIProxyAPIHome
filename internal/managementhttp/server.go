@@ -399,6 +399,7 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 	handler.SetLogDirectory("logs")
 
 	engine := gin.New()
+	_ = engine.SetTrustedProxies(nil)
 	engine.Use(gin.Recovery())
 
 	if clusterEnabled {
