@@ -131,11 +131,11 @@ func (ConfigRecord) TableName() string {
 }
 
 type APIKeyRecord struct {
-	ID        uint           `gorm:"column:id;primaryKey;autoIncrement"`
+	ID        uint           `gorm:"column:id;primaryKey;autoIncrement;index:idx_api_key_active_order,priority:2"`
 	APIKey    string         `gorm:"column:api_key;not null;uniqueIndex"`
 	CreatedAt time.Time      `gorm:"column:created_at"`
 	UpdatedAt time.Time      `gorm:"column:updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"column:deleted_at;index"`
+	DeletedAt gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_api_key_active_order,priority:1"`
 }
 
 // TableName returns the database table name.
@@ -144,13 +144,13 @@ func (APIKeyRecord) TableName() string {
 }
 
 type ClusterNodeRecord struct {
-	IP          string    `gorm:"column:ip;primaryKey;index:idx_cluster_auth_lookup,priority:1;index:idx_cluster_live_nodes,priority:3;index:idx_cluster_master_nodes,priority:4"`
-	Port        int       `gorm:"column:port;primaryKey;index:idx_cluster_auth_lookup,priority:5;index:idx_cluster_live_nodes,priority:4;index:idx_cluster_master_nodes,priority:5"`
-	SecretHash  string    `gorm:"column:secret_hash;index:idx_cluster_auth_lookup,priority:2"`
-	IsMaster    bool      `gorm:"column:is_master;index:idx_cluster_master_nodes,priority:1"`
-	ClientCount int       `gorm:"column:client_count"`
-	StartedAt   time.Time `gorm:"column:started_at;index:idx_cluster_auth_lookup,priority:4;index:idx_cluster_live_nodes,priority:2;index:idx_cluster_master_nodes,priority:3"`
-	LastSeenAt  time.Time `gorm:"column:last_seen_at;index:idx_cluster_auth_lookup,priority:3;index:idx_cluster_live_nodes,priority:1;index:idx_cluster_master_nodes,priority:2"`
+	IP          string    `gorm:"column:ip;primaryKey;index:idx_cluster_auth_lookup,priority:1;index:idx_cluster_live_nodes,priority:3;index:idx_cluster_master_nodes,priority:4;index:idx_cluster_auth_live_first,priority:1;index:idx_cluster_live_schedule,priority:3;index:idx_cluster_master_current,priority:4"`
+	Port        int       `gorm:"column:port;primaryKey;index:idx_cluster_auth_lookup,priority:5;index:idx_cluster_live_nodes,priority:4;index:idx_cluster_master_nodes,priority:5;index:idx_cluster_auth_live_first,priority:4;index:idx_cluster_live_schedule,priority:4;index:idx_cluster_master_current,priority:5"`
+	SecretHash  string    `gorm:"column:secret_hash;index:idx_cluster_auth_lookup,priority:2;index:idx_cluster_auth_live_first,priority:2"`
+	IsMaster    bool      `gorm:"column:is_master;index:idx_cluster_master_nodes,priority:1;index:idx_cluster_master_current,priority:1"`
+	ClientCount int       `gorm:"column:client_count;index:idx_cluster_live_schedule,priority:1"`
+	StartedAt   time.Time `gorm:"column:started_at;index:idx_cluster_auth_lookup,priority:4;index:idx_cluster_live_nodes,priority:2;index:idx_cluster_master_nodes,priority:3;index:idx_cluster_auth_live_first,priority:3;index:idx_cluster_live_schedule,priority:2;index:idx_cluster_master_current,priority:3"`
+	LastSeenAt  time.Time `gorm:"column:last_seen_at;index:idx_cluster_auth_lookup,priority:3;index:idx_cluster_live_nodes,priority:1;index:idx_cluster_master_nodes,priority:2;index:idx_cluster_auth_live_first,priority:5;index:idx_cluster_live_schedule,priority:5;index:idx_cluster_master_current,priority:2,sort:desc"`
 }
 
 // TableName returns the database table name.
@@ -190,22 +190,22 @@ func (OAuthSessionRecord) TableName() string {
 }
 
 type CertificateRecord struct {
-	ID                     string    `gorm:"column:id;primaryKey"`
+	ID                     string    `gorm:"column:id;primaryKey;index:idx_certificate_ca_order,priority:3"`
 	ClusterID              string    `gorm:"column:cluster_id;index"`
 	CertificatePEM         string    `gorm:"column:certificate_pem;type:text"`
-	CertificateFingerprint string    `gorm:"column:certificate_fingerprint;index"`
+	CertificateFingerprint string    `gorm:"column:certificate_fingerprint;index;index:idx_certificate_peer_lookup,priority:1"`
 	PrivateKeyPEM          string    `gorm:"column:private_key_pem;type:text"`
 	CSRPEM                 string    `gorm:"column:csr_pem;type:text"`
 	IP                     string    `gorm:"column:ip;index:idx_certificate_server_ip,priority:2"`
 	CAFingerprint          string    `gorm:"column:ca_fingerprint"`
 	EnrollmentSecretHash   string    `gorm:"column:enrollment_secret_hash"`
-	IsCA                   bool      `gorm:"column:is_ca;index"`
-	IsServer               bool      `gorm:"column:is_server;index:idx_certificate_server_ip,priority:1"`
-	IsClient               bool      `gorm:"column:is_client;index"`
+	IsCA                   bool      `gorm:"column:is_ca;index;index:idx_certificate_ca_order,priority:1"`
+	IsServer               bool      `gorm:"column:is_server;index:idx_certificate_server_ip,priority:1;index:idx_certificate_peer_lookup,priority:3"`
+	IsClient               bool      `gorm:"column:is_client;index;index:idx_certificate_peer_lookup,priority:2"`
 	SerialNumber           string    `gorm:"column:serial_number"`
 	NotBefore              time.Time `gorm:"column:not_before"`
 	NotAfter               time.Time `gorm:"column:not_after"`
-	CreatedAt              time.Time `gorm:"column:created_at"`
+	CreatedAt              time.Time `gorm:"column:created_at;index:idx_certificate_ca_order,priority:2"`
 	UpdatedAt              time.Time `gorm:"column:updated_at"`
 }
 
