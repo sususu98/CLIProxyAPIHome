@@ -26,7 +26,7 @@ COPY config.example.yaml /CLIProxyAPIHome/config.example.yaml
 
 WORKDIR /CLIProxyAPIHome
 
-EXPOSE 8317
+EXPOSE 8327
 
 ENV TZ=Asia/Shanghai
 
