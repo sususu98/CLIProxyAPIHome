@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,29 +12,7 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
-	"gopkg.in/yaml.v3"
 )
-
-const defaultDisbandAuthDir = "~/.cli-proxy-api-home"
-
-type DisbandOptions struct {
-	ConfigPath string
-	AuthDir    string
-	Repository *Repository
-}
-
-type DisbandResult struct {
-	ConfigPath          string
-	AuthDir             string
-	ConfigBytes         int
-	AuthFiles           int
-	GeminiKeys          int
-	VertexKeys          int
-	CodexKeys           int
-	ClaudeKeys          int
-	OpenAICompatibility int
-}
 
 // CredentialConfigCounts reports how many auth-backed config entries were restored.
 type CredentialConfigCounts struct {
@@ -51,166 +28,45 @@ func ApplyCredentialConfigToRoot(root map[string]any, auths []*coreauth.Auth) Cr
 	if root == nil {
 		return CredentialConfigCounts{}
 	}
-	result := &DisbandResult{}
-	disbandApplyCredentialConfig(root, auths, result)
-	return CredentialConfigCounts{
-		GeminiKeys:          result.GeminiKeys,
-		VertexKeys:          result.VertexKeys,
-		CodexKeys:           result.CodexKeys,
-		ClaudeKeys:          result.ClaudeKeys,
-		OpenAICompatibility: result.OpenAICompatibility,
-	}
+	result := &CredentialConfigCounts{}
+	applyCredentialConfigToRoot(root, auths, result)
+	return *result
 }
 
-type disbandModelPair struct {
+type credentialModelPair struct {
 	Name     string
 	Alias    string
 	Thinking *registry.ThinkingSupport
 }
 
-type disbandOpenAICompatGroup struct {
+type credentialOpenAICompatGroup struct {
 	Config      appconfig.OpenAICompatibility
 	SeenEntry   map[string]struct{}
 	SortKey     string
 	FirstAuthID string
 }
 
-// Disband restores local files from the cluster database.
-func Disband(ctx context.Context, opts DisbandOptions) (*DisbandResult, error) {
-	// Keep validation before state changes so failures leave existing data intact.
-	if opts.Repository == nil {
-		return nil, fmt.Errorf("cluster disband repository is required")
-	}
-	ctx = contextOrBackground(ctx)
-
-	configPath := strings.TrimSpace(opts.ConfigPath)
-	if configPath == "" {
-		configPath = "config.yaml"
-	}
-
-	snapshot, errSnapshot := opts.Repository.LoadConfigSnapshot(ctx)
-	if errSnapshot != nil {
-		return nil, errSnapshot
-	}
-	root, errRoot := ConfigRootFromSnapshot(snapshot)
-	if errRoot != nil {
-		return nil, errRoot
-	}
-	if root == nil {
-		root = make(map[string]any)
-	}
-
-	auths, errAuths := opts.Repository.ListAuths(ctx)
-	if errAuths != nil {
-		return nil, errAuths
-	}
-	sort.Slice(auths, func(i, j int) bool {
-		left := ""
-		right := ""
-		if auths[i] != nil {
-			left = auths[i].ID
-		}
-		if auths[j] != nil {
-			right = auths[j].ID
-		}
-		return left < right
-	})
-
-	authDirValue := disbandAuthDirValue(root, auths, opts.AuthDir)
-	root["auth-dir"] = authDirValue
-
-	result := &DisbandResult{
-		ConfigPath: configPath,
-		AuthDir:    authDirValue,
-	}
-	disbandApplyCredentialConfig(root, auths, result)
-
-	if _, errNormalizeSecret := normalizeConfigRootSecrets(root); errNormalizeSecret != nil {
-		return nil, errNormalizeSecret
-	}
-
-	data, errMarshal := yaml.Marshal(root)
-	if errMarshal != nil {
-		return nil, errMarshal
-	}
-	if len(data) == 0 {
-		return nil, fmt.Errorf("restored config is empty")
-	}
-	if errWriteConfig := writeDisbandFile(configPath, data, 0o600); errWriteConfig != nil {
-		return nil, errWriteConfig
-	}
-	result.ConfigBytes = len(data)
-
-	resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(authDirValue)
-	if errResolveAuthDir != nil {
-		return nil, errResolveAuthDir
-	}
-	authFiles, errWriteAuthFiles := writeDisbandAuthFiles(auths, resolvedAuthDir)
-	if errWriteAuthFiles != nil {
-		return nil, errWriteAuthFiles
-	}
-	result.AuthFiles = authFiles
-	return result, nil
-}
-
-// disbandAuthDirValue handles a disband auth dir value.
-func disbandAuthDirValue(root map[string]any, auths []*coreauth.Auth, explicit string) string {
-	if value := strings.TrimSpace(explicit); value != "" {
-		return value
-	}
-	if rawValue, ok := root["auth-dir"]; ok {
-		if value := strings.TrimSpace(stringFromAny(rawValue)); value != "" {
-			return value
-		}
-	}
-	if inferred := inferDisbandAuthDir(auths); inferred != "" {
-		return inferred
-	}
-	return defaultDisbandAuthDir
-}
-
-// inferDisbandAuthDir infers a disband auth dir.
-func inferDisbandAuthDir(auths []*coreauth.Auth) string {
-	for _, auth := range auths {
-		if !isDisbandOAuthAuth(auth) {
-			continue
-		}
-		for _, pathValue := range []string{authAttribute(auth, "path"), authAttribute(auth, "source")} {
-			pathValue = strings.TrimSpace(pathValue)
-			if pathValue == "" || strings.HasPrefix(pathValue, "config:") {
-				continue
-			}
-			dir := filepath.Dir(pathValue)
-			if dir == "." || dir == "" {
-				continue
-			}
-			return dir
-		}
-	}
-	return ""
-}
-
-// disbandApplyCredentialConfig handles a disband apply credential config.
-func disbandApplyCredentialConfig(root map[string]any, auths []*coreauth.Auth, result *DisbandResult) {
+// applyCredentialConfigToRoot restores auth-backed credential config values.
+func applyCredentialConfigToRoot(root map[string]any, auths []*coreauth.Auth, result *CredentialConfigCounts) {
 	// Normalize source data before building the derived payload.
 	geminiKeys := make([]appconfig.GeminiKey, 0)
 	vertexKeys := make([]appconfig.VertexCompatKey, 0)
 	codexKeys := make([]appconfig.CodexKey, 0)
 	claudeKeys := make([]appconfig.ClaudeKey, 0)
-	openAICompat := make(map[string]*disbandOpenAICompatGroup)
+	openAICompat := make(map[string]*credentialOpenAICompatGroup)
 
 	for _, auth := range auths {
-		switch disbandConfigAuthKind(auth) {
+		switch credentialConfigAuthKind(auth) {
 		case "gemini-api-key":
-			geminiKeys = append(geminiKeys, disbandGeminiKey(auth))
+			geminiKeys = append(geminiKeys, credentialGeminiKey(auth))
 		case "vertex-api-key":
-			vertexKeys = append(vertexKeys, disbandVertexKey(auth))
+			vertexKeys = append(vertexKeys, credentialVertexKey(auth))
 		case "codex-api-key":
-			codexKeys = append(codexKeys, disbandCodexKey(auth))
+			codexKeys = append(codexKeys, credentialCodexKey(auth))
 		case "claude-api-key":
-			claudeKeys = append(claudeKeys, disbandClaudeKey(auth))
+			claudeKeys = append(claudeKeys, credentialClaudeKey(auth))
 		case "openai-compatibility":
-			disbandAddOpenAICompat(openAICompat, auth)
+			addOpenAICompatCredential(openAICompat, auth)
 		}
 	}
 
@@ -231,7 +87,7 @@ func disbandApplyCredentialConfig(root map[string]any, auths []*coreauth.Auth, r
 		result.ClaudeKeys = len(claudeKeys)
 	}
 	if len(openAICompat) > 0 {
-		groups := make([]*disbandOpenAICompatGroup, 0, len(openAICompat))
+		groups := make([]*credentialOpenAICompatGroup, 0, len(openAICompat))
 		for _, group := range openAICompat {
 			groups = append(groups, group)
 		}
@@ -250,8 +106,8 @@ func disbandApplyCredentialConfig(root map[string]any, auths []*coreauth.Auth, r
 	}
 }
 
-// disbandConfigAuthKind handles a disband config auth kind.
-func disbandConfigAuthKind(auth *coreauth.Auth) string {
+// credentialConfigAuthKind returns the config key represented by an auth record.
+func credentialConfigAuthKind(auth *coreauth.Auth) string {
 	if auth == nil || auth.Attributes == nil {
 		return ""
 	}
@@ -265,15 +121,15 @@ func disbandConfigAuthKind(auth *coreauth.Auth) string {
 		return "codex-api-key"
 	case auth.Provider == "claude" && strings.HasPrefix(source, "config:claude["):
 		return "claude-api-key"
-	case isDisbandOpenAICompatAuth(auth):
+	case isOpenAICompatConfigAuth(auth):
 		return "openai-compatibility"
 	default:
 		return ""
 	}
 }
 
-// isDisbandOpenAICompatAuth reports whether disband open ai compat auth.
-func isDisbandOpenAICompatAuth(auth *coreauth.Auth) bool {
+// isOpenAICompatConfigAuth reports whether auth represents an OpenAI-compatible config entry.
+func isOpenAICompatConfigAuth(auth *coreauth.Auth) bool {
 	if auth == nil || auth.Attributes == nil || auth.Provider == "vertex" {
 		return false
 	}
@@ -284,68 +140,68 @@ func isDisbandOpenAICompatAuth(auth *coreauth.Auth) bool {
 	return strings.HasPrefix(strings.TrimSpace(attrs["source"]), "config:") && strings.TrimSpace(attrs["provider_key"]) != ""
 }
 
-// disbandGeminiKey handles a disband gemini key.
-func disbandGeminiKey(auth *coreauth.Auth) appconfig.GeminiKey {
+// credentialGeminiKey builds a Gemini key config from an auth record.
+func credentialGeminiKey(auth *coreauth.Auth) appconfig.GeminiKey {
 	return appconfig.GeminiKey{
 		APIKey:         authAttribute(auth, "api_key"),
-		Priority:       disbandPriority(auth),
+		Priority:       credentialPriority(auth),
 		Prefix:         strings.TrimSpace(auth.Prefix),
 		BaseURL:        authAttribute(auth, "base_url"),
 		ProxyURL:       strings.TrimSpace(auth.ProxyURL),
-		Models:         disbandGeminiModels(auth),
-		Headers:        disbandHeaders(auth),
-		ExcludedModels: disbandExcludedModels(auth),
-		DisableCooling: disbandDisableCooling(auth),
+		Models:         credentialGeminiModels(auth),
+		Headers:        credentialHeaders(auth),
+		ExcludedModels: credentialExcludedModels(auth),
+		DisableCooling: credentialDisableCooling(auth),
 	}
 }
 
-// disbandVertexKey handles a disband vertex key.
-func disbandVertexKey(auth *coreauth.Auth) appconfig.VertexCompatKey {
+// credentialVertexKey builds a Vertex key config from an auth record.
+func credentialVertexKey(auth *coreauth.Auth) appconfig.VertexCompatKey {
 	return appconfig.VertexCompatKey{
 		APIKey:         authAttribute(auth, "api_key"),
-		Priority:       disbandPriority(auth),
+		Priority:       credentialPriority(auth),
 		Prefix:         strings.TrimSpace(auth.Prefix),
 		BaseURL:        authAttribute(auth, "base_url"),
 		ProxyURL:       strings.TrimSpace(auth.ProxyURL),
-		Models:         disbandVertexModels(auth),
-		Headers:        disbandHeaders(auth),
-		ExcludedModels: disbandExcludedModels(auth),
+		Models:         credentialVertexModels(auth),
+		Headers:        credentialHeaders(auth),
+		ExcludedModels: credentialExcludedModels(auth),
 	}
 }
 
-// disbandCodexKey handles a disband codex key.
-func disbandCodexKey(auth *coreauth.Auth) appconfig.CodexKey {
+// credentialCodexKey builds a Codex key config from an auth record.
+func credentialCodexKey(auth *coreauth.Auth) appconfig.CodexKey {
 	return appconfig.CodexKey{
 		APIKey:         authAttribute(auth, "api_key"),
-		Priority:       disbandPriority(auth),
+		Priority:       credentialPriority(auth),
 		Prefix:         strings.TrimSpace(auth.Prefix),
 		BaseURL:        authAttribute(auth, "base_url"),
 		Websockets:     strings.EqualFold(authAttribute(auth, "websockets"), "true"),
 		ProxyURL:       strings.TrimSpace(auth.ProxyURL),
-		Models:         disbandCodexModels(auth),
-		Headers:        disbandHeaders(auth),
-		ExcludedModels: disbandExcludedModels(auth),
-		DisableCooling: disbandDisableCooling(auth),
+		Models:         credentialCodexModels(auth),
+		Headers:        credentialHeaders(auth),
+		ExcludedModels: credentialExcludedModels(auth),
+		DisableCooling: credentialDisableCooling(auth),
 	}
 }
 
-// disbandClaudeKey handles a disband claude key.
-func disbandClaudeKey(auth *coreauth.Auth) appconfig.ClaudeKey {
+// credentialClaudeKey builds a Claude key config from an auth record.
+func credentialClaudeKey(auth *coreauth.Auth) appconfig.ClaudeKey {
 	return appconfig.ClaudeKey{
 		APIKey:         authAttribute(auth, "api_key"),
-		Priority:       disbandPriority(auth),
+		Priority:       credentialPriority(auth),
 		Prefix:         strings.TrimSpace(auth.Prefix),
 		BaseURL:        authAttribute(auth, "base_url"),
 		ProxyURL:       strings.TrimSpace(auth.ProxyURL),
-		Models:         disbandClaudeModels(auth),
-		Headers:        disbandHeaders(auth),
-		ExcludedModels: disbandExcludedModels(auth),
-		DisableCooling: disbandDisableCooling(auth),
+		Models:         credentialClaudeModels(auth),
+		Headers:        credentialHeaders(auth),
+		ExcludedModels: credentialExcludedModels(auth),
+		DisableCooling: credentialDisableCooling(auth),
 	}
 }
 
-// disbandAddOpenAICompat handles a disband add open ai compat.
-func disbandAddOpenAICompat(groups map[string]*disbandOpenAICompatGroup, auth *coreauth.Auth) {
+// addOpenAICompatCredential adds an OpenAI-compatible auth record to grouped config.
+func addOpenAICompatCredential(groups map[string]*credentialOpenAICompatGroup, auth *coreauth.Auth) {
 	// Keep validation before state changes so failures leave existing data intact.
 	if auth == nil {
 		return
@@ -359,27 +215,27 @@ func disbandAddOpenAICompat(groups map[string]*disbandOpenAICompatGroup, auth *c
 	}
 	baseURL := authAttribute(auth, "base_url")
 	prefix := strings.TrimSpace(auth.Prefix)
-	priority := disbandPriority(auth)
-	headers := disbandHeaders(auth)
-	disableCooling := disbandDisableCooling(auth)
+	priority := credentialPriority(auth)
+	headers := credentialHeaders(auth)
+	disableCooling := credentialDisableCooling(auth)
 	groupKey := strings.Join([]string{
 		strings.ToLower(name),
 		baseURL,
 		prefix,
 		strconv.Itoa(priority),
-		disbandHeadersKey(headers),
+		credentialHeadersKey(headers),
 		strconv.FormatBool(disableCooling),
 	}, "\x00")
 
 	group := groups[groupKey]
 	if group == nil {
-		group = &disbandOpenAICompatGroup{
+		group = &credentialOpenAICompatGroup{
 			Config: appconfig.OpenAICompatibility{
 				Name:           name,
 				Priority:       priority,
 				Prefix:         prefix,
 				BaseURL:        baseURL,
-				Models:         disbandOpenAIModels(auth),
+				Models:         credentialOpenAIModels(auth),
 				Headers:        headers,
 				DisableCooling: disableCooling,
 			},
@@ -406,9 +262,9 @@ func disbandAddOpenAICompat(groups map[string]*disbandOpenAICompatGroup, auth *c
 	})
 }
 
-// disbandGeminiModels handles a disband gemini models.
-func disbandGeminiModels(auth *coreauth.Auth) []appconfig.GeminiModel {
-	pairs := disbandModelPairs(auth)
+// credentialGeminiModels builds Gemini model config from stored model metadata.
+func credentialGeminiModels(auth *coreauth.Auth) []appconfig.GeminiModel {
+	pairs := credentialModelPairs(auth)
 	out := make([]appconfig.GeminiModel, 0, len(pairs))
 	for _, pair := range pairs {
 		out = append(out, appconfig.GeminiModel{Name: pair.Name, Alias: pair.Alias})
@@ -416,9 +272,9 @@ func disbandGeminiModels(auth *coreauth.Auth) []appconfig.GeminiModel {
 	return out
 }
 
-// disbandVertexModels handles a disband vertex models.
-func disbandVertexModels(auth *coreauth.Auth) []appconfig.VertexCompatModel {
-	pairs := disbandModelPairs(auth)
+// credentialVertexModels builds Vertex model config from stored model metadata.
+func credentialVertexModels(auth *coreauth.Auth) []appconfig.VertexCompatModel {
+	pairs := credentialModelPairs(auth)
 	out := make([]appconfig.VertexCompatModel, 0, len(pairs))
 	for _, pair := range pairs {
 		out = append(out, appconfig.VertexCompatModel{Name: pair.Name, Alias: pair.Alias})
@@ -426,9 +282,9 @@ func disbandVertexModels(auth *coreauth.Auth) []appconfig.VertexCompatModel {
 	return out
 }
 
-// disbandCodexModels handles a disband codex models.
-func disbandCodexModels(auth *coreauth.Auth) []appconfig.CodexModel {
-	pairs := disbandModelPairs(auth)
+// credentialCodexModels builds Codex model config from stored model metadata.
+func credentialCodexModels(auth *coreauth.Auth) []appconfig.CodexModel {
+	pairs := credentialModelPairs(auth)
 	out := make([]appconfig.CodexModel, 0, len(pairs))
 	for _, pair := range pairs {
 		out = append(out, appconfig.CodexModel{Name: pair.Name, Alias: pair.Alias})
@@ -436,9 +292,9 @@ func disbandCodexModels(auth *coreauth.Auth) []appconfig.CodexModel {
 	return out
 }
 
-// disbandClaudeModels handles a disband claude models.
-func disbandClaudeModels(auth *coreauth.Auth) []appconfig.ClaudeModel {
-	pairs := disbandModelPairs(auth)
+// credentialClaudeModels builds Claude model config from stored model metadata.
+func credentialClaudeModels(auth *coreauth.Auth) []appconfig.ClaudeModel {
+	pairs := credentialModelPairs(auth)
 	out := make([]appconfig.ClaudeModel, 0, len(pairs))
 	for _, pair := range pairs {
 		out = append(out, appconfig.ClaudeModel{Name: pair.Name, Alias: pair.Alias})
@@ -446,9 +302,9 @@ func disbandClaudeModels(auth *coreauth.Auth) []appconfig.ClaudeModel {
 	return out
 }
 
-// disbandOpenAIModels handles a disband open ai models.
-func disbandOpenAIModels(auth *coreauth.Auth) []appconfig.OpenAICompatibilityModel {
-	pairs := disbandModelPairs(auth)
+// credentialOpenAIModels builds OpenAI-compatible model config from stored model metadata.
+func credentialOpenAIModels(auth *coreauth.Auth) []appconfig.OpenAICompatibilityModel {
+	pairs := credentialModelPairs(auth)
 	out := make([]appconfig.OpenAICompatibilityModel, 0, len(pairs))
 	for _, pair := range pairs {
 		out = append(out, appconfig.OpenAICompatibilityModel{Name: pair.Name, Alias: pair.Alias, Thinking: pair.Thinking})
@@ -456,8 +312,8 @@ func disbandOpenAIModels(auth *coreauth.Auth) []appconfig.OpenAICompatibilityMod
 	return out
 }
 
-// disbandModelPairs handles a disband model pairs.
-func disbandModelPairs(auth *coreauth.Auth) []disbandModelPair {
+// credentialModelPairs returns unique model name/alias pairs from auth metadata.
+func credentialModelPairs(auth *coreauth.Auth) []credentialModelPair {
 	// Normalize source data before building the derived payload.
 	if auth == nil || auth.Metadata == nil {
 		return nil
@@ -468,7 +324,7 @@ func disbandModelPairs(auth *coreauth.Auth) []disbandModelPair {
 		return nil
 	}
 
-	out := make([]disbandModelPair, 0, len(models))
+	out := make([]credentialModelPair, 0, len(models))
 	seen := make(map[string]struct{}, len(models))
 	for _, rawModel := range models {
 		modelMap, okMap := rawModel.(map[string]any)
@@ -494,10 +350,10 @@ func disbandModelPairs(auth *coreauth.Auth) []disbandModelPair {
 			continue
 		}
 		seen[key] = struct{}{}
-		out = append(out, disbandModelPair{
+		out = append(out, credentialModelPair{
 			Name:     name,
 			Alias:    alias,
-			Thinking: disbandThinking(modelMap["thinking"]),
+			Thinking: credentialThinking(modelMap["thinking"]),
 		})
 	}
 	return out
@@ -512,8 +368,8 @@ func isNonUserCodexBuiltin(modelMap map[string]any, alias string) bool {
 	return ok && !userDefined
 }
 
-// disbandThinking handles a disband thinking.
-func disbandThinking(value any) *registry.ThinkingSupport {
+// credentialThinking converts stored thinking metadata into config shape.
+func credentialThinking(value any) *registry.ThinkingSupport {
 	if value == nil {
 		return nil
 	}
@@ -531,8 +387,8 @@ func disbandThinking(value any) *registry.ThinkingSupport {
 	return &thinking
 }
 
-// disbandHeaders handles a disband headers.
-func disbandHeaders(auth *coreauth.Auth) map[string]string {
+// credentialHeaders restores custom headers from auth attributes.
+func credentialHeaders(auth *coreauth.Auth) map[string]string {
 	if auth == nil || len(auth.Attributes) == 0 {
 		return nil
 	}
@@ -554,8 +410,8 @@ func disbandHeaders(auth *coreauth.Auth) map[string]string {
 	return headers
 }
 
-// disbandHeadersKey handles a disband headers key.
-func disbandHeadersKey(headers map[string]string) string {
+// credentialHeadersKey returns a stable grouping key for custom headers.
+func credentialHeadersKey(headers map[string]string) string {
 	if len(headers) == 0 {
 		return ""
 	}
@@ -571,8 +427,8 @@ func disbandHeadersKey(headers map[string]string) string {
 	return strings.Join(parts, "\n")
 }
 
-// disbandPriority handles a disband priority.
-func disbandPriority(auth *coreauth.Auth) int {
+// credentialPriority restores the priority value from auth attributes.
+func credentialPriority(auth *coreauth.Auth) int {
 	priority := strings.TrimSpace(authAttribute(auth, "priority"))
 	if priority == "" {
 		return 0
@@ -584,8 +440,8 @@ func disbandPriority(auth *coreauth.Auth) int {
 	return value
 }
 
-// disbandDisableCooling handles a disband disable cooling.
-func disbandDisableCooling(auth *coreauth.Auth) bool {
+// credentialDisableCooling restores the disable-cooling value from auth metadata.
+func credentialDisableCooling(auth *coreauth.Auth) bool {
 	if auth == nil || auth.Metadata == nil {
 		return false
 	}
@@ -597,8 +453,8 @@ func disbandDisableCooling(auth *coreauth.Auth) bool {
 	return false
 }
 
-// disbandExcludedModels handles a disband excluded models.
-func disbandExcludedModels(auth *coreauth.Auth) []string {
+// credentialExcludedModels restores the excluded model list from auth attributes.
+func credentialExcludedModels(auth *coreauth.Auth) []string {
 	raw := strings.TrimSpace(authAttribute(auth, "excluded_models"))
 	if raw == "" {
 		return nil
@@ -629,17 +485,8 @@ func authAttribute(auth *coreauth.Auth, key string) string {
 	return strings.TrimSpace(auth.Attributes[key])
 }
 
-// writeDisbandAuthFiles writes a disband auth files.
-func writeDisbandAuthFiles(auths []*coreauth.Auth, authDir string) (int, error) {
-	return writeDisbandAuthFilesWithMode(auths, authDir, true)
-}
-
-// writeDisbandAuthFilesExclusive writes disband auth files without overwriting existing files.
-func writeDisbandAuthFilesExclusive(auths []*coreauth.Auth, authDir string) (int, error) {
-	return writeDisbandAuthFilesWithMode(auths, authDir, false)
-}
-
-func writeDisbandAuthFilesWithMode(auths []*coreauth.Auth, authDir string, allowOverwrite bool) (int, error) {
+// writeExportAuthFilesExclusive writes auth files without overwriting existing files.
+func writeExportAuthFilesExclusive(auths []*coreauth.Auth, authDir string) (int, error) {
 	// Normalize auth state before updating runtime indexes.
 	authDir = strings.TrimSpace(authDir)
 	if authDir == "" {
@@ -652,14 +499,14 @@ func writeDisbandAuthFilesWithMode(auths []*coreauth.Auth, authDir string, allow
 	count := 0
 	seen := make(map[string]struct{}, len(auths))
 	for _, auth := range auths {
-		if !isDisbandOAuthAuth(auth) {
+		if !isExportOAuthAuth(auth) {
 			continue
 		}
-		relName := disbandAuthFileName(auth)
+		relName := exportAuthFileName(auth)
 		if relName == "" {
 			continue
 		}
-		fullPath, errPath := disbandAuthFilePath(authDir, relName)
+		fullPath, errPath := exportAuthFilePath(authDir, relName)
 		if errPath != nil {
 			return count, errPath
 		}
@@ -680,22 +527,16 @@ func writeDisbandAuthFilesWithMode(auths []*coreauth.Auth, authDir string, allow
 			return count, errMarshal
 		}
 		raw = append(raw, '\n')
-		if allowOverwrite {
-			if errWrite := writeDisbandFile(fullPath, raw, 0o600); errWrite != nil {
-				return count, errWrite
-			}
-		} else {
-			if errWrite := writeExportFileExclusive(fullPath, relName, raw, 0o600); errWrite != nil {
-				return count, errWrite
-			}
+		if errWrite := writeExportFileExclusive(fullPath, relName, raw, 0o600); errWrite != nil {
+			return count, errWrite
 		}
 		count++
 	}
 	return count, nil
 }
 
-// isDisbandOAuthAuth reports whether disband o auth auth.
-func isDisbandOAuthAuth(auth *coreauth.Auth) bool {
+// isExportOAuthAuth reports whether an auth record should be exported as an auth file.
+func isExportOAuthAuth(auth *coreauth.Auth) bool {
 	if auth == nil || auth.Metadata == nil {
 		return false
 	}
@@ -717,15 +558,15 @@ func isDisbandOAuthAuth(auth *coreauth.Auth) bool {
 	return true
 }
 
-// disbandAuthFileName handles a disband auth file name.
-func disbandAuthFileName(auth *coreauth.Auth) string {
+// exportAuthFileName returns the relative auth file name used for export.
+func exportAuthFileName(auth *coreauth.Auth) string {
 	// Normalize auth state before updating runtime indexes.
 	if auth == nil {
 		return ""
 	}
 	if auth.Metadata != nil {
 		if name := strings.TrimSpace(stringFromAny(auth.Metadata["filename"])); name != "" {
-			return sanitizeDisbandRelativePath(name)
+			return sanitizeExportRelativePath(name)
 		}
 	}
 	for _, pathValue := range []string{authAttribute(auth, "path"), authAttribute(auth, "source")} {
@@ -733,25 +574,25 @@ func disbandAuthFileName(auth *coreauth.Auth) string {
 			continue
 		}
 		if baseName := filepath.Base(pathValue); baseName != "." && baseName != string(os.PathSeparator) {
-			return sanitizeDisbandRelativePath(baseName)
+			return sanitizeExportRelativePath(baseName)
 		}
 	}
 	if auth.Metadata != nil {
 		if uuidValue := strings.TrimSpace(stringFromAny(auth.Metadata["uuid"])); uuidValue != "" {
-			return sanitizeDisbandRelativePath(uuidValue + ".json")
+			return sanitizeExportRelativePath(uuidValue + ".json")
 		}
 	}
 	if authID := strings.TrimSpace(auth.ID); authID != "" {
 		if strings.HasSuffix(strings.ToLower(authID), ".json") {
-			return sanitizeDisbandRelativePath(filepath.Base(authID))
+			return sanitizeExportRelativePath(filepath.Base(authID))
 		}
-		return sanitizeDisbandRelativePath(authID + ".json")
+		return sanitizeExportRelativePath(authID + ".json")
 	}
 	return ""
 }
 
-// sanitizeDisbandRelativePath sanitizes a disband relative path.
-func sanitizeDisbandRelativePath(path string) string {
+// sanitizeExportRelativePath sanitizes a relative export path.
+func sanitizeExportRelativePath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return ""
@@ -769,8 +610,8 @@ func sanitizeDisbandRelativePath(path string) string {
 	return path
 }
 
-// disbandAuthFilePath handles a disband auth file path.
-func disbandAuthFilePath(authDir, relName string) (string, error) {
+// exportAuthFilePath resolves an auth file path under the export auth directory.
+func exportAuthFilePath(authDir, relName string) (string, error) {
 	baseDir := filepath.Clean(authDir)
 	fullPath := filepath.Clean(filepath.Join(baseDir, relName))
 	relPath, errRel := filepath.Rel(baseDir, fullPath)
@@ -781,17 +622,6 @@ func disbandAuthFilePath(authDir, relName string) (string, error) {
 		return "", fmt.Errorf("auth file path escapes auth-dir: %s", relName)
 	}
 	return fullPath, nil
-}
-
-// writeDisbandFile writes a disband file.
-func writeDisbandFile(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	if dir != "." && dir != "" {
-		if errMkdir := os.MkdirAll(dir, 0o700); errMkdir != nil {
-			return errMkdir
-		}
-	}
-	return os.WriteFile(path, data, perm)
 }
 
 // cloneAnyMap clones an any map.

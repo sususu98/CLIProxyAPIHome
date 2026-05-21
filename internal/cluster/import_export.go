@@ -11,6 +11,7 @@ import (
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
 	"gopkg.in/yaml.v3"
 )
@@ -42,6 +43,8 @@ type ExportStats struct {
 	ConfigBytes int
 	AuthFiles   int
 }
+
+const defaultExportAuthDirName = "~/.cli-proxy-api"
 
 var defaultImportTime = time.Unix(1, 0).UTC()
 
@@ -93,7 +96,10 @@ func ImportLocalState(ctx context.Context, opts ImportOptions) (ImportStats, err
 	if errRuntimeConfig != nil {
 		return stats, errRuntimeConfig
 	}
-	authDir := resolveImportAuthDir(configPath, cfg, opts.AuthDir)
+	authDir, errResolveAuthDir := resolveImportAuthDir(configPath, cfg, opts.AuthDir)
+	if errResolveAuthDir != nil {
+		return stats, errResolveAuthDir
+	}
 
 	if errImportConfig := importConfigRoot(ctx, opts.Repository, root, &stats); errImportConfig != nil {
 		return stats, errImportConfig
@@ -141,20 +147,20 @@ func ExportLocalState(ctx context.Context, opts ExportOptions) (ExportStats, err
 	}
 	authDirName := strings.TrimSpace(opts.AuthDirName)
 	if authDirName == "" {
-		authDirName = "auth"
+		authDirName = defaultExportAuthDirName
 	}
 	var errValidatePath error
 	configName, errValidatePath = validateExportRelativePath("ConfigName", configName)
 	if errValidatePath != nil {
 		return stats, errValidatePath
 	}
-	authDirName, errValidatePath = validateExportRelativePath("AuthDirName", authDirName)
-	if errValidatePath != nil {
-		return stats, errValidatePath
+	var errResolveExportAuthDir error
+	authDirName, authDir, errResolveExportAuthDir := resolveExportAuthDir(outputDir, authDirName)
+	if errResolveExportAuthDir != nil {
+		return stats, errResolveExportAuthDir
 	}
 
 	configPath := filepath.Join(outputDir, configName)
-	authDir := filepath.Join(outputDir, authDirName)
 	if errEnsureTargets := ensureExportTargetsAvailable(configPath, configName, authDir); errEnsureTargets != nil {
 		return stats, errEnsureTargets
 	}
@@ -205,7 +211,7 @@ func ExportLocalState(ctx context.Context, opts ExportOptions) (ExportStats, err
 	}
 	stats.ConfigBytes = len(data)
 
-	authFiles, errWriteAuthFiles := writeDisbandAuthFilesExclusive(auths, authDir)
+	authFiles, errWriteAuthFiles := writeExportAuthFilesExclusive(auths, authDir)
 	if errWriteAuthFiles != nil {
 		return stats, errWriteAuthFiles
 	}
@@ -220,6 +226,25 @@ func validateExportRelativePath(field string, value string) (string, error) {
 		return "", fmt.Errorf("invalid export %s %q: path must be a clean relative path within OutputDir", field, value)
 	}
 	return cleanValue, nil
+}
+
+func resolveExportAuthDir(outputDir string, authDirName string) (string, string, error) {
+	authDirName = strings.TrimSpace(authDirName)
+	if authDirName == "" {
+		authDirName = defaultExportAuthDirName
+	}
+	if filepath.IsAbs(authDirName) || strings.HasPrefix(authDirName, "~") {
+		resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(authDirName)
+		if errResolveAuthDir != nil {
+			return "", "", errResolveAuthDir
+		}
+		return authDirName, resolvedAuthDir, nil
+	}
+	cleanAuthDirName, errValidatePath := validateExportRelativePath("AuthDirName", authDirName)
+	if errValidatePath != nil {
+		return "", "", errValidatePath
+	}
+	return cleanAuthDirName, filepath.Join(outputDir, cleanAuthDirName), nil
 }
 
 func ensureExportTargetsAvailable(configPath string, configName string, authDir string) error {
@@ -456,20 +481,23 @@ func addImportAPIKeyStats(stats *ImportStats, apiKeyStats APIKeyUpsertStats) {
 	stats.Updated += apiKeyStats.Removed
 }
 
-func resolveImportAuthDir(configPath string, cfg *appconfig.Config, explicitAuthDir string) string {
+func resolveImportAuthDir(configPath string, cfg *appconfig.Config, explicitAuthDir string) (string, error) {
 	if authDir := strings.TrimSpace(explicitAuthDir); authDir != "" {
-		return authDir
+		return util.ResolveAuthDir(authDir)
 	}
 	authDir := ""
 	if cfg != nil {
 		authDir = strings.TrimSpace(cfg.AuthDir)
 	}
-	if authDir == "" || filepath.IsAbs(authDir) {
-		return authDir
+	if authDir == "" {
+		return "", nil
+	}
+	if filepath.IsAbs(authDir) || strings.HasPrefix(authDir, "~") {
+		return util.ResolveAuthDir(authDir)
 	}
 	configDir := filepath.Dir(configPath)
 	if configDir == "" || configDir == "." {
-		return authDir
+		return util.ResolveAuthDir(authDir)
 	}
-	return filepath.Join(configDir, authDir)
+	return util.ResolveAuthDir(filepath.Join(configDir, authDir))
 }

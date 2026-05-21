@@ -208,6 +208,52 @@ func TestExportLocalState_RefusesExistingTargets(t *testing.T) {
 	}
 }
 
+func TestExportLocalState_DefaultWritesConfigToCurrentDirAndAuthToHome(t *testing.T) {
+	rootDir := t.TempDir()
+	homeDir := filepath.Join(rootDir, "home")
+	workDir := filepath.Join(rootDir, "work")
+	if errMkdirAll := os.MkdirAll(workDir, 0o700); errMkdirAll != nil {
+		t.Fatal(errMkdirAll)
+	}
+	t.Setenv("HOME", homeDir)
+	t.Chdir(workDir)
+
+	db := openImportTestSQLite(t)
+	repo := NewRepository(db)
+	seedExportState(t, repo)
+
+	stats, errExport := ExportLocalState(context.Background(), ExportOptions{Repository: repo})
+	if errExport != nil {
+		t.Fatalf("ExportLocalState() error = %v", errExport)
+	}
+	if stats.AuthFiles != 1 {
+		t.Fatalf("ExportLocalState() AuthFiles = %d, want 1", stats.AuthFiles)
+	}
+	assertFileContains(t, filepath.Join(workDir, "config.yaml"), "auth-dir: ~/.cli-proxy-api")
+	assertFileExists(t, filepath.Join(homeDir, ".cli-proxy-api", "codex.json"))
+}
+
+func TestExportLocalState_CustomOutputDirWritesAuthsUnderOutputDir(t *testing.T) {
+	outputDir := t.TempDir()
+	db := openImportTestSQLite(t)
+	repo := NewRepository(db)
+	seedExportState(t, repo)
+
+	stats, errExport := ExportLocalState(context.Background(), ExportOptions{
+		OutputDir:   outputDir,
+		Repository:  repo,
+		AuthDirName: "auths",
+	})
+	if errExport != nil {
+		t.Fatalf("ExportLocalState() error = %v", errExport)
+	}
+	if stats.AuthFiles != 1 {
+		t.Fatalf("ExportLocalState() AuthFiles = %d, want 1", stats.AuthFiles)
+	}
+	assertFileContains(t, filepath.Join(outputDir, "config.yaml"), "auth-dir: auths")
+	assertFileExists(t, filepath.Join(outputDir, "auths", "codex.json"))
+}
+
 func openImportTestSQLite(t *testing.T) *gorm.DB {
 	t.Helper()
 
@@ -235,6 +281,53 @@ func writeFile(t *testing.T, path string, payload string) {
 
 	if errWrite := os.WriteFile(path, []byte(payload), 0o600); errWrite != nil {
 		t.Fatalf("write %s: %v", path, errWrite)
+	}
+}
+
+func seedExportState(t *testing.T, repo *Repository) {
+	t.Helper()
+
+	ctx := context.Background()
+	if errUpsert := repo.UpsertConfigValue(ctx, "port", 8327); errUpsert != nil {
+		t.Fatal(errUpsert)
+	}
+	auth := &coreauth.Auth{
+		ID:       "codex-auth",
+		Index:    "codex-auth",
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		Metadata: map[string]any{
+			"type":     "codex",
+			"filename": "codex.json",
+			"token":    "test-token",
+		},
+	}
+	if _, _, errUpsertAuth := repo.UpsertAuthWithResult(ctx, auth, "upsert"); errUpsertAuth != nil {
+		t.Fatal(errUpsertAuth)
+	}
+}
+
+func assertFileContains(t *testing.T, path string, want string) {
+	t.Helper()
+
+	raw, errRead := os.ReadFile(path)
+	if errRead != nil {
+		t.Fatalf("read %s: %v", path, errRead)
+	}
+	if !strings.Contains(string(raw), want) {
+		t.Fatalf("%s does not contain %q:\n%s", path, want, string(raw))
+	}
+}
+
+func assertFileExists(t *testing.T, path string) {
+	t.Helper()
+
+	info, errStat := os.Stat(path)
+	if errStat != nil {
+		t.Fatalf("stat %s: %v", path, errStat)
+	}
+	if info.IsDir() {
+		t.Fatalf("%s is a directory, want file", path)
 	}
 }
 

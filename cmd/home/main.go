@@ -59,7 +59,6 @@ func run() int {
 	var exportState bool
 	var exportDir string
 	var authDir string
-	var disbandCluster bool
 	flag.StringVar(&configPath, "config", "config.yaml", "Config file path")
 	flag.StringVar(&addr, "addr", "", "Override RESP listen address (host:port)")
 	flag.StringVar(&sqlitePath, "sqlite-path", "", "SQLite database path")
@@ -67,7 +66,6 @@ func run() int {
 	flag.BoolVar(&exportState, "export", false, "Export config and auth files from database, then exit")
 	flag.StringVar(&exportDir, "export-dir", "", "Override output directory used by export")
 	flag.StringVar(&authDir, "auth-dir", "", "Override auth directory used by import")
-	flag.BoolVar(&disbandCluster, "disband-cluster", false, "Restore config and auth files from cluster database, then exit")
 	flag.Parse()
 	if importState && exportState {
 		log.Errorf("only one of -import or -export can be used")
@@ -84,13 +82,6 @@ func run() int {
 	if errClusterCfg != nil {
 		log.Errorf("failed to load cluster config: %v", errClusterCfg)
 		return 1
-	}
-	if disbandCluster {
-		if !clusterExists {
-			log.Infof("cluster config not found; nothing to disband")
-			return 0
-		}
-		return runDisbandCluster(runCtx, clusterCfg, sqlitePath, configPath)
 	}
 
 	var cfg *config.Config
@@ -148,10 +139,7 @@ func run() int {
 		return 0
 	}
 	if exportState {
-		stats, errExport := cluster.ExportLocalState(runCtx, cluster.ExportOptions{
-			OutputDir:  exportDir,
-			Repository: repo,
-		})
+		stats, errExport := cluster.ExportLocalState(runCtx, exportOptionsForDir(exportDir, repo))
 		if errExport != nil {
 			log.Errorf("failed to export local state: %v", errExport)
 			return 1
@@ -600,86 +588,15 @@ func collectServeError(ch <-chan error, timeout time.Duration) error {
 	}
 }
 
-// runDisbandCluster runs a disband cluster.
-func runDisbandCluster(ctx context.Context, clusterCfg *cluster.Config, sqlitePath string, configPath string) int {
-	// Keep validation before state changes so failures leave existing data intact.
-	if clusterCfg == nil {
-		log.Errorf("failed to disband cluster: cluster config is nil")
-		return 1
+func exportOptionsForDir(exportDir string, repo *cluster.Repository) cluster.ExportOptions {
+	options := cluster.ExportOptions{
+		OutputDir:  exportDir,
+		Repository: repo,
 	}
-	clusterDB, _, errClusterOpen := openRuntimeDatabase(ctx, clusterCfg, true, sqlitePath)
-	if errClusterOpen != nil {
-		log.Errorf("failed to open cluster database: %v", errClusterOpen)
-		return 1
+	if strings.TrimSpace(exportDir) != "" {
+		options.AuthDirName = "auths"
 	}
-	sqlDB, errSQLDB := clusterDB.DB()
-	if errSQLDB != nil {
-		log.Errorf("failed to get cluster sql db: %v", errSQLDB)
-		return 1
-	}
-	defer func() {
-		if errCloseSQL := sqlDB.Close(); errCloseSQL != nil {
-			log.Warnf("failed to close cluster sql db: %v", errCloseSQL)
-		}
-	}()
-	if errMigrate := cluster.AutoMigrate(clusterDB); errMigrate != nil {
-		log.Errorf("failed to migrate cluster database: %v", errMigrate)
-		return 1
-	}
-
-	result, errDisband := cluster.Disband(ctx, cluster.DisbandOptions{
-		ConfigPath: configPath,
-		Repository: cluster.NewRepository(clusterDB),
-	})
-	if errDisband != nil {
-		log.Errorf("failed to disband cluster: %v", errDisband)
-		return 1
-	}
-	clusterConfigBackup, errBackupClusterConfig := backupClusterConfig()
-	if errBackupClusterConfig != nil {
-		log.Errorf("failed to backup cluster config: %v", errBackupClusterConfig)
-		return 1
-	}
-	log.Infof(
-		"cluster disband restored config=%s bytes=%d auth_dir=%s auth_files=%d gemini_keys=%d vertex_keys=%d codex_keys=%d claude_keys=%d openai_compatibility=%d cluster_config_backup=%s",
-		result.ConfigPath,
-		result.ConfigBytes,
-		result.AuthDir,
-		result.AuthFiles,
-		result.GeminiKeys,
-		result.VertexKeys,
-		result.CodexKeys,
-		result.ClaudeKeys,
-		result.OpenAICompatibility,
-		clusterConfigBackup,
-	)
-	return 0
-}
-
-// backupClusterConfig handles a backup cluster config.
-func backupClusterConfig() (string, error) {
-	// Normalize source data before building the derived payload.
-	sourcePath := cluster.DefaultConfigPath
-	info, errStat := os.Stat(sourcePath)
-	if os.IsNotExist(errStat) {
-		return "", nil
-	}
-	if errStat != nil {
-		return "", errStat
-	}
-	if info.IsDir() {
-		return "", fmt.Errorf("%s is a directory", sourcePath)
-	}
-	backupPath := fmt.Sprintf("%s.bak-%s", sourcePath, time.Now().Format("2006-01-02"))
-	if _, errBackupStat := os.Stat(backupPath); errBackupStat == nil {
-		return "", fmt.Errorf("backup file already exists: %s", backupPath)
-	} else if !os.IsNotExist(errBackupStat) {
-		return "", errBackupStat
-	}
-	if errRename := os.Rename(sourcePath, backupPath); errRename != nil {
-		return "", errRename
-	}
-	return backupPath, nil
+	return options
 }
 
 // applyLogLevel applies a log level.

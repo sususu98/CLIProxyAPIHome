@@ -72,6 +72,30 @@ func TestResolveSQLitePath_UsesDefault(t *testing.T) {
 	}
 }
 
+func TestExportOptionsForDir_UsesDefaultAuthDirWithoutOutputDir(t *testing.T) {
+	t.Parallel()
+
+	opts := exportOptionsForDir("", nil)
+	if opts.OutputDir != "" {
+		t.Fatalf("OutputDir = %q, want empty", opts.OutputDir)
+	}
+	if opts.AuthDirName != "" {
+		t.Fatalf("AuthDirName = %q, want empty for backend default", opts.AuthDirName)
+	}
+}
+
+func TestExportOptionsForDir_UsesAuthsForExplicitOutputDir(t *testing.T) {
+	t.Parallel()
+
+	opts := exportOptionsForDir("out", nil)
+	if opts.OutputDir != "out" {
+		t.Fatalf("OutputDir = %q, want out", opts.OutputDir)
+	}
+	if opts.AuthDirName != "auths" {
+		t.Fatalf("AuthDirName = %q, want auths", opts.AuthDirName)
+	}
+}
+
 func TestResolveDatabaseNodeIP_RejectsClusterSQLiteWithoutExternalIP(t *testing.T) {
 	t.Parallel()
 
