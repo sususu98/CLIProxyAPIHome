@@ -401,6 +401,7 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 	engine := gin.New()
 	_ = engine.SetTrustedProxies(nil)
 	engine.Use(gin.Recovery())
+	engine.Use(corsMiddleware())
 
 	if clusterEnabled {
 		engine.GET("/management.html", serveManagementControlPanelFromRuntime(clusterOpt, configFilePath))
@@ -437,6 +438,22 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 		Handler:     handler,
 		AuthManager: authManager,
 	}, nil
+}
+
+// corsMiddleware returns a Gin middleware handler that adds CORS headers.
+func corsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "*")
+
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		c.Next()
+	}
 }
 
 // withBuildInfoHeaders applies the build info headers option.
