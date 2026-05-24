@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	latestReleaseURL       = "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest"
-	latestReleaseUserAgent = "CLIProxyAPI"
+	latestReleaseURL       = "https://api.github.com/repos/router-for-me/CLIProxyAPIHome/releases/latest"
+	latestReleaseUserAgent = "CLIProxyAPIHome"
 )
 
 type releaseInfo struct {

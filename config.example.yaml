@@ -130,9 +130,6 @@ routing:
   # How long session-to-auth bindings are retained. Default: 1h
   session-affinity-ttl: "1h"
 
-# When true, enable authentication for the WebSocket API (/v1/ws).
-ws-auth: false
-
 # When true, enable Gemini CLI internal endpoints (/v1internal:*).
 # Default is false for safety.
 enable-gemini-cli-endpoint: false
@@ -333,7 +330,7 @@ nonstream-keepalive-interval: 0
 
 # Global OAuth model name aliases (per channel)
 # These aliases rename model IDs for both model listing and request routing.
-# Supported channels: gemini-cli, vertex, aistudio, antigravity, claude, codex, kimi, xai.
+# Supported channels: gemini-cli, vertex, antigravity, claude, codex, kimi, xai.
 # NOTE: Aliases do not apply to gemini-api-key, codex-api-key, claude-api-key, openai-compatibility, vertex-api-key, or ampcode.
 # NOTE: Because aliases affect the merged /v1 model list and merged request routing, overlapping
 # client-visible names can become ambiguous across providers. /api/provider/{provider}/... helps
@@ -346,9 +343,6 @@ nonstream-keepalive-interval: 0
 #       alias: "g2.5p"                  # client-visible alias
 #       fork: true                      # when true, keep original and also add the alias as an extra model (default: false)
 #   vertex:
-#     - name: "gemini-2.5-pro"
-#       alias: "g2.5p"
-#   aistudio:
 #     - name: "gemini-2.5-pro"
 #       alias: "g2.5p"
 #   antigravity:
@@ -375,8 +369,6 @@ nonstream-keepalive-interval: 0
 #     - "*-preview"          # wildcard matching suffix (e.g. gemini-3-pro-preview)
 #     - "*flash*"            # wildcard matching substring (e.g. gemini-2.5-flash-lite)
 #   vertex:
-#     - "gemini-3-pro-preview"
-#   aistudio:
 #     - "gemini-3-pro-preview"
 #   antigravity:
 #     - "gemini-3-pro-preview"

@@ -18,7 +18,6 @@ type staticModelsJSON struct {
 	Gemini      []*ModelInfo `json:"gemini"`
 	Vertex      []*ModelInfo `json:"vertex"`
 	GeminiCLI   []*ModelInfo `json:"gemini-cli"`
-	AIStudio    []*ModelInfo `json:"aistudio"`
 	CodexFree   []*ModelInfo `json:"codex-free"`
 	CodexTeam   []*ModelInfo `json:"codex-team"`
 	CodexPlus   []*ModelInfo `json:"codex-plus"`
@@ -46,11 +45,6 @@ func GetGeminiVertexModels() []*ModelInfo {
 // GetGeminiCLIModels returns Gemini model definitions for the Gemini CLI.
 func GetGeminiCLIModels() []*ModelInfo {
 	return cloneModelInfos(getModels().GeminiCLI)
-}
-
-// GetAIStudioModels returns model definitions for AI Studio.
-func GetAIStudioModels() []*ModelInfo {
-	return cloneModelInfos(getModels().AIStudio)
 }
 
 // GetCodexFreeModels returns model definitions for the Codex free plan tier.
@@ -210,7 +204,6 @@ func cloneModelInfos(models []*ModelInfo) []*ModelInfo {
 //   - gemini
 //   - vertex
 //   - gemini-cli
-//   - aistudio
 //   - codex
 //   - kimi
 //   - antigravity
@@ -227,8 +220,6 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetGeminiVertexModels()
 	case "gemini-cli":
 		return GetGeminiCLIModels()
-	case "aistudio":
-		return GetAIStudioModels()
 	case "codex":
 		return GetCodexProModels()
 	case "kimi":
@@ -256,7 +247,6 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		data.Gemini,
 		data.Vertex,
 		data.GeminiCLI,
-		data.AIStudio,
 		data.CodexPro,
 		data.Kimi,
 		data.Antigravity,

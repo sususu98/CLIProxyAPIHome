@@ -189,9 +189,6 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 	case "gemini-cli":
 		models = registry.GetGeminiCLIModels()
 		models = applyExcludedModels(models, excluded)
-	case "aistudio":
-		models = registry.GetAIStudioModels()
-		models = applyExcludedModels(models, excluded)
 	case "antigravity":
 		models = registry.GetAntigravityModels()
 		models = applyExcludedModels(models, excluded)

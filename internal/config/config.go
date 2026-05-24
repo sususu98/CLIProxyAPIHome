@@ -95,9 +95,6 @@ type Config struct {
 	// Routing controls credential selection behavior.
 	Routing RoutingConfig `yaml:"routing" json:"routing"`
 
-	// WebsocketAuth enables or disables authentication for the WebSocket API.
-	WebsocketAuth bool `yaml:"ws-auth" json:"ws-auth"`
-
 	// AntigravitySignatureCacheEnabled controls whether signature cache validation is enabled for thinking blocks.
 	// When true (default), cached signatures are preferred and validated.
 	// When false, client signatures are used directly after normalization (bypass mode).
@@ -137,7 +134,7 @@ type Config struct {
 
 	// OAuthModelAlias defines global model name aliases for OAuth/file-backed auth channels.
 	// These aliases affect both model listing and model routing for supported channels:
-	// gemini-cli, vertex, aistudio, antigravity, claude, codex, kimi, xai.
+	// gemini-cli, vertex, antigravity, claude, codex, kimi, xai.
 	//
 	// NOTE: This does not apply to existing per-credential model alias features under:
 	// gemini-api-key, codex-api-key, claude-api-key, openai-compatibility, vertex-api-key, and ampcode.

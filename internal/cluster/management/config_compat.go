@@ -258,21 +258,6 @@ func (h *Handler) PutRequestLog(c *gin.Context) {
 	h.updateBoolConfigField(c, "request-log", func(cfg *appconfig.Config, value bool) { cfg.RequestLog = value })
 }
 
-// GetWebsocketAuth returns a websocket auth.
-func (h *Handler) GetWebsocketAuth(c *gin.Context) {
-	_, cancel, cfg, ok := h.loadRuntimeConfig(c)
-	if !ok {
-		return
-	}
-	defer cancel()
-	c.JSON(http.StatusOK, gin.H{"ws-auth": cfg.WebsocketAuth})
-}
-
-// PutWebsocketAuth replaces a websocket auth.
-func (h *Handler) PutWebsocketAuth(c *gin.Context) {
-	h.updateBoolConfigField(c, "ws-auth", func(cfg *appconfig.Config, value bool) { cfg.WebsocketAuth = value })
-}
-
 // GetRequestRetry returns a request retry.
 func (h *Handler) GetRequestRetry(c *gin.Context) {
 	_, cancel, cfg, ok := h.loadRuntimeConfig(c)
