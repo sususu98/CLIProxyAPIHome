@@ -41,8 +41,11 @@ func handleRequestLog(ctx context.Context, env dispatch.Env, args []string) disp
 		return dispatch.Err("missing request_log")
 	}
 
+	requestID := strings.TrimSpace(gjson.Get(payload, "request_id").String())
 	headersObj := gjson.Get(payload, "headers")
-	requestID := strings.TrimSpace(extractHeaderValue(headersObj, "x-request-id"))
+	if requestID == "" {
+		requestID = strings.TrimSpace(extractHeaderValue(headersObj, "x-request-id"))
+	}
 	if requestID == "" {
 		requestID = strings.TrimSpace(extractHeaderValue(headersObj, "x-cpa-request-id"))
 	}
