@@ -93,6 +93,14 @@ func (a *RuntimeAdapter) StoreUsagePayload(ctx context.Context, payload string) 
 	return errAppend
 }
 
+// AllowedAuthIDsForAPIKey returns auth IDs allowed by API-key channel bindings.
+func (a *RuntimeAdapter) AllowedAuthIDsForAPIKey(ctx context.Context, apiKey string) ([]string, error) {
+	if !a.Enabled() {
+		return nil, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.AllowedAuthIDsForAPIKey(ctx, apiKey)
+}
+
 // List returns the available entries.
 func (a *RuntimeAdapter) List(ctx context.Context) ([]*coreauth.Auth, error) {
 	if !a.Enabled() {

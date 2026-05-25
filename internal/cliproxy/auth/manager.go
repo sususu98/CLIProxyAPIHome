@@ -465,6 +465,7 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 
 	routeModel := strings.TrimSpace(requestedModel)
 	opts = ensureRequestedModelMetadata(opts, routeModel)
+	allowedAuthIDs := allowedAuthIDsFromOptions(opts)
 
 	if m.useSchedulerFastPath() {
 		tried := make(map[string]struct{})
@@ -524,6 +525,9 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 				continue
 			}
 			if _, used := tried[candidate.ID]; used {
+				continue
+			}
+			if !authAllowedByID(candidate.ID, allowedAuthIDs) {
 				continue
 			}
 			providerKey := strings.ToLower(strings.TrimSpace(candidate.Provider))

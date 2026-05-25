@@ -9,6 +9,9 @@ import (
 // It is used to preserve the original model string across prefix rewriting / alias resolution.
 const RequestedModelMetadataKey = "requested_model"
 
+// AllowedAuthIDsMetadataKey stores the dispatch allowlist in Options.Metadata.
+const AllowedAuthIDsMetadataKey = "allowed_auth_ids"
+
 // Options carries optional request hints used during dispatch selection.
 //
 // This is a deliberately small subset of CPA's execution options: CLIProxyAPIHome only needs

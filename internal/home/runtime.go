@@ -64,6 +64,10 @@ type clusterUsageStore interface {
 	StoreUsagePayload(ctx context.Context, payload string) error
 }
 
+type channelScopedAuthStore interface {
+	AllowedAuthIDsForAPIKey(ctx context.Context, apiKey string) ([]string, error)
+}
+
 // NewRuntime creates a new runtime.
 func NewRuntime(cfg *config.Config) (*Runtime, error) {
 	// Keep validation before state changes so failures leave existing data intact.
@@ -450,6 +454,32 @@ type DispatchResult struct {
 
 // Dispatch processes dispatch.
 func (r *Runtime) Dispatch(ctx context.Context, reqModel string, headers http.Header) (*DispatchResult, error) {
+	opts := coreauth.Options{}
+	if headers != nil {
+		opts.Headers = headers.Clone()
+	}
+	return r.dispatchWithOptions(ctx, reqModel, opts)
+}
+
+// DispatchForAPIKey processes dispatch with API-key channel restrictions.
+func (r *Runtime) DispatchForAPIKey(ctx context.Context, reqModel string, headers http.Header, apiKey string) (*DispatchResult, error) {
+	opts := coreauth.Options{}
+	if headers != nil {
+		opts.Headers = headers.Clone()
+	}
+	allowedAuthIDs, errAllowed := r.allowedAuthIDsForAPIKey(ctx, apiKey)
+	if errAllowed != nil {
+		return nil, errAllowed
+	}
+	if allowedAuthIDs != nil {
+		opts.Metadata = map[string]any{
+			coreauth.AllowedAuthIDsMetadataKey: allowedAuthIDs,
+		}
+	}
+	return r.dispatchWithOptions(ctx, reqModel, opts)
+}
+
+func (r *Runtime) dispatchWithOptions(ctx context.Context, reqModel string, opts coreauth.Options) (*DispatchResult, error) {
 	// Build the candidate view before applying availability rules.
 	if r == nil || r.coreManager == nil {
 		return nil, fmt.Errorf("home runtime: core manager is nil")
@@ -474,10 +504,6 @@ func (r *Runtime) Dispatch(ctx context.Context, reqModel string, headers http.He
 		}
 	}
 
-	opts := coreauth.Options{}
-	if headers != nil {
-		opts.Headers = headers.Clone()
-	}
 	decision, errDispatch := r.coreManager.Dispatch(ctx, providers, reqModel, opts)
 	if errDispatch != nil {
 		return nil, errDispatch
@@ -509,6 +535,18 @@ func (r *Runtime) Dispatch(ctx context.Context, reqModel string, headers http.He
 		Provider:    decision.Provider,
 		Auth:        auth.Clone(),
 	}, nil
+}
+
+func (r *Runtime) allowedAuthIDsForAPIKey(ctx context.Context, apiKey string) ([]string, error) {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" || r == nil || r.clusterAdapter == nil {
+		return nil, nil
+	}
+	store, ok := r.clusterAdapter.(channelScopedAuthStore)
+	if !ok || store == nil {
+		return nil, nil
+	}
+	return store.AllowedAuthIDsForAPIKey(ctx, apiKey)
 }
 
 // supportsRequestedModel handles a supports requested model.

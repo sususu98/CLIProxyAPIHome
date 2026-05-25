@@ -80,10 +80,13 @@ func AutoMigrate(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("database connection is nil")
 	}
-	if errMigrate := db.AutoMigrate(&AuthRecord{}, &ConfigRecord{}, &APIKeyRecord{}, &ClusterNodeRecord{}, &ClusterEventRecord{}, &UsageRecord{}, &OAuthSessionRecord{}, &CertificateRecord{}); errMigrate != nil {
+	if errMigrate := db.AutoMigrate(&AuthRecord{}, &ConfigRecord{}, &APIKeyRecord{}, &ChannelGroupRecord{}, &ChannelGroupDetailRecord{}, &ClusterNodeRecord{}, &ClusterEventRecord{}, &UsageRecord{}, &OAuthSessionRecord{}, &CertificateRecord{}); errMigrate != nil {
 		return errMigrate
 	}
 	if errMigrate := migrateCertificateFingerprints(db); errMigrate != nil {
+		return errMigrate
+	}
+	if errMigrate := migrateAPIKeyChannels(db); errMigrate != nil {
 		return errMigrate
 	}
 	return migrateLegacyAPIKeys(db)

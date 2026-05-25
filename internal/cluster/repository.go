@@ -33,6 +33,7 @@ const (
 
 type APIKeyUpsertStats struct {
 	Created   int
+	Updated   int
 	Unchanged int
 	Restored  int
 	Removed   int
@@ -40,7 +41,7 @@ type APIKeyUpsertStats struct {
 
 // Changed reports whether api key rows were mutated.
 func (s APIKeyUpsertStats) Changed() bool {
-	return s.Created != 0 || s.Restored != 0 || s.Removed != 0
+	return s.Created != 0 || s.Updated != 0 || s.Restored != 0 || s.Removed != 0
 }
 
 // NewRepository creates a new repository.
@@ -543,7 +544,7 @@ func replaceAPIKeysTxWithStats(ctx context.Context, tx *gorm.DB, keys []string) 
 			}
 			continue
 		}
-		if errCreate := tx.WithContext(contextOrBackground(ctx)).Create(&APIKeyRecord{APIKey: key}).Error; errCreate != nil {
+		if errCreate := tx.WithContext(contextOrBackground(ctx)).Create(&APIKeyRecord{APIKey: key, Channels: emptyAPIKeyChannelsJSON()}).Error; errCreate != nil {
 			return APIKeyUpsertStats{}, errCreate
 		}
 		stats.Created++
@@ -581,7 +582,7 @@ func upsertAPIKeysTxWithStats(ctx context.Context, tx *gorm.DB, keys []string) (
 		errFirst := tx.WithContext(contextOrBackground(ctx)).Unscoped().Where("api_key = ?", key).First(&record).Error
 		switch {
 		case errors.Is(errFirst, gorm.ErrRecordNotFound):
-			if errCreate := tx.WithContext(contextOrBackground(ctx)).Create(&APIKeyRecord{APIKey: key}).Error; errCreate != nil {
+			if errCreate := tx.WithContext(contextOrBackground(ctx)).Create(&APIKeyRecord{APIKey: key, Channels: emptyAPIKeyChannelsJSON()}).Error; errCreate != nil {
 				return APIKeyUpsertStats{}, errCreate
 			}
 			stats.Created++
@@ -693,6 +694,8 @@ func apiKeyStatsResult(stats APIKeyUpsertStats) UpsertResult {
 		return UpsertResultCreated
 	case stats.Restored != 0:
 		return UpsertResultRestored
+	case stats.Updated != 0:
+		return UpsertResultUpdated
 	case stats.Removed != 0:
 		return UpsertResultUpdated
 	default:

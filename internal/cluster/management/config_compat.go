@@ -412,29 +412,53 @@ func (h *Handler) PutSwitchPreviewModel(c *gin.Context) {
 
 // GetAPIKeys returns an api keys.
 func (h *Handler) GetAPIKeys(c *gin.Context) {
-	_, cancel, cfg, ok := h.loadRuntimeConfig(c)
-	if !ok {
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	entries, errEntries := h.repo.ListAPIKeyEntries(ctx)
+	if errEntries != nil {
+		respondError(c, http.StatusInternalServerError, "api_keys_load_failed", errEntries)
 		return
 	}
-	defer cancel()
-	c.JSON(http.StatusOK, gin.H{"api-keys": cfg.APIKeys})
+	c.JSON(http.StatusOK, apiKeyEntriesResponse(entries))
 }
 
 // PutAPIKeys replaces an api keys.
 func (h *Handler) PutAPIKeys(c *gin.Context) {
-	h.putStringList(c, "api-keys", func(cfg *appconfig.Config, values []string) {
-		cfg.APIKeys = append([]string(nil), values...)
-	})
+	data, errData := c.GetRawData()
+	if errData != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
+		return
+	}
+	entries, errEntries := decodeAPIKeyEntryUpdates(data)
+	if errEntries != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	if _, errReplace := h.repo.ReplaceAPIKeyEntries(ctx, entries); errReplace != nil {
+		respondError(c, http.StatusInternalServerError, "write_failed", errReplace)
+		return
+	}
+	if errRefresh := h.refreshConfig(ctx); errRefresh != nil {
+		respondError(c, http.StatusInternalServerError, "reload_failed", errRefresh)
+		return
+	}
+	respondOK(c)
 }
 
 // PatchAPIKeys applies a partial update to an api keys.
 func (h *Handler) PatchAPIKeys(c *gin.Context) {
-	h.patchStringList(c, "api-keys", func(cfg *appconfig.Config) *[]string { return &cfg.APIKeys })
+	if errPatch := h.patchAPIKeyEntries(c); errPatch != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": errPatch.Error()})
+	}
 }
 
 // DeleteAPIKeys deletes an api keys.
 func (h *Handler) DeleteAPIKeys(c *gin.Context) {
-	h.deleteFromStringList(c, "api-keys", func(cfg *appconfig.Config) *[]string { return &cfg.APIKeys })
+	if errDelete := h.deleteAPIKeyEntry(c); errDelete != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": errDelete.Error()})
+	}
 }
 
 // putStringList replaces a string list.

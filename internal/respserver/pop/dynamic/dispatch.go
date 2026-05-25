@@ -122,16 +122,17 @@ func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*hom
 		return nil, "", &reply
 	}
 
-	result, errDispatch := env.Runtime.Dispatch(ctx, model, headers)
+	userAPIKey := ""
+	if authRes != nil {
+		userAPIKey = authRes.Principal
+	}
+
+	result, errDispatch := env.Runtime.DispatchForAPIKey(ctx, model, headers, userAPIKey)
 	if errDispatch != nil {
 		reply := dispatch.BulkString([]byte(buildErrorJSON(errDispatch.Error())))
 		return nil, "", &reply
 	}
 
-	userAPIKey := ""
-	if authRes != nil {
-		userAPIKey = authRes.Principal
-	}
 	return result, userAPIKey, nil
 }
 

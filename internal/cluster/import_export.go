@@ -476,6 +476,7 @@ func addImportResult(stats *ImportStats, result UpsertResult) {
 
 func addImportAPIKeyStats(stats *ImportStats, apiKeyStats APIKeyUpsertStats) {
 	stats.Created += apiKeyStats.Created
+	stats.Updated += apiKeyStats.Updated
 	stats.Unchanged += apiKeyStats.Unchanged
 	stats.Restored += apiKeyStats.Restored
 	stats.Updated += apiKeyStats.Removed
