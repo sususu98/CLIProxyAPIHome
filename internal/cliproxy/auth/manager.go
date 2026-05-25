@@ -466,6 +466,11 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 	routeModel := strings.TrimSpace(requestedModel)
 	opts = ensureRequestedModelMetadata(opts, routeModel)
 	allowedAuthIDs := allowedAuthIDsFromOptions(opts)
+	allowedModelIDs := allowedModelIDsFromOptions(opts)
+	routeKey := canonicalModelKey(routeModel)
+	if !modelAllowedByID(routeKey, allowedModelIDs) {
+		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+	}
 
 	if m.useSchedulerFastPath() {
 		tried := make(map[string]struct{})
@@ -512,7 +517,6 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 	if len(normalizedProviders) == 1 {
 		providerForSelector = normalizedProviders[0]
 	}
-	routeKey := canonicalModelKey(routeModel)
 	registryRef := registry.GetGlobalRegistry()
 
 	tried := make(map[string]struct{})

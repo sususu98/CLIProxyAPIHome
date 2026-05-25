@@ -101,6 +101,22 @@ func (a *RuntimeAdapter) AllowedAuthIDsForAPIKey(ctx context.Context, apiKey str
 	return a.repo.AllowedAuthIDsForAPIKey(ctx, apiKey)
 }
 
+// AllowedDispatchIDsForAPIKey returns auth and model IDs allowed by API-key bindings.
+func (a *RuntimeAdapter) AllowedDispatchIDsForAPIKey(ctx context.Context, apiKey string) ([]string, []string, error) {
+	if !a.Enabled() {
+		return nil, nil, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.AllowedDispatchIDsForAPIKey(ctx, apiKey)
+}
+
+// AllowedModelIDsForAPIKey returns model IDs allowed by API-key model group bindings.
+func (a *RuntimeAdapter) AllowedModelIDsForAPIKey(ctx context.Context, apiKey string) ([]string, error) {
+	if !a.Enabled() {
+		return nil, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.AllowedModelIDsForAPIKey(ctx, apiKey)
+}
+
 // List returns the available entries.
 func (a *RuntimeAdapter) List(ctx context.Context) ([]*coreauth.Auth, error) {
 	if !a.Enabled() {

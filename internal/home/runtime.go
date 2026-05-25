@@ -68,6 +68,14 @@ type channelScopedAuthStore interface {
 	AllowedAuthIDsForAPIKey(ctx context.Context, apiKey string) ([]string, error)
 }
 
+type modelScopedAuthStore interface {
+	AllowedModelIDsForAPIKey(ctx context.Context, apiKey string) ([]string, error)
+}
+
+type apiKeyScopedDispatchStore interface {
+	AllowedDispatchIDsForAPIKey(ctx context.Context, apiKey string) ([]string, []string, error)
+}
+
 // NewRuntime creates a new runtime.
 func NewRuntime(cfg *config.Config) (*Runtime, error) {
 	// Keep validation before state changes so failures leave existing data intact.
@@ -467,14 +475,19 @@ func (r *Runtime) DispatchForAPIKey(ctx context.Context, reqModel string, header
 	if headers != nil {
 		opts.Headers = headers.Clone()
 	}
-	allowedAuthIDs, errAllowed := r.allowedAuthIDsForAPIKey(ctx, apiKey)
+	allowedAuthIDs, allowedModelIDs, errAllowed := r.allowedDispatchIDsForAPIKey(ctx, apiKey)
 	if errAllowed != nil {
 		return nil, errAllowed
 	}
+	metadata := make(map[string]any)
 	if allowedAuthIDs != nil {
-		opts.Metadata = map[string]any{
-			coreauth.AllowedAuthIDsMetadataKey: allowedAuthIDs,
-		}
+		metadata[coreauth.AllowedAuthIDsMetadataKey] = allowedAuthIDs
+	}
+	if allowedModelIDs != nil {
+		metadata[coreauth.AllowedModelIDsMetadataKey] = allowedModelIDs
+	}
+	if len(metadata) > 0 {
+		opts.Metadata = metadata
 	}
 	return r.dispatchWithOptions(ctx, reqModel, opts)
 }
@@ -547,6 +560,30 @@ func (r *Runtime) allowedAuthIDsForAPIKey(ctx context.Context, apiKey string) ([
 		return nil, nil
 	}
 	return store.AllowedAuthIDsForAPIKey(ctx, apiKey)
+}
+
+func (r *Runtime) allowedDispatchIDsForAPIKey(ctx context.Context, apiKey string) ([]string, []string, error) {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" || r == nil || r.clusterAdapter == nil {
+		return nil, nil, nil
+	}
+	if store, ok := r.clusterAdapter.(apiKeyScopedDispatchStore); ok && store != nil {
+		return store.AllowedDispatchIDsForAPIKey(ctx, apiKey)
+	}
+
+	allowedAuthIDs, errAuthIDs := r.allowedAuthIDsForAPIKey(ctx, apiKey)
+	if errAuthIDs != nil {
+		return nil, nil, errAuthIDs
+	}
+	var allowedModelIDs []string
+	if store, ok := r.clusterAdapter.(modelScopedAuthStore); ok && store != nil {
+		modelIDs, errModelIDs := store.AllowedModelIDsForAPIKey(ctx, apiKey)
+		if errModelIDs != nil {
+			return nil, nil, errModelIDs
+		}
+		allowedModelIDs = modelIDs
+	}
+	return allowedAuthIDs, allowedModelIDs, nil
 }
 
 // supportsRequestedModel handles a supports requested model.

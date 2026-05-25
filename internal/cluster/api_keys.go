@@ -13,16 +13,18 @@ import (
 )
 
 type APIKeyEntry struct {
-	APIKey   string
-	Channels []uint
+	APIKey      string
+	Channels    []uint
+	ModelGroups []uint
 }
 
 type APIKeyEntryUpdate struct {
-	APIKey   string
-	Channels *[]uint
+	APIKey      string
+	Channels    *[]uint
+	ModelGroups *[]uint
 }
 
-// ListAPIKeyEntries returns API key rows with channel bindings.
+// ListAPIKeyEntries returns API key rows with group bindings.
 func (r *Repository) ListAPIKeyEntries(ctx context.Context) ([]APIKeyEntry, error) {
 	db, errDB := r.database()
 	if errDB != nil {
@@ -72,8 +74,8 @@ func (r *Repository) ReplaceAPIKeyEntries(ctx context.Context, entries []APIKeyE
 	return stats, errTransaction
 }
 
-// UpdateAPIKeyChannels updates channel bindings for one API key.
-func (r *Repository) UpdateAPIKeyChannels(ctx context.Context, apiKey string, channels []uint) (*APIKeyRecord, error) {
+// UpdateAPIKeyBindings updates group bindings for one API key.
+func (r *Repository) UpdateAPIKeyBindings(ctx context.Context, apiKey string, channels *[]uint, modelGroups *[]uint) (*APIKeyRecord, error) {
 	db, errDB := r.database()
 	if errDB != nil {
 		return nil, errDB
@@ -82,10 +84,6 @@ func (r *Repository) UpdateAPIKeyChannels(ctx context.Context, apiKey string, ch
 	if apiKey == "" {
 		return nil, fmt.Errorf("api key is required")
 	}
-	channelsJSON, errChannels := apiKeyChannelsJSON(channels)
-	if errChannels != nil {
-		return nil, errChannels
-	}
 
 	record := &APIKeyRecord{}
 	ctx = contextOrBackground(ctx)
@@ -93,7 +91,20 @@ func (r *Repository) UpdateAPIKeyChannels(ctx context.Context, apiKey string, ch
 		if errFirst := tx.Where("api_key = ?", apiKey).First(record).Error; errFirst != nil {
 			return errFirst
 		}
-		record.Channels = channelsJSON
+		if channels != nil {
+			channelsJSON, errChannels := apiKeyChannelsJSON(*channels)
+			if errChannels != nil {
+				return errChannels
+			}
+			record.Channels = channelsJSON
+		}
+		if modelGroups != nil {
+			modelGroupsJSON, errModelGroups := apiKeyModelGroupsJSON(*modelGroups)
+			if errModelGroups != nil {
+				return errModelGroups
+			}
+			record.ModelGroups = modelGroupsJSON
+		}
 		if errSave := tx.Save(record).Error; errSave != nil {
 			return errSave
 		}
@@ -103,6 +114,39 @@ func (r *Repository) UpdateAPIKeyChannels(ctx context.Context, apiKey string, ch
 		return nil, errTransaction
 	}
 	return record, nil
+}
+
+// UpdateAPIKeyChannels updates channel bindings for one API key.
+func (r *Repository) UpdateAPIKeyChannels(ctx context.Context, apiKey string, channels []uint) (*APIKeyRecord, error) {
+	return r.UpdateAPIKeyBindings(ctx, apiKey, &channels, nil)
+}
+
+// AllowedDispatchIDsForAPIKey returns auth and model IDs allowed by API-key bindings.
+func (r *Repository) AllowedDispatchIDsForAPIKey(ctx context.Context, apiKey string) ([]string, []string, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, nil, errDB
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, nil, nil
+	}
+
+	record := APIKeyRecord{}
+	errFirst := db.WithContext(contextOrBackground(ctx)).Where("api_key = ?", apiKey).First(&record).Error
+	if errFirst != nil {
+		return nil, nil, errFirst
+	}
+
+	authIDs, errAuthIDs := allowedAuthIDsForAPIKeyRecord(ctx, db, &record)
+	if errAuthIDs != nil {
+		return nil, nil, errAuthIDs
+	}
+	modelIDs, errModelIDs := allowedModelIDsForAPIKeyRecord(ctx, db, &record)
+	if errModelIDs != nil {
+		return nil, nil, errModelIDs
+	}
+	return authIDs, modelIDs, nil
 }
 
 // AllowedAuthIDsForAPIKey returns auth IDs allowed by the API key channel bindings.
@@ -122,6 +166,36 @@ func (r *Repository) AllowedAuthIDsForAPIKey(ctx context.Context, apiKey string)
 		return nil, errFirst
 	}
 
+	return allowedAuthIDsForAPIKeyRecord(ctx, db, &record)
+}
+
+// AllowedModelIDsForAPIKey returns model IDs allowed by the API key model group bindings.
+func (r *Repository) AllowedModelIDsForAPIKey(ctx context.Context, apiKey string) ([]string, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, nil
+	}
+
+	record := APIKeyRecord{}
+	errFirst := db.WithContext(contextOrBackground(ctx)).Where("api_key = ?", apiKey).First(&record).Error
+	if errFirst != nil {
+		return nil, errFirst
+	}
+
+	return allowedModelIDsForAPIKeyRecord(ctx, db, &record)
+}
+
+func allowedAuthIDsForAPIKeyRecord(ctx context.Context, db *gorm.DB, record *APIKeyRecord) ([]string, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database connection is nil")
+	}
+	if record == nil {
+		return nil, fmt.Errorf("api key record is nil")
+	}
 	channelIDs, errChannels := apiKeyChannelsFromJSON(record.Channels)
 	if errChannels != nil {
 		return nil, errChannels
@@ -154,6 +228,50 @@ func (r *Repository) AllowedAuthIDsForAPIKey(ctx context.Context, apiKey string)
 		}
 		seen[authID] = struct{}{}
 		allowed = append(allowed, authID)
+	}
+	return allowed, nil
+}
+
+func allowedModelIDsForAPIKeyRecord(ctx context.Context, db *gorm.DB, record *APIKeyRecord) ([]string, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database connection is nil")
+	}
+	if record == nil {
+		return nil, fmt.Errorf("api key record is nil")
+	}
+	modelGroupIDs, errModelGroups := apiKeyModelGroupsFromJSON(record.ModelGroups)
+	if errModelGroups != nil {
+		return nil, errModelGroups
+	}
+	if len(modelGroupIDs) == 0 {
+		return nil, nil
+	}
+
+	var details []ModelGroupDetailRecord
+	if errFind := db.WithContext(contextOrBackground(ctx)).
+		Model(&ModelGroupDetailRecord{}).
+		Joins("JOIN model_group ON model_group.id = model_group_detail.model_group_id").
+		Where("model_group.deleted_at IS NULL").
+		Where("model_group.disabled = ?", false).
+		Where("model_group_detail.model_group_id IN ?", modelGroupIDs).
+		Order("model_group_detail.model_group_id ASC, model_group_detail.id ASC").
+		Find(&details).Error; errFind != nil {
+		return nil, errFind
+	}
+
+	allowed := make([]string, 0, len(details))
+	seen := make(map[string]struct{}, len(details))
+	for _, detail := range details {
+		modelID := strings.TrimSpace(detail.ModelID)
+		if modelID == "" {
+			continue
+		}
+		modelKey := strings.ToLower(modelID)
+		if _, ok := seen[modelKey]; ok {
+			continue
+		}
+		seen[modelKey] = struct{}{}
+		allowed = append(allowed, modelID)
 	}
 	return allowed, nil
 }
@@ -195,9 +313,18 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 				return APIKeyUpsertStats{}, errChannels
 			}
 		}
+		modelGroupsJSON := emptyAPIKeyModelGroupsJSON()
+		var errModelGroups error
+		if entry.ModelGroups != nil {
+			modelGroupsJSON, errModelGroups = apiKeyModelGroupsJSON(*entry.ModelGroups)
+			if errModelGroups != nil {
+				return APIKeyUpsertStats{}, errModelGroups
+			}
+		}
 
 		if record := existingByKey[key]; record != nil {
 			updates := make(map[string]any)
+			updatedBindings := false
 			if record.DeletedAt.Valid {
 				updates["deleted_at"] = nil
 				stats.Restored++
@@ -211,11 +338,22 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 				}
 				if !reflect.DeepEqual(currentChannels, normalizeChannelGroupIDs(*entry.Channels)) {
 					updates["channels"] = channelsJSON
-					if !record.DeletedAt.Valid {
-						stats.Updated++
-						stats.Unchanged--
-					}
+					updatedBindings = true
 				}
+			}
+			if entry.ModelGroups != nil {
+				currentModelGroups, errCurrent := apiKeyModelGroupsFromJSON(record.ModelGroups)
+				if errCurrent != nil {
+					return APIKeyUpsertStats{}, errCurrent
+				}
+				if !reflect.DeepEqual(currentModelGroups, normalizeModelGroupIDs(*entry.ModelGroups)) {
+					updates["model_groups"] = modelGroupsJSON
+					updatedBindings = true
+				}
+			}
+			if updatedBindings && !record.DeletedAt.Valid {
+				stats.Updated++
+				stats.Unchanged--
 			}
 			if len(updates) > 0 {
 				if errUpdate := tx.WithContext(contextOrBackground(ctx)).Unscoped().
@@ -229,8 +367,9 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 		}
 
 		if errCreate := tx.WithContext(contextOrBackground(ctx)).Create(&APIKeyRecord{
-			APIKey:   key,
-			Channels: channelsJSON,
+			APIKey:      key,
+			Channels:    channelsJSON,
+			ModelGroups: modelGroupsJSON,
 		}).Error; errCreate != nil {
 			return APIKeyUpsertStats{}, errCreate
 		}
@@ -285,6 +424,10 @@ func normalizeAPIKeyEntryUpdates(entries []APIKeyEntryUpdate) []APIKeyEntryUpdat
 			channels := normalizeChannelGroupIDs(*entry.Channels)
 			next.Channels = &channels
 		}
+		if entry.ModelGroups != nil {
+			modelGroups := normalizeModelGroupIDs(*entry.ModelGroups)
+			next.ModelGroups = &modelGroups
+		}
 		normalized = append(normalized, next)
 	}
 	return normalized
@@ -298,9 +441,14 @@ func apiKeyEntryFromRecord(record *APIKeyRecord) (APIKeyEntry, error) {
 	if errChannels != nil {
 		return APIKeyEntry{}, errChannels
 	}
+	modelGroups, errModelGroups := apiKeyModelGroupsFromJSON(record.ModelGroups)
+	if errModelGroups != nil {
+		return APIKeyEntry{}, errModelGroups
+	}
 	return APIKeyEntry{
-		APIKey:   strings.TrimSpace(record.APIKey),
-		Channels: channels,
+		APIKey:      strings.TrimSpace(record.APIKey),
+		Channels:    channels,
+		ModelGroups: modelGroups,
 	}, nil
 }
 
@@ -322,11 +470,31 @@ func emptyAPIKeyChannelsJSON() JSONB {
 	return JSONB("[]")
 }
 
+func apiKeyModelGroupsJSON(modelGroups []uint) (JSONB, error) {
+	modelGroups = normalizeModelGroupIDs(modelGroups)
+	raw, errMarshal := json.Marshal(modelGroups)
+	if errMarshal != nil {
+		return nil, errMarshal
+	}
+	return JSONB(raw), nil
+}
+
+func emptyAPIKeyModelGroupsJSON() JSONB {
+	return JSONB("[]")
+}
+
 func migrateAPIKeyChannels(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("database connection is nil")
 	}
 	return db.Model(&APIKeyRecord{}).Where("channels IS NULL").Update("channels", emptyAPIKeyChannelsJSON()).Error
+}
+
+func migrateAPIKeyModelGroups(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	return db.Model(&APIKeyRecord{}).Where("model_groups IS NULL").Update("model_groups", emptyAPIKeyModelGroupsJSON()).Error
 }
 
 func apiKeyChannelsFromJSON(raw JSONB) ([]uint, error) {
@@ -340,7 +508,26 @@ func apiKeyChannelsFromJSON(raw JSONB) ([]uint, error) {
 	return normalizeChannelGroupIDs(channels), nil
 }
 
+func apiKeyModelGroupsFromJSON(raw JSONB) ([]uint, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var modelGroups []uint
+	if errUnmarshal := json.Unmarshal(raw, &modelGroups); errUnmarshal != nil {
+		return nil, errUnmarshal
+	}
+	return normalizeModelGroupIDs(modelGroups), nil
+}
+
 func normalizeChannelGroupIDs(ids []uint) []uint {
+	return normalizeAPIKeyGroupIDs(ids)
+}
+
+func normalizeModelGroupIDs(ids []uint) []uint {
+	return normalizeAPIKeyGroupIDs(ids)
+}
+
+func normalizeAPIKeyGroupIDs(ids []uint) []uint {
 	if len(ids) == 0 {
 		return nil
 	}

@@ -12,6 +12,9 @@ const RequestedModelMetadataKey = "requested_model"
 // AllowedAuthIDsMetadataKey stores the dispatch allowlist in Options.Metadata.
 const AllowedAuthIDsMetadataKey = "allowed_auth_ids"
 
+// AllowedModelIDsMetadataKey stores the model allowlist in Options.Metadata.
+const AllowedModelIDsMetadataKey = "allowed_model_ids"
+
 // Options carries optional request hints used during dispatch selection.
 //
 // This is a deliberately small subset of CPA's execution options: CLIProxyAPIHome only needs

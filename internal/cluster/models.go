@@ -131,12 +131,13 @@ func (ConfigRecord) TableName() string {
 }
 
 type APIKeyRecord struct {
-	ID        uint           `gorm:"column:id;primaryKey;autoIncrement;index:idx_api_key_active_order,priority:2"`
-	APIKey    string         `gorm:"column:api_key;not null;uniqueIndex"`
-	Channels  JSONB          `gorm:"column:channels"`
-	CreatedAt time.Time      `gorm:"column:created_at"`
-	UpdatedAt time.Time      `gorm:"column:updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_api_key_active_order,priority:1"`
+	ID          uint           `gorm:"column:id;primaryKey;autoIncrement;index:idx_api_key_active_order,priority:2"`
+	APIKey      string         `gorm:"column:api_key;not null;uniqueIndex"`
+	Channels    JSONB          `gorm:"column:channels"`
+	ModelGroups JSONB          `gorm:"column:model_groups"`
+	CreatedAt   time.Time      `gorm:"column:created_at"`
+	UpdatedAt   time.Time      `gorm:"column:updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_api_key_active_order,priority:1"`
 }
 
 // TableName returns the database table name.
@@ -170,6 +171,34 @@ type ChannelGroupDetailRecord struct {
 // TableName returns the database table name.
 func (ChannelGroupDetailRecord) TableName() string {
 	return "channel_group_detail"
+}
+
+type ModelGroupRecord struct {
+	ID        uint           `gorm:"column:id;primaryKey;autoIncrement;index:idx_model_group_active_order,priority:2;index:idx_model_group_enabled_order,priority:3"`
+	GroupName string         `gorm:"column:group_name;not null"`
+	Disabled  bool           `gorm:"column:disabled;not null;default:false;index:idx_model_group_enabled_order,priority:2"`
+	CreatedAt time.Time      `gorm:"column:created_at"`
+	UpdatedAt time.Time      `gorm:"column:updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_model_group_active_order,priority:1;index:idx_model_group_enabled_order,priority:1"`
+}
+
+// TableName returns the database table name.
+func (ModelGroupRecord) TableName() string {
+	return "model_group"
+}
+
+type ModelGroupDetailRecord struct {
+	ID           uint           `gorm:"column:id;primaryKey;autoIncrement;index:idx_model_group_detail_group_active_order,priority:3;index:idx_model_group_detail_model_active_order,priority:4;index:idx_model_group_detail_active_order,priority:3"`
+	ModelGroupID uint           `gorm:"column:model_group_id;not null;index:idx_model_group_detail_group_active_order,priority:1;index:idx_model_group_detail_model_active_order,priority:3;index:idx_model_group_detail_active_order,priority:2"`
+	ModelID      string         `gorm:"column:model_id;not null;index:idx_model_group_detail_model_active_order,priority:1"`
+	CreatedAt    time.Time      `gorm:"column:created_at"`
+	UpdatedAt    time.Time      `gorm:"column:updated_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_model_group_detail_group_active_order,priority:2;index:idx_model_group_detail_model_active_order,priority:2;index:idx_model_group_detail_active_order,priority:1"`
+}
+
+// TableName returns the database table name.
+func (ModelGroupDetailRecord) TableName() string {
+	return "model_group_detail"
 }
 
 type ClusterNodeRecord struct {

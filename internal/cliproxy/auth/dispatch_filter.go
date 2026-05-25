@@ -48,6 +48,52 @@ func allowedAuthIDsFromOptions(opts Options) map[string]struct{} {
 	return allowed
 }
 
+func allowedModelIDsFromOptions(opts Options) map[string]struct{} {
+	if opts.Metadata == nil {
+		return nil
+	}
+	raw, ok := opts.Metadata[AllowedModelIDsMetadataKey]
+	if !ok {
+		return nil
+	}
+
+	allowed := make(map[string]struct{})
+	switch values := raw.(type) {
+	case []string:
+		for _, value := range values {
+			modelID := normalizedAllowedModelID(value)
+			if modelID != "" {
+				allowed[modelID] = struct{}{}
+			}
+		}
+	case []any:
+		for _, value := range values {
+			modelID := normalizedAllowedModelID(toString(value))
+			if modelID != "" {
+				allowed[modelID] = struct{}{}
+			}
+		}
+	case map[string]struct{}:
+		for value := range values {
+			modelID := normalizedAllowedModelID(value)
+			if modelID != "" {
+				allowed[modelID] = struct{}{}
+			}
+		}
+	case map[string]bool:
+		for value, enabled := range values {
+			if !enabled {
+				continue
+			}
+			modelID := normalizedAllowedModelID(value)
+			if modelID != "" {
+				allowed[modelID] = struct{}{}
+			}
+		}
+	}
+	return allowed
+}
+
 func authAllowedByID(authID string, allowed map[string]struct{}) bool {
 	if allowed == nil {
 		return true
@@ -58,6 +104,26 @@ func authAllowedByID(authID string, allowed map[string]struct{}) bool {
 	}
 	_, ok := allowed[authID]
 	return ok
+}
+
+func modelAllowedByID(modelID string, allowed map[string]struct{}) bool {
+	if allowed == nil {
+		return true
+	}
+	modelID = normalizedAllowedModelID(modelID)
+	if modelID == "" {
+		return false
+	}
+	_, ok := allowed[modelID]
+	return ok
+}
+
+func normalizedAllowedModelID(modelID string) string {
+	modelID = canonicalModelKey(modelID)
+	if modelID == "" {
+		return ""
+	}
+	return strings.ToLower(modelID)
 }
 
 func schedulerPredicate(tried map[string]struct{}, allowed map[string]struct{}) func(*scheduledAuth) bool {
