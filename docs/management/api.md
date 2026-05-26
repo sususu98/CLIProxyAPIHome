@@ -1,6 +1,6 @@
-# CLIProxyAPIHome Management API
+# CLIProxyAPIHome Cluster Management API
 
-This document describes the Management API exposed by CLIProxyAPIHome. It covers both Home standalone mode and Home cluster mode, and focuses on Home routes only.
+This document describes the current DB-backed Management API exposed by CLIProxyAPIHome. Home startup initializes a runtime database and registers the database-backed management route set used by the Home runtime.
 
 Base URL:
 
@@ -14,14 +14,13 @@ Optional management panel:
 GET /management.html
 ```
 
-Home examples usually use port `8327`. In cluster mode, the effective address comes from `cluster.yaml` or the final `-addr` value.
+Home examples usually use port `8327`. The effective listen address comes from runtime config, `cluster.yaml`, or the final `-addr` value.
 
-## Modes
+## Runtime Model
 
-| Mode | Storage backend | Notes |
-| --- | --- | --- |
-| Home standalone | Local `config.yaml` and local `auth-dir` files. | Exposes the SDK-backed Home Management API plus `GET /nodes`. |
-| Home cluster | Cluster repository, normally PostgreSQL. | Exposes DB-backed config, users, API keys, auth records, channel groups, model groups, certificate enrollment, and node APIs. Runtime/log file endpoints are not registered. |
+Home management state is stored in the database-backed cluster repository. When `cluster.yaml` is present, the repository uses the configured backend, such as PostgreSQL or SQLite. When no cluster config is present, Home still opens a local SQLite runtime database and uses the same DB-backed management handlers.
+
+The route list below is the database-backed route set registered by `cmd/home` through `WithDatabaseManagement`.
 
 ## Authentication
 
@@ -75,7 +74,7 @@ Full config replacement returns:
 { "ok": true, "changed": ["config"] }
 ```
 
-Cluster DB-backed handlers usually return both a machine-readable `error` code and a human-readable `message`:
+DB-backed handlers usually return both a machine-readable `error` code and a human-readable `message`:
 
 ```json
 { "error": "invalid body", "message": "username is required" }
@@ -88,172 +87,172 @@ Other common error shapes:
 { "error": "invalid_config", "message": "validation detail" }
 ```
 
-## Route Availability
+## Registered Routes
 
-The table below is extracted from the current Home route registry in `internal/managementhttp/server.go`.
+The table below is extracted from the final Home route registry built by `internal/managementhttp/server.go` for `cmd/home`.
 
-| Method | Path | Standalone | Cluster |
-| --- | --- | --- | --- |
-| `GET` | `/ampcode` | yes | yes |
-| `GET` | `/ampcode/force-model-mappings` | yes | yes |
-| `PATCH` | `/ampcode/force-model-mappings` | yes | yes |
-| `PUT` | `/ampcode/force-model-mappings` | yes | yes |
-| `DELETE` | `/ampcode/model-mappings` | yes | yes |
-| `GET` | `/ampcode/model-mappings` | yes | yes |
-| `PATCH` | `/ampcode/model-mappings` | yes | yes |
-| `PUT` | `/ampcode/model-mappings` | yes | yes |
-| `GET` | `/ampcode/restrict-management-to-localhost` | yes | yes |
-| `PATCH` | `/ampcode/restrict-management-to-localhost` | yes | yes |
-| `PUT` | `/ampcode/restrict-management-to-localhost` | yes | yes |
-| `DELETE` | `/ampcode/upstream-api-key` | yes | yes |
-| `GET` | `/ampcode/upstream-api-key` | yes | yes |
-| `PATCH` | `/ampcode/upstream-api-key` | yes | yes |
-| `PUT` | `/ampcode/upstream-api-key` | yes | yes |
-| `DELETE` | `/ampcode/upstream-api-keys` | yes | yes |
-| `GET` | `/ampcode/upstream-api-keys` | yes | yes |
-| `PATCH` | `/ampcode/upstream-api-keys` | yes | yes |
-| `PUT` | `/ampcode/upstream-api-keys` | yes | yes |
-| `DELETE` | `/ampcode/upstream-url` | yes | yes |
-| `GET` | `/ampcode/upstream-url` | yes | yes |
-| `PATCH` | `/ampcode/upstream-url` | yes | yes |
-| `PUT` | `/ampcode/upstream-url` | yes | yes |
-| `GET` | `/anthropic-auth-url` | yes | yes |
-| `GET` | `/antigravity-auth-url` | yes | yes |
-| `POST` | `/api-call` | yes | yes |
-| `GET` | `/api-key-usage` | yes | no |
-| `DELETE` | `/api-keys` | yes | yes |
-| `GET` | `/api-keys` | yes | yes |
-| `PATCH` | `/api-keys` | yes | yes |
-| `PUT` | `/api-keys` | yes | yes |
-| `DELETE` | `/auth-files` | yes | yes |
-| `GET` | `/auth-files` | yes | yes |
-| `POST` | `/auth-files` | yes | yes |
-| `GET` | `/auth-files/download` | yes | yes |
-| `PATCH` | `/auth-files/fields` | yes | yes |
-| `GET` | `/auth-files/models` | yes | yes |
-| `PATCH` | `/auth-files/status` | yes | yes |
-| `POST` | `/certificates/clients` | no | yes |
-| `GET` | `/channel-group-details` | no | yes |
-| `POST` | `/channel-group-details` | no | yes |
-| `DELETE` | `/channel-group-details/:id` | no | yes |
-| `GET` | `/channel-group-details/:id` | no | yes |
-| `PATCH` | `/channel-group-details/:id` | no | yes |
-| `PUT` | `/channel-group-details/:id` | no | yes |
-| `GET` | `/channel-groups` | no | yes |
-| `POST` | `/channel-groups` | no | yes |
-| `DELETE` | `/channel-groups/:id` | no | yes |
-| `GET` | `/channel-groups/:id` | no | yes |
-| `PATCH` | `/channel-groups/:id` | no | yes |
-| `PUT` | `/channel-groups/:id` | no | yes |
-| `DELETE` | `/claude-api-key` | yes | yes |
-| `GET` | `/claude-api-key` | yes | yes |
-| `PATCH` | `/claude-api-key` | yes | yes |
-| `PUT` | `/claude-api-key` | yes | yes |
-| `DELETE` | `/codex-api-key` | yes | yes |
-| `GET` | `/codex-api-key` | yes | yes |
-| `PATCH` | `/codex-api-key` | yes | yes |
-| `PUT` | `/codex-api-key` | yes | yes |
-| `GET` | `/codex-auth-url` | yes | yes |
-| `GET` | `/config` | yes | yes |
-| `GET` | `/config.yaml` | yes | yes |
-| `PUT` | `/config.yaml` | yes | yes |
-| `GET` | `/debug` | yes | yes |
-| `PATCH` | `/debug` | yes | yes |
-| `PUT` | `/debug` | yes | yes |
-| `GET` | `/error-logs-max-files` | yes | yes |
-| `PATCH` | `/error-logs-max-files` | yes | yes |
-| `PUT` | `/error-logs-max-files` | yes | yes |
-| `GET` | `/force-model-prefix` | yes | yes |
-| `PATCH` | `/force-model-prefix` | yes | yes |
-| `PUT` | `/force-model-prefix` | yes | yes |
-| `DELETE` | `/gemini-api-key` | yes | yes |
-| `GET` | `/gemini-api-key` | yes | yes |
-| `PATCH` | `/gemini-api-key` | yes | yes |
-| `PUT` | `/gemini-api-key` | yes | yes |
-| `GET` | `/gemini-cli-auth-url` | yes | yes |
-| `GET` | `/get-auth-status` | yes | yes |
-| `GET` | `/kimi-auth-url` | yes | yes |
-| `GET` | `/latest-version` | yes | yes |
-| `GET` | `/logging-to-file` | yes | yes |
-| `PATCH` | `/logging-to-file` | yes | yes |
-| `PUT` | `/logging-to-file` | yes | yes |
-| `DELETE` | `/logs` | yes | no |
-| `GET` | `/logs` | yes | no |
-| `GET` | `/logs-max-total-size-mb` | yes | yes |
-| `PATCH` | `/logs-max-total-size-mb` | yes | yes |
-| `PUT` | `/logs-max-total-size-mb` | yes | yes |
-| `GET` | `/max-retry-interval` | yes | yes |
-| `PATCH` | `/max-retry-interval` | yes | yes |
-| `PUT` | `/max-retry-interval` | yes | yes |
-| `GET` | `/model-definitions/:channel` | yes | yes |
-| `GET` | `/model-group-details` | no | yes |
-| `POST` | `/model-group-details` | no | yes |
-| `DELETE` | `/model-group-details/:id` | no | yes |
-| `GET` | `/model-group-details/:id` | no | yes |
-| `PATCH` | `/model-group-details/:id` | no | yes |
-| `PUT` | `/model-group-details/:id` | no | yes |
-| `GET` | `/model-groups` | no | yes |
-| `POST` | `/model-groups` | no | yes |
-| `DELETE` | `/model-groups/:id` | no | yes |
-| `GET` | `/model-groups/:id` | no | yes |
-| `PATCH` | `/model-groups/:id` | no | yes |
-| `PUT` | `/model-groups/:id` | no | yes |
-| `GET` | `/nodes` | yes | yes |
-| `POST` | `/oauth-callback` | yes | yes |
-| `DELETE` | `/oauth-excluded-models` | yes | yes |
-| `GET` | `/oauth-excluded-models` | yes | yes |
-| `PATCH` | `/oauth-excluded-models` | yes | yes |
-| `PUT` | `/oauth-excluded-models` | yes | yes |
-| `DELETE` | `/oauth-model-alias` | yes | yes |
-| `GET` | `/oauth-model-alias` | yes | yes |
-| `PATCH` | `/oauth-model-alias` | yes | yes |
-| `PUT` | `/oauth-model-alias` | yes | yes |
-| `DELETE` | `/openai-compatibility` | yes | yes |
-| `GET` | `/openai-compatibility` | yes | yes |
-| `PATCH` | `/openai-compatibility` | yes | yes |
-| `PUT` | `/openai-compatibility` | yes | yes |
-| `DELETE` | `/payload` | no | yes |
-| `GET` | `/payload` | no | yes |
-| `PATCH` | `/payload` | no | yes |
-| `PUT` | `/payload` | no | yes |
-| `DELETE` | `/proxy-url` | yes | yes |
-| `GET` | `/proxy-url` | yes | yes |
-| `PATCH` | `/proxy-url` | yes | yes |
-| `PUT` | `/proxy-url` | yes | yes |
-| `GET` | `/quota-exceeded/switch-preview-model` | yes | yes |
-| `PATCH` | `/quota-exceeded/switch-preview-model` | yes | yes |
-| `PUT` | `/quota-exceeded/switch-preview-model` | yes | yes |
-| `GET` | `/quota-exceeded/switch-project` | yes | yes |
-| `PATCH` | `/quota-exceeded/switch-project` | yes | yes |
-| `PUT` | `/quota-exceeded/switch-project` | yes | yes |
-| `GET` | `/request-error-logs` | yes | no |
-| `GET` | `/request-error-logs/:name` | yes | no |
-| `GET` | `/request-log` | yes | yes |
-| `PATCH` | `/request-log` | yes | yes |
-| `PUT` | `/request-log` | yes | yes |
-| `GET` | `/request-log-by-id/:id` | yes | no |
-| `GET` | `/request-retry` | yes | yes |
-| `PATCH` | `/request-retry` | yes | yes |
-| `PUT` | `/request-retry` | yes | yes |
-| `GET` | `/routing/strategy` | yes | yes |
-| `PATCH` | `/routing/strategy` | yes | yes |
-| `PUT` | `/routing/strategy` | yes | yes |
-| `GET` | `/usage-queue` | yes | no |
-| `GET` | `/usage-statistics-enabled` | yes | yes |
-| `PATCH` | `/usage-statistics-enabled` | yes | yes |
-| `PUT` | `/usage-statistics-enabled` | yes | yes |
-| `GET` | `/users` | no | yes |
-| `POST` | `/users` | no | yes |
-| `DELETE` | `/users/:id` | no | yes |
-| `GET` | `/users/:id` | no | yes |
-| `PATCH` | `/users/:id` | no | yes |
-| `PUT` | `/users/:id` | no | yes |
-| `DELETE` | `/vertex-api-key` | yes | yes |
-| `GET` | `/vertex-api-key` | yes | yes |
-| `PATCH` | `/vertex-api-key` | yes | yes |
-| `PUT` | `/vertex-api-key` | yes | yes |
-| `POST` | `/vertex/import` | yes | yes |
-| `GET` | `/xai-auth-url` | no | yes |
+| Method | Path |
+| --- | --- |
+| `GET` | `/ampcode` |
+| `GET` | `/ampcode/force-model-mappings` |
+| `PATCH` | `/ampcode/force-model-mappings` |
+| `PUT` | `/ampcode/force-model-mappings` |
+| `DELETE` | `/ampcode/model-mappings` |
+| `GET` | `/ampcode/model-mappings` |
+| `PATCH` | `/ampcode/model-mappings` |
+| `PUT` | `/ampcode/model-mappings` |
+| `GET` | `/ampcode/restrict-management-to-localhost` |
+| `PATCH` | `/ampcode/restrict-management-to-localhost` |
+| `PUT` | `/ampcode/restrict-management-to-localhost` |
+| `DELETE` | `/ampcode/upstream-api-key` |
+| `GET` | `/ampcode/upstream-api-key` |
+| `PATCH` | `/ampcode/upstream-api-key` |
+| `PUT` | `/ampcode/upstream-api-key` |
+| `DELETE` | `/ampcode/upstream-api-keys` |
+| `GET` | `/ampcode/upstream-api-keys` |
+| `PATCH` | `/ampcode/upstream-api-keys` |
+| `PUT` | `/ampcode/upstream-api-keys` |
+| `DELETE` | `/ampcode/upstream-url` |
+| `GET` | `/ampcode/upstream-url` |
+| `PATCH` | `/ampcode/upstream-url` |
+| `PUT` | `/ampcode/upstream-url` |
+| `GET` | `/anthropic-auth-url` |
+| `GET` | `/antigravity-auth-url` |
+| `POST` | `/api-call` |
+| `GET` | `/api-key-usage` |
+| `DELETE` | `/api-keys` |
+| `GET` | `/api-keys` |
+| `PATCH` | `/api-keys` |
+| `PUT` | `/api-keys` |
+| `DELETE` | `/auth-files` |
+| `GET` | `/auth-files` |
+| `POST` | `/auth-files` |
+| `GET` | `/auth-files/download` |
+| `PATCH` | `/auth-files/fields` |
+| `GET` | `/auth-files/models` |
+| `PATCH` | `/auth-files/status` |
+| `POST` | `/certificates/clients` |
+| `GET` | `/channel-group-details` |
+| `POST` | `/channel-group-details` |
+| `DELETE` | `/channel-group-details/:id` |
+| `GET` | `/channel-group-details/:id` |
+| `PATCH` | `/channel-group-details/:id` |
+| `PUT` | `/channel-group-details/:id` |
+| `GET` | `/channel-groups` |
+| `POST` | `/channel-groups` |
+| `DELETE` | `/channel-groups/:id` |
+| `GET` | `/channel-groups/:id` |
+| `PATCH` | `/channel-groups/:id` |
+| `PUT` | `/channel-groups/:id` |
+| `DELETE` | `/claude-api-key` |
+| `GET` | `/claude-api-key` |
+| `PATCH` | `/claude-api-key` |
+| `PUT` | `/claude-api-key` |
+| `DELETE` | `/codex-api-key` |
+| `GET` | `/codex-api-key` |
+| `PATCH` | `/codex-api-key` |
+| `PUT` | `/codex-api-key` |
+| `GET` | `/codex-auth-url` |
+| `GET` | `/config` |
+| `GET` | `/config.yaml` |
+| `PUT` | `/config.yaml` |
+| `GET` | `/debug` |
+| `PATCH` | `/debug` |
+| `PUT` | `/debug` |
+| `GET` | `/error-logs-max-files` |
+| `PATCH` | `/error-logs-max-files` |
+| `PUT` | `/error-logs-max-files` |
+| `GET` | `/force-model-prefix` |
+| `PATCH` | `/force-model-prefix` |
+| `PUT` | `/force-model-prefix` |
+| `DELETE` | `/gemini-api-key` |
+| `GET` | `/gemini-api-key` |
+| `PATCH` | `/gemini-api-key` |
+| `PUT` | `/gemini-api-key` |
+| `GET` | `/gemini-cli-auth-url` |
+| `GET` | `/get-auth-status` |
+| `GET` | `/kimi-auth-url` |
+| `GET` | `/latest-version` |
+| `GET` | `/logging-to-file` |
+| `PATCH` | `/logging-to-file` |
+| `PUT` | `/logging-to-file` |
+| `DELETE` | `/logs` |
+| `GET` | `/logs` |
+| `GET` | `/logs-max-total-size-mb` |
+| `PATCH` | `/logs-max-total-size-mb` |
+| `PUT` | `/logs-max-total-size-mb` |
+| `GET` | `/max-retry-interval` |
+| `PATCH` | `/max-retry-interval` |
+| `PUT` | `/max-retry-interval` |
+| `GET` | `/model-definitions/:channel` |
+| `GET` | `/model-group-details` |
+| `POST` | `/model-group-details` |
+| `DELETE` | `/model-group-details/:id` |
+| `GET` | `/model-group-details/:id` |
+| `PATCH` | `/model-group-details/:id` |
+| `PUT` | `/model-group-details/:id` |
+| `GET` | `/model-groups` |
+| `POST` | `/model-groups` |
+| `DELETE` | `/model-groups/:id` |
+| `GET` | `/model-groups/:id` |
+| `PATCH` | `/model-groups/:id` |
+| `PUT` | `/model-groups/:id` |
+| `GET` | `/nodes` |
+| `POST` | `/oauth-callback` |
+| `DELETE` | `/oauth-excluded-models` |
+| `GET` | `/oauth-excluded-models` |
+| `PATCH` | `/oauth-excluded-models` |
+| `PUT` | `/oauth-excluded-models` |
+| `DELETE` | `/oauth-model-alias` |
+| `GET` | `/oauth-model-alias` |
+| `PATCH` | `/oauth-model-alias` |
+| `PUT` | `/oauth-model-alias` |
+| `DELETE` | `/openai-compatibility` |
+| `GET` | `/openai-compatibility` |
+| `PATCH` | `/openai-compatibility` |
+| `PUT` | `/openai-compatibility` |
+| `DELETE` | `/payload` |
+| `GET` | `/payload` |
+| `PATCH` | `/payload` |
+| `PUT` | `/payload` |
+| `DELETE` | `/proxy-url` |
+| `GET` | `/proxy-url` |
+| `PATCH` | `/proxy-url` |
+| `PUT` | `/proxy-url` |
+| `GET` | `/quota-exceeded/switch-preview-model` |
+| `PATCH` | `/quota-exceeded/switch-preview-model` |
+| `PUT` | `/quota-exceeded/switch-preview-model` |
+| `GET` | `/quota-exceeded/switch-project` |
+| `PATCH` | `/quota-exceeded/switch-project` |
+| `PUT` | `/quota-exceeded/switch-project` |
+| `GET` | `/request-error-logs` |
+| `GET` | `/request-error-logs/:name` |
+| `GET` | `/request-log` |
+| `PATCH` | `/request-log` |
+| `PUT` | `/request-log` |
+| `GET` | `/request-log-by-id/:id` |
+| `GET` | `/request-retry` |
+| `PATCH` | `/request-retry` |
+| `PUT` | `/request-retry` |
+| `GET` | `/routing/strategy` |
+| `PATCH` | `/routing/strategy` |
+| `PUT` | `/routing/strategy` |
+| `GET` | `/usage-queue` |
+| `GET` | `/usage-statistics-enabled` |
+| `PATCH` | `/usage-statistics-enabled` |
+| `PUT` | `/usage-statistics-enabled` |
+| `GET` | `/users` |
+| `POST` | `/users` |
+| `DELETE` | `/users/:id` |
+| `GET` | `/users/:id` |
+| `PATCH` | `/users/:id` |
+| `PUT` | `/users/:id` |
+| `DELETE` | `/vertex-api-key` |
+| `GET` | `/vertex-api-key` |
+| `PATCH` | `/vertex-api-key` |
+| `PUT` | `/vertex-api-key` |
+| `POST` | `/vertex/import` |
+| `GET` | `/xai-auth-url` |
 
 ## Config APIs
 
@@ -371,7 +370,7 @@ Response content type:
 application/yaml; charset=utf-8
 ```
 
-Standalone mode returns the local `config.yaml` bytes and preserves comments and formatting. Cluster mode reconstructs YAML from the cluster config snapshot and does not preserve original comments or formatting.
+The response is reconstructed from the persisted config snapshot, so original YAML comments and formatting are not preserved.
 
 ### PUT `/config.yaml`
 
@@ -379,7 +378,7 @@ Replaces the full config.
 
 Input: a complete YAML document in the request body.
 
-Cluster mode removes credential roots from the uploaded YAML before persisting the cluster config snapshot. Manage these roots through provider-key or auth-file APIs instead:
+Home removes credential roots from the uploaded YAML before persisting the config snapshot. Manage these roots through provider-key or auth-file APIs instead:
 
 ```text
 auth-dir
@@ -398,7 +397,7 @@ Example response:
 
 ### Simple Config Leaf Routes
 
-Standalone mode writes these values to local YAML. Cluster mode writes the corresponding config root into the cluster repository and reloads Home runtime.
+These routes write the corresponding config root into the cluster repository and reload the Home runtime.
 
 | Method | Path | Input | Output |
 | --- | --- | --- | --- |
@@ -430,9 +429,7 @@ Standalone mode writes these values to local YAML. Cluster mode writes the corre
 | `GET` | `/quota-exceeded/switch-preview-model` | none | `{ "switch-preview-model": boolean }` |
 | `PUT/PATCH` | `/quota-exceeded/switch-preview-model` | `{ "value": boolean }` | `{ "status": "ok" }` |
 
-### `/payload` Cluster Config Root
-
-Availability: cluster only.
+### `/payload` Config Root
 
 `GET /payload` returns:
 
@@ -519,8 +516,6 @@ Common error codes:
 
 ### POST `/certificates/clients`
 
-Availability: cluster only.
-
 Creates a pending client certificate enrollment record and returns a Home JWT that a node can use to finish client-certificate enrollment.
 
 Input: none.
@@ -549,8 +544,6 @@ Common errors:
 ```
 
 ## Users
-
-Availability: cluster only.
 
 User records are stored in the cluster repository.
 
@@ -676,13 +669,7 @@ Returns client API keys accepted by Home.
 
 Input: none.
 
-Standalone response:
-
-```json
-{ "api-keys": ["client-key-1", "client-key-2"] }
-```
-
-Cluster response:
+Example response:
 
 ```json
 {
@@ -710,7 +697,7 @@ Cluster response:
 }
 ```
 
-Cluster fields:
+Fields:
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -728,7 +715,7 @@ Cluster fields:
 
 Replaces the complete client API key list.
 
-Standalone input:
+Input can be a raw string array:
 
 ```json
 ["client-key-1", "client-key-2"]
@@ -740,7 +727,7 @@ or:
 { "items": ["client-key-1", "client-key-2"] }
 ```
 
-Cluster also accepts structured entries. Wrapper keys can be `items`, `api-keys`, `api_keys`, or `api_key_entries`:
+Structured entries are also accepted. Wrapper keys can be `items`, `api-keys`, `api_keys`, or `api_key_entries`:
 
 ```json
 {
@@ -755,7 +742,7 @@ Cluster also accepts structured entries. Wrapper keys can be `items`, `api-keys`
 }
 ```
 
-Cluster entry fields:
+Entry fields:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -764,7 +751,7 @@ Cluster entry fields:
 | `channels` | array of integer | no | Channel group IDs. |
 | `model_groups` | array of integer | no | Model group IDs. Alias: `model-groups`. |
 
-If `user_id` references a missing user, cluster mode returns `404 user_not_found`.
+If `user_id` references a missing user, the API returns `404 user_not_found`.
 
 Successful response:
 
@@ -774,7 +761,7 @@ Successful response:
 
 ### PATCH `/api-keys`
 
-Updates one client API key by index or by old value. When `old/new` is used and the old value does not exist, `new` is appended. In cluster mode, this route can also update `user_id`, `channels`, and `model_groups` for an existing API key.
+Updates one client API key by index or by old value. When `old/new` is used and the old value does not exist, `new` is appended. This route can also update `user_id`, `channels`, and `model_groups` for an existing API key.
 
 Index update:
 
@@ -788,7 +775,7 @@ Old/new update:
 { "old": "old-key", "new": "new-key" }
 ```
 
-Cluster binding update:
+Binding update:
 
 ```json
 {
@@ -799,7 +786,7 @@ Cluster binding update:
 }
 ```
 
-Cluster clear user binding:
+Clear user binding:
 
 ```json
 { "api_key": "client-key-1", "user_id": 0 }
@@ -810,13 +797,13 @@ Fields:
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `index` | integer | conditionally | Zero-based index. |
-| `value` | string or `APIKeyEntry` | conditionally | New value paired with `index`. Cluster mode may use a structured entry. |
+| `value` | string or `APIKeyEntry` | conditionally | New value paired with `index`. Structured entries are accepted. |
 | `old` | string | conditionally | Old key to find. |
 | `new` | string | conditionally | New key; appended when `old` is not found. |
-| `api_key` | string | conditionally | Cluster direct-binding target. Aliases: `api-key`, `key`. |
+| `api_key` | string | conditionally | Direct-binding target. Aliases: `api-key`, `key`. |
 | `user_id` | integer | no | Bound `user.id`. Alias: `user-id`; `0` clears the binding. |
-| `channels` | array of integer | no | Cluster channel group IDs. |
-| `model_groups` | array of integer | no | Cluster model group IDs. Alias: `model-groups`. |
+| `channels` | array of integer | no | Channel group IDs. |
+| `model_groups` | array of integer | no | Model group IDs. Alias: `model-groups`. |
 
 Normal response:
 
@@ -824,7 +811,7 @@ Normal response:
 { "status": "ok" }
 ```
 
-Cluster direct binding update response:
+Direct binding update response:
 
 ```json
 {
@@ -890,7 +877,7 @@ PATCH  /openai-compatibility
 DELETE /openai-compatibility
 ```
 
-Standalone mode stores these entries in local YAML. Cluster mode synthesizes DB auth records from the same config-like payloads.
+Home synthesizes DB auth records from these config-like payloads.
 
 ### Credential Field Structures
 
@@ -907,9 +894,9 @@ Standalone mode stores these entries in local YAML. Cluster mode synthesizes DB 
 | `headers` | object string to string | Extra upstream request headers. |
 | `excluded-models` | array of string | Model IDs excluded from this key. |
 | `disable-cooling` | boolean | Disable quota cooldown scheduling for this credential. |
-| `auth-index` | string | Standalone runtime credential identifier. |
-| `auth_index`, `id`, `uuid` | string | Cluster DB auth identifier aliases. |
-| `disabled` | boolean | Cluster auth disabled flag. |
+| `auth-index` | string | Compatibility credential identifier. |
+| `auth_index`, `id`, `uuid` | string | DB auth identifier aliases. |
+| `disabled` | boolean | DB auth disabled flag. |
 
 `ClaudeKey`, `CodexKey`, and `VertexCompatKey` use the same common fields. Additional notable fields:
 
@@ -933,8 +920,8 @@ Standalone mode stores these entries in local YAML. Cluster mode synthesizes DB 
 | `models` | array of `OpenAICompatibilityModel` | Model definitions and aliases. |
 | `headers` | object string to string | Extra upstream headers. |
 | `disable-cooling` | boolean | Disable quota cooldown scheduling for this provider. |
-| `auth-index` | string | Standalone runtime identifier when no per-key entries exist. |
-| `auth_index`, `id`, `uuid` | string | Cluster DB auth identifier aliases. |
+| `auth-index` | string | Compatibility credential identifier when no per-key entries exist. |
+| `auth_index`, `id`, `uuid` | string | DB auth identifier aliases. |
 
 Shared nested structures:
 
@@ -972,30 +959,7 @@ Shared nested structures:
 
 Input: none.
 
-Standalone example:
-
-```json
-{
-  "gemini-api-key": [
-    {
-      "api-key": "AIza...",
-      "priority": 10,
-      "prefix": "team-a",
-      "base-url": "https://generativelanguage.googleapis.com",
-      "proxy-url": "",
-      "models": [
-        { "name": "gemini-2.5-pro", "alias": "gemini-pro" }
-      ],
-      "headers": { "X-Test": "1" },
-      "excluded-models": ["gemini-1.5-pro"],
-      "disable-cooling": false,
-      "auth-index": "runtime-index"
-    }
-  ]
-}
-```
-
-Cluster example:
+Example response:
 
 ```json
 {
@@ -1040,7 +1004,7 @@ or a wrapper:
 { "items": [ { "api-key": "provider-key" } ] }
 ```
 
-Cluster also accepts `{ "<route-key>": [...] }`, `{ "list": [...] }`, `{ "data": [...] }`, or a single entry object.
+Home also accepts `{ "<route-key>": [...] }`, `{ "list": [...] }`, `{ "data": [...] }`, or a single entry object.
 
 Successful response:
 
@@ -1076,11 +1040,11 @@ Selector fields:
 | `index` | integer | Zero-based index in the filtered provider list. |
 | `match` | string | API-key value to match. |
 | `name` | string | OpenAI-compatible provider name or auth label. |
-| `id` | string | Cluster DB auth ID. |
+| `id` | string | DB auth ID. |
 | `uuid` | string | Alias of `id`. |
 | query `base-url` | string | Optional base URL to disambiguate API-key matches. |
 
-Cluster `PATCH` does not use body `auth_index` as the DB ID selector. Use `id` or `uuid` for ID-based patching.
+`PATCH` does not use body `auth_index` as the DB ID selector. Use `id` or `uuid` for ID-based patching.
 
 Successful response:
 
@@ -1096,7 +1060,7 @@ Query parameters:
 
 | Query | Type | Description |
 | --- | --- | --- |
-| `id` | string | Cluster DB auth ID. |
+| `id` | string | DB auth ID. |
 | `uuid` | string | Alias of `id`. |
 | `auth_index` | string | DB auth ID or runtime index. |
 | `index` | integer | Zero-based index in the filtered provider list. |
@@ -1121,40 +1085,7 @@ Lists OAuth/file-backed credentials.
 
 Input: none.
 
-Standalone example:
-
-```json
-{
-  "files": [
-    {
-      "id": "codex-user.json",
-      "auth_index": "runtime-index",
-      "name": "codex-user.json",
-      "type": "codex",
-      "provider": "codex",
-      "label": "user@example.com",
-      "status": "active",
-      "status_message": "",
-      "disabled": false,
-      "unavailable": false,
-      "runtime_only": false,
-      "source": "file",
-      "size": 1234,
-      "email": "user@example.com",
-      "account_type": "oauth",
-      "account": "user@example.com",
-      "created_at": "2026-05-27T10:00:00Z",
-      "modtime": "2026-05-27T10:00:00Z",
-      "updated_at": "2026-05-27T10:00:00Z",
-      "path": "/absolute/path/to/codex-user.json",
-      "priority": 10,
-      "note": "operator note"
-    }
-  ]
-}
-```
-
-Cluster example:
+Example response:
 
 ```json
 {
@@ -1184,7 +1115,7 @@ Cluster example:
 }
 ```
 
-Cluster may also return `virtual_primary`, `virtual_children`, `virtual`, `virtual_parent_id`, `virtual_project`, and `project_id` for Gemini virtual auth records.
+Gemini virtual auth records may also return `virtual_primary`, `virtual_children`, `virtual`, `virtual_parent_id`, `virtual_project`, and `project_id`.
 
 ### GET `/auth-files/models?name=<name-or-id>`
 
@@ -1220,9 +1151,9 @@ Query parameters:
 | Query | Type | Required | Description |
 | --- | --- | --- | --- |
 | `name` | string | conditionally | Filename or display name. |
-| `file` | string | conditionally | Alias for filename in cluster mode. |
-| `filename` | string | conditionally | Alias for filename in cluster mode. |
-| `id` | string | conditionally | Cluster DB auth ID. |
+| `file` | string | conditionally | Alias for filename. |
+| `filename` | string | conditionally | Alias for filename. |
+| `id` | string | conditionally | DB auth ID. |
 | `uuid` | string | conditionally | Alias of `id`. |
 | `auth_index` | string | conditionally | Auth ID or runtime index. |
 | `index` | integer | conditionally | Zero-based OAuth auth index. |
@@ -1239,9 +1170,7 @@ Multipart input:
 | --- | --- | --- | --- |
 | any file field | file | yes | One or more `.json` credential files. |
 
-Cluster raw JSON input: the request body is the credential JSON payload. `name` is not required; Home derives or allocates a UUID-backed filename.
-
-Standalone raw JSON input also accepts a target `name` query parameter.
+Raw JSON input: the request body is the credential JSON payload. `name` is not required; Home derives or allocates a UUID-backed filename.
 
 Example responses:
 
@@ -1253,7 +1182,7 @@ Example responses:
 { "status": "ok", "uploaded": 2, "files": ["a.json", "b.json"] }
 ```
 
-Cluster raw JSON response:
+Raw JSON response:
 
 ```json
 { "status": "ok", "name": "uuid.json" }
@@ -1268,9 +1197,9 @@ Query parameters:
 | Query | Type | Description |
 | --- | --- | --- |
 | `name` | string | Filename or display name. |
-| `file` | string | Cluster alias for filename. |
-| `filename` | string | Cluster alias for filename. |
-| `id` | string | Cluster DB auth ID. |
+| `file` | string | Alias for filename. |
+| `filename` | string | Alias for filename. |
+| `id` | string | DB auth ID. |
 | `uuid` | string | Alias of `id`. |
 | `auth_index` | string | Auth ID or runtime index. |
 | `index` | integer | Zero-based OAuth auth index. |
@@ -1282,7 +1211,7 @@ Example responses:
 { "status": "ok" }
 ```
 
-Cluster `all` response:
+`all` response:
 
 ```json
 { "status": "ok", "deleted": 2 }
@@ -1306,7 +1235,7 @@ Example request:
 | `name` | string | yes | Filename, DB auth ID, runtime auth index, or display name. |
 | `disabled` | boolean | yes | `true` disables the auth; `false` enables it. |
 
-Cluster mode currently reads the selector from `name`; it does not read separate body `id`, `uuid`, `auth_index`, or `index` fields for this endpoint.
+This route currently reads the selector from `name`; it does not read separate body `id`, `uuid`, `auth_index`, or `index` fields for this endpoint.
 
 Example response:
 
@@ -1342,8 +1271,8 @@ Selector fields:
 | Field | Type | Description |
 | --- | --- | --- |
 | `name`, `file`, `filename` | string | Filename or display name. |
-| `id`, `uuid`, `auth_index` | string | Cluster auth ID selector. |
-| query `index` | integer | Cluster zero-based OAuth auth index selector. |
+| `id`, `uuid`, `auth_index` | string | DB auth ID selector. |
+| query `index` | integer | Zero-based OAuth auth index selector. |
 
 Editable fields:
 
@@ -1351,13 +1280,13 @@ Editable fields:
 | --- | --- | --- |
 | `prefix` | string | Model namespace prefix; empty value clears it. |
 | `proxy_url` | string | Per-auth proxy URL; empty value clears it. |
-| `proxy-url` | string | Cluster alias for `proxy_url`. |
-| `headers` | object string to string | Extra upstream headers. In cluster mode, empty string deletes a single header. |
+| `proxy-url` | string | Alias for `proxy_url`. |
+| `headers` | object string to string | Extra upstream headers. Empty string deletes a single header. |
 | `priority` | integer or numeric string | Credential selection priority. |
 | `note` | string | Operator note; empty value clears it. |
 | `websockets` | boolean or string bool | Runtime websocket flag for supported auths. |
 | `disabled` | boolean or string bool | Updates auth disabled state and status. |
-| any nested path | any valid JSON | Cluster mode can set arbitrary metadata paths such as `token.access_token`. |
+| any nested path | any valid JSON | Sets arbitrary metadata paths such as `token.access_token`. |
 
 Example response:
 
@@ -1377,8 +1306,6 @@ GET /antigravity-auth-url
 GET /kimi-auth-url
 GET /xai-auth-url
 ```
-
-`GET /xai-auth-url` is cluster-only in the current Home route registry.
 
 Common response:
 
@@ -1434,13 +1361,13 @@ Example request:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `provider` | string | yes | Supported aliases: `anthropic`/`claude`, `codex`/`openai`, `gemini`/`google`, `antigravity`/`anti-gravity`, and `xai`/`x-ai`/`grok` in cluster mode. `kimi` is not completed through this route. |
+| `provider` | string | yes | Supported aliases: `anthropic`/`claude`, `codex`/`openai`, `gemini`/`google`, `antigravity`/`anti-gravity`, and `xai`/`x-ai`/`grok`. `kimi` is not completed through this route. |
 | `redirect_url` | string | no | Full callback URL. Missing `code`, `state`, or `error` values can be extracted from it. |
 | `code` | string | conditionally | OAuth authorization code; required unless `error` is supplied. |
 | `state` | string | yes | OAuth state token. |
 | `error` | string | conditionally | Provider error; required when `code` is absent. |
 
-Cluster mode reads session data from the DB-backed OAuth session, exchanges the code in the background, and stores resulting auth records in the DB.
+Home reads session data from the DB-backed OAuth session, exchanges the code in the background, and stores resulting auth records in the DB.
 
 Example response:
 
@@ -1448,7 +1375,7 @@ Example response:
 { "status": "ok" }
 ```
 
-Common cluster errors:
+Common errors:
 
 ```json
 { "status": "error", "error": "invalid body" }
@@ -1481,7 +1408,7 @@ Example response:
 }
 ```
 
-Cluster mode stores the resulting credential as DB-backed OAuth auth records and returns the generated `<uuid>.json` name in `auth-file`.
+Home stores the resulting credential as DB-backed OAuth auth records and returns the generated `<uuid>.json` name in `auth-file`.
 
 ## API Call Proxy
 
@@ -1515,7 +1442,7 @@ Example request:
 | `header` | object string to string | no | Request headers. Header values containing `$TOKEN$` are replaced with the selected auth token. `Host` sets request host override. |
 | `data` | string | no | Raw request body string. |
 
-Cluster token replacement is strict: if any header contains `$TOKEN$`, `auth_index` must resolve to a DB auth or runtime auth. Otherwise the endpoint returns:
+Token replacement is strict: if any header contains `$TOKEN$`, `auth_index` must resolve to a DB auth or runtime auth. Otherwise the endpoint returns:
 
 ```json
 { "error": "auth not found" }
@@ -1540,10 +1467,6 @@ Example response:
 ```
 
 ## Usage and Logs
-
-Availability: standalone only.
-
-Cluster mode does not register these runtime/log-file query routes.
 
 ### GET `/api-key-usage`
 
@@ -1742,8 +1665,6 @@ Unknown channel response:
 
 ## Channel Groups
 
-Availability: cluster only.
-
 Channel groups restrict which auth records a client API key may use. If a client API key has an empty `channels` array, channel-group filtering is not applied.
 
 ### GET `/channel-groups`
@@ -1914,8 +1835,6 @@ Response:
 ```
 
 ## Model Groups
-
-Availability: cluster only.
 
 Model groups restrict which model IDs a client API key may use. If a client API key has an empty `model_groups` array, model filtering is not applied.
 
@@ -2242,7 +2161,7 @@ Successful writes return `{ "status": "ok" }`.
 
 ## Config Field Reference
 
-These fields are accepted by Home YAML config. Cluster `PUT /config.yaml` accepts non-credential roots; use provider-key and auth-file routes for credential roots.
+These fields are accepted by Home YAML config. `PUT /config.yaml` accepts non-credential roots; use provider-key and auth-file routes for credential roots.
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -2291,11 +2210,11 @@ These fields are accepted by Home YAML config. Cluster `PUT /config.yaml` accept
 | `routing.session-affinity-ttl` | string | Session-to-auth binding duration. |
 | `antigravity-signature-cache-enabled` | boolean pointer | Enables Antigravity thinking signature cache validation. |
 | `antigravity-signature-bypass-strict` | boolean pointer | Controls strictness of Antigravity signature bypass. |
-| `gemini-api-key` | array of `GeminiKey` | Gemini API-key credentials; cluster should use provider-key routes. |
-| `codex-api-key` | array of `CodexKey` | Codex API-key credentials; cluster should use provider-key routes. |
+| `gemini-api-key` | array of `GeminiKey` | Gemini API-key credentials; use provider-key routes. |
+| `codex-api-key` | array of `CodexKey` | Codex API-key credentials; use provider-key routes. |
 | `codex-header-defaults.user-agent` | string | Default Codex User-Agent. |
 | `codex-header-defaults.beta-features` | string | Default Codex websocket beta features header. |
-| `claude-api-key` | array of `ClaudeKey` | Claude API-key credentials; cluster should use provider-key routes. |
+| `claude-api-key` | array of `ClaudeKey` | Claude API-key credentials; use provider-key routes. |
 | `claude-header-defaults.user-agent` | string | Default Claude User-Agent. |
 | `claude-header-defaults.package-version` | string | Default Claude package version. |
 | `claude-header-defaults.runtime-version` | string | Default Claude runtime version. |
@@ -2303,8 +2222,8 @@ These fields are accepted by Home YAML config. Cluster `PUT /config.yaml` accept
 | `claude-header-defaults.arch` | string | Default Claude architecture fingerprint. |
 | `claude-header-defaults.timeout` | string | Default Claude timeout header. |
 | `claude-header-defaults.stabilize-device-profile` | boolean pointer | Enables stable Claude device profile baseline. |
-| `openai-compatibility` | array of `OpenAICompatibility` | OpenAI-compatible providers; cluster should use provider-key routes. |
-| `vertex-api-key` | array of `VertexCompatKey` | Vertex-compatible API-key credentials; cluster should use provider-key routes. |
+| `openai-compatibility` | array of `OpenAICompatibility` | OpenAI-compatible providers; use provider-key routes. |
+| `vertex-api-key` | array of `VertexCompatKey` | Vertex-compatible API-key credentials; use provider-key routes. |
 | `ampcode` | `AmpCode` | Amp CLI integration settings. |
 | `oauth-excluded-models` | object string to array of string | Per-provider OAuth/file-backed auth excluded models. |
 | `oauth-model-alias` | object string to array of `OAuthModelAlias` | Per-channel OAuth model aliases. |
