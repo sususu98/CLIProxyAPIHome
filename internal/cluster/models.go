@@ -130,14 +130,31 @@ func (ConfigRecord) TableName() string {
 	return "config"
 }
 
+type UserRecord struct {
+	ID        uint           `gorm:"column:id;primaryKey;autoIncrement;index:idx_user_active_order,priority:2"`
+	Username  string         `gorm:"column:username;not null;index;index:idx_user_username_active,priority:1"`
+	Password  string         `gorm:"column:password;type:text"`
+	MFA       JSONB          `gorm:"column:mfa"`
+	Passkey   JSONB          `gorm:"column:passkey"`
+	CreatedAt time.Time      `gorm:"column:created_at"`
+	UpdatedAt time.Time      `gorm:"column:updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_user_active_order,priority:1;index:idx_user_username_active,priority:2"`
+}
+
+// TableName returns the database table name.
+func (UserRecord) TableName() string {
+	return "user"
+}
+
 type APIKeyRecord struct {
 	ID          uint           `gorm:"column:id;primaryKey;autoIncrement;index:idx_api_key_active_order,priority:2"`
 	APIKey      string         `gorm:"column:api_key;not null;uniqueIndex"`
+	UserID      *uint          `gorm:"column:user_id;index;index:idx_api_key_user_active,priority:1"`
 	Channels    JSONB          `gorm:"column:channels"`
 	ModelGroups JSONB          `gorm:"column:model_groups"`
 	CreatedAt   time.Time      `gorm:"column:created_at"`
 	UpdatedAt   time.Time      `gorm:"column:updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_api_key_active_order,priority:1"`
+	DeletedAt   gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_api_key_active_order,priority:1;index:idx_api_key_user_active,priority:2"`
 }
 
 // TableName returns the database table name.

@@ -14,12 +14,14 @@ import (
 
 type APIKeyEntry struct {
 	APIKey      string
+	UserID      *uint
 	Channels    []uint
 	ModelGroups []uint
 }
 
 type APIKeyEntryUpdate struct {
 	APIKey      string
+	UserID      *uint
 	Channels    *[]uint
 	ModelGroups *[]uint
 }
@@ -74,8 +76,8 @@ func (r *Repository) ReplaceAPIKeyEntries(ctx context.Context, entries []APIKeyE
 	return stats, errTransaction
 }
 
-// UpdateAPIKeyBindings updates group bindings for one API key.
-func (r *Repository) UpdateAPIKeyBindings(ctx context.Context, apiKey string, channels *[]uint, modelGroups *[]uint) (*APIKeyRecord, error) {
+// UpdateAPIKeyBindings updates user and group bindings for one API key.
+func (r *Repository) UpdateAPIKeyBindings(ctx context.Context, apiKey string, userID *uint, channels *[]uint, modelGroups *[]uint) (*APIKeyRecord, error) {
 	db, errDB := r.database()
 	if errDB != nil {
 		return nil, errDB
@@ -90,6 +92,15 @@ func (r *Repository) UpdateAPIKeyBindings(ctx context.Context, apiKey string, ch
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if errFirst := tx.Where("api_key = ?", apiKey).First(record).Error; errFirst != nil {
 			return errFirst
+		}
+		if userID != nil {
+			nextUserID := normalizeOptionalUserID(userID)
+			if nextUserID != nil {
+				if errUser := ensureUserExists(ctx, tx, *nextUserID); errUser != nil {
+					return errUser
+				}
+			}
+			record.UserID = nextUserID
 		}
 		if channels != nil {
 			channelsJSON, errChannels := apiKeyChannelsJSON(*channels)
@@ -118,7 +129,7 @@ func (r *Repository) UpdateAPIKeyBindings(ctx context.Context, apiKey string, ch
 
 // UpdateAPIKeyChannels updates channel bindings for one API key.
 func (r *Repository) UpdateAPIKeyChannels(ctx context.Context, apiKey string, channels []uint) (*APIKeyRecord, error) {
-	return r.UpdateAPIKeyBindings(ctx, apiKey, &channels, nil)
+	return r.UpdateAPIKeyBindings(ctx, apiKey, nil, &channels, nil)
 }
 
 // AllowedDispatchIDsForAPIKey returns auth and model IDs allowed by API-key bindings.
@@ -305,6 +316,12 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 			continue
 		}
 		keep[key] = struct{}{}
+		userID := normalizeOptionalUserID(entry.UserID)
+		if userID != nil {
+			if errUser := ensureUserExists(ctx, tx, *userID); errUser != nil {
+				return APIKeyUpsertStats{}, errUser
+			}
+		}
 		channelsJSON := emptyAPIKeyChannelsJSON()
 		var errChannels error
 		if entry.Channels != nil {
@@ -330,6 +347,10 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 				stats.Restored++
 			} else {
 				stats.Unchanged++
+			}
+			if !sameOptionalUint(record.UserID, userID) {
+				updates["user_id"] = userID
+				updatedBindings = true
 			}
 			if entry.Channels != nil {
 				currentChannels, errCurrent := apiKeyChannelsFromJSON(record.Channels)
@@ -368,6 +389,7 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 
 		if errCreate := tx.WithContext(contextOrBackground(ctx)).Create(&APIKeyRecord{
 			APIKey:      key,
+			UserID:      userID,
 			Channels:    channelsJSON,
 			ModelGroups: modelGroupsJSON,
 		}).Error; errCreate != nil {
@@ -420,6 +442,7 @@ func normalizeAPIKeyEntryUpdates(entries []APIKeyEntryUpdate) []APIKeyEntryUpdat
 		}
 		seen[key] = struct{}{}
 		next := APIKeyEntryUpdate{APIKey: key}
+		next.UserID = normalizeOptionalUserID(entry.UserID)
 		if entry.Channels != nil {
 			channels := normalizeChannelGroupIDs(*entry.Channels)
 			next.Channels = &channels
@@ -447,6 +470,7 @@ func apiKeyEntryFromRecord(record *APIKeyRecord) (APIKeyEntry, error) {
 	}
 	return APIKeyEntry{
 		APIKey:      strings.TrimSpace(record.APIKey),
+		UserID:      normalizeOptionalUserID(record.UserID),
 		Channels:    channels,
 		ModelGroups: modelGroups,
 	}, nil
@@ -481,6 +505,15 @@ func apiKeyModelGroupsJSON(modelGroups []uint) (JSONB, error) {
 
 func emptyAPIKeyModelGroupsJSON() JSONB {
 	return JSONB("[]")
+}
+
+func sameOptionalUint(left *uint, right *uint) bool {
+	left = normalizeOptionalUserID(left)
+	right = normalizeOptionalUserID(right)
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func migrateAPIKeyChannels(db *gorm.DB) error {

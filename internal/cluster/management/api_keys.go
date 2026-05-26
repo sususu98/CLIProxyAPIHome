@@ -18,6 +18,8 @@ type apiKeyEntryBody struct {
 	APIKeyDash      *string `json:"api-key"`
 	Key             *string `json:"key"`
 	Value           *string `json:"value"`
+	UserID          *uint   `json:"user_id"`
+	UserIDDash      *uint   `json:"user-id"`
 	Channels        *[]uint `json:"channels"`
 	ModelGroups     *[]uint `json:"model_groups"`
 	ModelGroupsDash *[]uint `json:"model-groups"`
@@ -31,6 +33,8 @@ type apiKeyPatchBody struct {
 	APIKey          *string         `json:"api_key"`
 	APIKeyDash      *string         `json:"api-key"`
 	Key             *string         `json:"key"`
+	UserID          *uint           `json:"user_id"`
+	UserIDDash      *uint           `json:"user-id"`
 	Channels        *[]uint         `json:"channels"`
 	ModelGroups     *[]uint         `json:"model_groups"`
 	ModelGroupsDash *[]uint         `json:"model-groups"`
@@ -56,6 +60,8 @@ func apiKeyEntriesResponse(entries []cluster.APIKeyEntry) gin.H {
 		items = append(items, gin.H{
 			"api-key":      key,
 			"api_key":      key,
+			"user-id":      optionalUserIDValue(entry.UserID),
+			"user_id":      optionalUserIDValue(entry.UserID),
 			"channels":     channels,
 			"model_groups": modelGroups,
 		})
@@ -79,7 +85,7 @@ func decodeAPIKeyEntryUpdates(data []byte) ([]cluster.APIKeyEntryUpdate, error) 
 	if errUnmarshal := json.Unmarshal(data, &wrapper); errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
-	for _, key := range []string{"items", "api-keys", "api_keys"} {
+	for _, key := range []string{"items", "api-keys", "api_keys", "api_key_entries"} {
 		raw := wrapper[key]
 		if len(raw) == 0 {
 			continue
@@ -120,6 +126,7 @@ func decodeAPIKeyEntry(data []byte) (cluster.APIKeyEntryUpdate, error) {
 	}
 	return cluster.APIKeyEntryUpdate{
 		APIKey:      body.apiKey(),
+		UserID:      body.userID(),
 		Channels:    body.Channels,
 		ModelGroups: body.modelGroups(),
 	}, nil
@@ -144,6 +151,13 @@ func (b apiKeyEntryBody) modelGroups() *[]uint {
 	return b.ModelGroupsDash
 }
 
+func (b apiKeyEntryBody) userID() *uint {
+	if b.UserID != nil {
+		return b.UserID
+	}
+	return b.UserIDDash
+}
+
 func (h *Handler) patchAPIKeyEntries(c *gin.Context) error {
 	var body apiKeyPatchBody
 	if errBindJSON := c.ShouldBindJSON(&body); errBindJSON != nil {
@@ -153,12 +167,16 @@ func (h *Handler) patchAPIKeyEntries(c *gin.Context) error {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 
+	userID := body.userID()
 	modelGroups := body.modelGroups()
-	if body.Channels != nil || modelGroups != nil {
+	if userID != nil || body.Channels != nil || modelGroups != nil {
 		key := body.apiKey()
 		if key == "" && len(body.Value) > 0 {
 			if entry, errEntry := decodeAPIKeyEntry(body.Value); errEntry == nil {
 				key = strings.TrimSpace(entry.APIKey)
+				if userID == nil {
+					userID = entry.UserID
+				}
 				if body.Channels == nil {
 					body.Channels = entry.Channels
 				}
@@ -170,8 +188,12 @@ func (h *Handler) patchAPIKeyEntries(c *gin.Context) error {
 		if key == "" {
 			return fmt.Errorf("missing api_key")
 		}
-		record, errUpdate := h.repo.UpdateAPIKeyBindings(ctx, key, body.Channels, modelGroups)
+		record, errUpdate := h.repo.UpdateAPIKeyBindings(ctx, key, userID, body.Channels, modelGroups)
 		if errUpdate != nil {
+			if errors.Is(errUpdate, cluster.ErrUserNotFound) {
+				respondError(c, http.StatusNotFound, "user_not_found", errUpdate)
+				return nil
+			}
 			if errors.Is(errUpdate, gorm.ErrRecordNotFound) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "api key not found"})
 				return nil
@@ -214,8 +236,12 @@ func (h *Handler) patchAPIKeyEntries(c *gin.Context) error {
 			modelGroups := append([]uint(nil), entries[*body.Index].ModelGroups...)
 			next.ModelGroups = &modelGroups
 		}
+		if next.UserID == nil {
+			next.UserID = entries[*body.Index].UserID
+		}
 		entries[*body.Index] = cluster.APIKeyEntry{
 			APIKey:      strings.TrimSpace(next.APIKey),
+			UserID:      normalizeAPIKeyEntryUserID(next.UserID),
 			Channels:    uintsOrEmpty(next.Channels),
 			ModelGroups: uintsOrEmpty(next.ModelGroups),
 		}
@@ -244,6 +270,10 @@ func (h *Handler) patchAPIKeyEntries(c *gin.Context) error {
 	}
 
 	if _, errReplace := h.repo.ReplaceAPIKeyEntries(ctx, apiKeyEntryUpdatesFromEntries(entries)); errReplace != nil {
+		if errors.Is(errReplace, cluster.ErrUserNotFound) {
+			respondError(c, http.StatusNotFound, "user_not_found", errReplace)
+			return nil
+		}
 		respondError(c, http.StatusInternalServerError, "write_failed", errReplace)
 		return nil
 	}
@@ -326,6 +356,7 @@ func apiKeyEntryUpdatesFromEntries(entries []cluster.APIKeyEntry) []cluster.APIK
 		modelGroups := append([]uint(nil), entry.ModelGroups...)
 		updates = append(updates, cluster.APIKeyEntryUpdate{
 			APIKey:      key,
+			UserID:      normalizeAPIKeyEntryUserID(entry.UserID),
 			Channels:    &channels,
 			ModelGroups: &modelGroups,
 		})
@@ -356,6 +387,8 @@ func apiKeyEntryToMap(entry cluster.APIKeyEntry) gin.H {
 	return gin.H{
 		"api-key":      strings.TrimSpace(entry.APIKey),
 		"api_key":      strings.TrimSpace(entry.APIKey),
+		"user-id":      optionalUserIDValue(entry.UserID),
+		"user_id":      optionalUserIDValue(entry.UserID),
 		"channels":     channels,
 		"model_groups": modelGroups,
 	}
@@ -366,4 +399,27 @@ func (b apiKeyPatchBody) modelGroups() *[]uint {
 		return b.ModelGroups
 	}
 	return b.ModelGroupsDash
+}
+
+func (b apiKeyPatchBody) userID() *uint {
+	if b.UserID != nil {
+		return b.UserID
+	}
+	return b.UserIDDash
+}
+
+func normalizeAPIKeyEntryUserID(userID *uint) *uint {
+	if userID == nil || *userID == 0 {
+		return nil
+	}
+	value := *userID
+	return &value
+}
+
+func optionalUserIDValue(userID *uint) any {
+	userID = normalizeAPIKeyEntryUserID(userID)
+	if userID == nil {
+		return nil
+	}
+	return *userID
 }

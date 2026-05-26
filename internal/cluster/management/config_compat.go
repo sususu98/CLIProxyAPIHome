@@ -3,11 +3,13 @@ package management
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"gopkg.in/yaml.v3"
 )
@@ -437,6 +439,10 @@ func (h *Handler) PutAPIKeys(c *gin.Context) {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 	if _, errReplace := h.repo.ReplaceAPIKeyEntries(ctx, entries); errReplace != nil {
+		if errors.Is(errReplace, cluster.ErrUserNotFound) {
+			respondError(c, http.StatusNotFound, "user_not_found", errReplace)
+			return
+		}
 		respondError(c, http.StatusInternalServerError, "write_failed", errReplace)
 		return
 	}
