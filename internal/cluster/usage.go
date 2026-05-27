@@ -14,6 +14,7 @@ type UsageRecord struct {
 	ID                  uint      `gorm:"column:id;primaryKey;autoIncrement;index:idx_usage_time_order,priority:2"`
 	Timestamp           time.Time `gorm:"column:timestamp;not null;index:idx_usage_timestamp;index:idx_usage_time_order,priority:1,sort:desc;index:idx_usage_source_time,priority:2,sort:desc;index:idx_usage_auth_time,priority:2,sort:desc;index:idx_usage_failed_time,priority:2,sort:desc;index:idx_usage_provider_model_time,priority:3,sort:desc;index:idx_usage_endpoint_time,priority:2,sort:desc"`
 	LatencyMS           int64     `gorm:"column:latency_ms;not null;default:0"`
+	TTFTMS              int64     `gorm:"column:ttft_ms;not null;default:0"`
 	Source              string    `gorm:"column:source;index:idx_usage_source;index:idx_usage_source_time,priority:1"`
 	AuthIndex           string    `gorm:"column:auth_index;index:idx_usage_auth_index;index:idx_usage_auth_time,priority:1"`
 	InputTokens         int64     `gorm:"column:input_tokens;not null;default:0"`
@@ -29,6 +30,7 @@ type UsageRecord struct {
 	Provider            string    `gorm:"column:provider;index:idx_usage_provider_model,priority:1;index:idx_usage_provider_model_time,priority:1"`
 	Model               string    `gorm:"column:model;index:idx_usage_provider_model,priority:2;index:idx_usage_provider_model_time,priority:2"`
 	Alias               string    `gorm:"column:alias"`
+	Effort              string    `gorm:"column:effort"`
 	Endpoint            string    `gorm:"column:endpoint;index:idx_usage_endpoint;index:idx_usage_endpoint_time,priority:1"`
 	AuthType            string    `gorm:"column:auth_type"`
 	APIKey              string    `gorm:"column:api_key"`
@@ -67,6 +69,7 @@ func UsageRecordFromPayload(payload string) (*UsageRecord, error) {
 	record := &UsageRecord{
 		Timestamp:           timestamp.UTC(),
 		LatencyMS:           gjson.Get(payload, "latency_ms").Int(),
+		TTFTMS:              gjson.Get(payload, "ttft_ms").Int(),
 		Source:              strings.TrimSpace(gjson.Get(payload, "source").String()),
 		AuthIndex:           strings.TrimSpace(gjson.Get(payload, "auth_index").String()),
 		InputTokens:         gjson.Get(payload, "tokens.input_tokens").Int(),
@@ -82,6 +85,7 @@ func UsageRecordFromPayload(payload string) (*UsageRecord, error) {
 		Provider:            strings.TrimSpace(gjson.Get(payload, "provider").String()),
 		Model:               strings.TrimSpace(gjson.Get(payload, "model").String()),
 		Alias:               strings.TrimSpace(gjson.Get(payload, "alias").String()),
+		Effort:              strings.TrimSpace(gjson.Get(payload, "reasoning_effort").String()),
 		Endpoint:            strings.TrimSpace(gjson.Get(payload, "endpoint").String()),
 		AuthType:            strings.TrimSpace(gjson.Get(payload, "auth_type").String()),
 		APIKey:              strings.TrimSpace(gjson.Get(payload, "api_key").String()),
