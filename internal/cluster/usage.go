@@ -10,6 +10,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+const defaultUsageServiceTier = "default"
+
 type UsageRecord struct {
 	ID                  uint      `gorm:"column:id;primaryKey;autoIncrement;index:idx_usage_time_order,priority:2"`
 	Timestamp           time.Time `gorm:"column:timestamp;not null;index:idx_usage_timestamp;index:idx_usage_time_order,priority:1,sort:desc;index:idx_usage_source_time,priority:2,sort:desc;index:idx_usage_auth_time,priority:2,sort:desc;index:idx_usage_failed_time,priority:2,sort:desc;index:idx_usage_provider_model_time,priority:3,sort:desc;index:idx_usage_endpoint_time,priority:2,sort:desc"`
@@ -31,6 +33,7 @@ type UsageRecord struct {
 	Model               string    `gorm:"column:model;index:idx_usage_provider_model,priority:2;index:idx_usage_provider_model_time,priority:2"`
 	Alias               string    `gorm:"column:alias"`
 	Effort              string    `gorm:"column:effort"`
+	ServiceTier         string    `gorm:"column:service_tier"`
 	Endpoint            string    `gorm:"column:endpoint;index:idx_usage_endpoint;index:idx_usage_endpoint_time,priority:1"`
 	AuthType            string    `gorm:"column:auth_type"`
 	APIKey              string    `gorm:"column:api_key"`
@@ -86,6 +89,7 @@ func UsageRecordFromPayload(payload string) (*UsageRecord, error) {
 		Model:               strings.TrimSpace(gjson.Get(payload, "model").String()),
 		Alias:               strings.TrimSpace(gjson.Get(payload, "alias").String()),
 		Effort:              strings.TrimSpace(gjson.Get(payload, "reasoning_effort").String()),
+		ServiceTier:         usageServiceTierFromPayload(payload),
 		Endpoint:            strings.TrimSpace(gjson.Get(payload, "endpoint").String()),
 		AuthType:            strings.TrimSpace(gjson.Get(payload, "auth_type").String()),
 		APIKey:              strings.TrimSpace(gjson.Get(payload, "api_key").String()),
@@ -96,6 +100,15 @@ func UsageRecordFromPayload(payload string) (*UsageRecord, error) {
 		CreatedAt:           time.Now().UTC(),
 	}
 	return record, nil
+}
+
+// usageServiceTierFromPayload returns the reported service tier or the default tier.
+func usageServiceTierFromPayload(payload string) string {
+	serviceTier := strings.TrimSpace(gjson.Get(payload, "service_tier").String())
+	if serviceTier == "" {
+		return defaultUsageServiceTier
+	}
+	return serviceTier
 }
 
 // AppendUsage appends an usage.
