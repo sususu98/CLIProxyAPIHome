@@ -78,7 +78,7 @@ func (h *Handler) GetLogs(c *gin.Context) {
 	})
 }
 
-// DownloadRequestLogByID downloads a request log file by path request ID and query home IP.
+// DownloadRequestLogByID downloads a request log file by path request ID and optional query home IP.
 func (h *Handler) DownloadRequestLogByID(c *gin.Context) {
 	requestID := strings.TrimSpace(c.Param("id"))
 	if requestID == "" {
@@ -102,7 +102,7 @@ func (h *Handler) downloadRequestLog(c *gin.Context, homeIP string, requestID st
 	if !validateRequestLogParams(c, homeIP, requestID) {
 		return
 	}
-	if h.nodeIP != "" && homeIP != h.nodeIP {
+	if homeIP != "" && h.nodeIP != "" && homeIP != h.nodeIP {
 		h.forwardRequestLogByID(c, homeIP, requestID)
 		return
 	}
@@ -116,7 +116,7 @@ func (h *Handler) downloadLocalRequestLog(c *gin.Context, homeIP string, request
 	if !validateRequestLogParams(c, homeIP, requestID) {
 		return
 	}
-	if h.nodeIP != "" && homeIP != h.nodeIP {
+	if homeIP != "" && h.nodeIP != "" && homeIP != h.nodeIP {
 		respondError(c, http.StatusNotFound, "not_found", fmt.Errorf("home log file is not local to this node"))
 		return
 	}
@@ -135,10 +135,6 @@ func (h *Handler) downloadLocalRequestLog(c *gin.Context, homeIP string, request
 }
 
 func validateRequestLogParams(c *gin.Context, homeIP string, requestID string) bool {
-	if homeIP == "" {
-		respondError(c, http.StatusBadRequest, "missing_home_ip", fmt.Errorf("home_ip is required"))
-		return false
-	}
 	if requestID == "" {
 		respondError(c, http.StatusBadRequest, "missing_request_id", fmt.Errorf("request_id is required"))
 		return false

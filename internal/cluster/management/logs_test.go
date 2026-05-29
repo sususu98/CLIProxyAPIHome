@@ -118,6 +118,37 @@ func TestDownloadRequestLogByIDUsesRequestIDOnlyForFileMatch(t *testing.T) {
 	}
 }
 
+func TestDownloadRequestLogByIDWithoutHomeIPUsesLocalNode(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if errMkdir := os.Mkdir("logs", 0o755); errMkdir != nil {
+		t.Fatalf("mkdir logs: %v", errMkdir)
+	}
+	content := "local request log without home ip\n"
+	fileName := "10.0.0.9-v1-responses-2026-05-29T010203-req-local.log"
+	if errWrite := os.WriteFile(filepath.Join("logs", fileName), []byte(content), 0o644); errWrite != nil {
+		t.Fatalf("write request log: %v", errWrite)
+	}
+
+	handler := NewHandler(cluster.NewRepository(db), nil, "192.0.2.10", 0)
+	engine := gin.New()
+	engine.GET("/request-log-by-id/:id", handler.DownloadRequestLogByID)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/request-log-by-id/req-local", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	if got := resp.Body.String(); got != content {
+		t.Fatalf("body = %q, want %q", got, content)
+	}
+}
+
 func TestDownloadRequestLogByIDFallsBackToFilesystemWithoutDatabaseRecord(t *testing.T) {
 	db, cleanup := openManagementLogTestDB(t)
 	defer cleanup()
