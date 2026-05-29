@@ -12,4 +12,5 @@ func Register(reg *dispatch.Registry) {
 	_ = reg.RegisterDirect("LPRUSH", "usage", handleUsage)
 
 	_ = reg.RegisterDirect("RPUSH", "request-log", handleRequestLog)
+	_ = reg.RegisterDirect("RPUSH", "app-log", handleAppLog)
 }
