@@ -272,11 +272,12 @@ func run() int {
 	mgmtOpts := make([]managementhttp.RouteOption, 0, 1)
 	if clusterRepo != nil {
 		mgmtOpts = append(mgmtOpts, managementhttp.WithDatabaseManagement(managementhttp.DatabaseManagementOption{
-			Enabled:    true,
-			Repository: clusterRepo,
-			Runtime:    rt,
-			NodeIP:     clusterClientAddr,
-			NodePort:   clusterAdvertisedPort,
+			Enabled:          true,
+			Repository:       clusterRepo,
+			Runtime:          rt,
+			NodeIP:           clusterClientAddr,
+			NodePort:         clusterAdvertisedPort,
+			ForwardTLSConfig: clusterTLSConfig,
 		}))
 	}
 	mgmtBuild, errMgmt := managementhttp.Build(cfgPath, mgmtOpts...)

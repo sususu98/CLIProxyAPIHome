@@ -1515,22 +1515,40 @@ Query 参数：
 
 ### GET `/logs`
 
-启用 file logging 时读取应用日志。
+返回数据库 `log` 表中的应用日志记录。
 
 Query 参数：
 
 | Query | 类型 | 说明 |
 | --- | --- | --- |
-| `after` | integer | Unix timestamp cutoff；解析成功时不返回早于或等于该时间的行。 |
-| `limit` | integer | 最大返回行数。 |
+| `home_ip` | string | 可选 Home node IP 过滤条件。 |
+| `client_ip` | string | 可选 CPA client IP 过滤条件。 |
+| `request_id` | string | 可选 request ID 过滤条件。 |
+| `level` | string | 可选日志级别过滤条件。 |
+| `after` | integer 或 RFC3339 | 可选 timestamp 下界。 |
+| `before` | integer 或 RFC3339 | 可选 timestamp 上界。 |
+| `limit` | integer | 最大返回记录数；默认 `100`，最大 `1000`。 |
+| `offset` | integer | 分页偏移量；默认 `0`。 |
 
 输出示例：
 
 ```json
 {
-  "lines": ["2026-05-27T10:00:00Z log line"],
-  "line-count": 1,
-  "latest-timestamp": 1779876000
+  "logs": [
+    {
+      "id": 1,
+      "timestamp": "2026-05-29T01:02:03Z",
+      "client_ip": "10.0.0.5",
+      "request_id": "req-1",
+      "home_ip": "192.0.2.10",
+      "level": "warn",
+      "line": "[2026-05-29 09:02:03] [req-1] [warn] message",
+      "created_at": "2026-05-29T01:02:04Z"
+    }
+  ],
+  "total": 1,
+  "limit": 100,
+  "offset": 0
 }
 ```
 
@@ -1584,13 +1602,19 @@ Path 参数：
 
 ### GET `/request-log-by-id/:id`
 
-下载文件名以 `-<id>.log` 结尾的 request log。
+从对应 Home 本机 `logs` 目录下载 request log 文件。`home_ip` 用来指明文件属于哪台 Home；当目标不是当前 Home 时，当前 Home 会通过内部 mTLS-only cluster route 转发到目标 Home。文件按 request ID 匹配，文件系统仍是事实来源，所以文件已被删除时返回 `404`。
 
 Path 参数：
 
 | Path | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | string | Request ID；拒绝 slash。 |
+
+Query 参数：
+
+| Query | 类型 | 说明 |
+| --- | --- | --- |
+| `home_ip` | string | 必填 request log 所属 Home node IP。 |
 
 输出：文件附件。
 

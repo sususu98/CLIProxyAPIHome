@@ -1515,22 +1515,40 @@ Example response:
 
 ### GET `/logs`
 
-Reads application logs when file logging is enabled.
+Returns application log records from the database `log` table.
 
 Query parameters:
 
 | Query | Type | Description |
 | --- | --- | --- |
-| `after` | integer | Unix timestamp cutoff. Lines older than or equal to this timestamp are omitted when parsing succeeds. |
-| `limit` | integer | Maximum returned line count. |
+| `home_ip` | string | Optional Home node IP filter. |
+| `client_ip` | string | Optional CPA client IP filter. |
+| `request_id` | string | Optional request ID filter. |
+| `level` | string | Optional log level filter. |
+| `after` | integer or RFC3339 | Optional timestamp lower bound. |
+| `before` | integer or RFC3339 | Optional timestamp upper bound. |
+| `limit` | integer | Maximum returned record count. Default is `100`, maximum is `1000`. |
+| `offset` | integer | Pagination offset. Default is `0`. |
 
 Example response:
 
 ```json
 {
-  "lines": ["2026-05-27T10:00:00Z log line"],
-  "line-count": 1,
-  "latest-timestamp": 1779876000
+  "logs": [
+    {
+      "id": 1,
+      "timestamp": "2026-05-29T01:02:03Z",
+      "client_ip": "10.0.0.5",
+      "request_id": "req-1",
+      "home_ip": "192.0.2.10",
+      "level": "warn",
+      "line": "[2026-05-29 09:02:03] [req-1] [warn] message",
+      "created_at": "2026-05-29T01:02:04Z"
+    }
+  ],
+  "total": 1,
+  "limit": 100,
+  "offset": 0
 }
 ```
 
@@ -1584,13 +1602,19 @@ Response: file attachment.
 
 ### GET `/request-log-by-id/:id`
 
-Downloads the request log whose filename ends with `-<id>.log`.
+Downloads a Home request log file from that Home's local `logs` directory. `home_ip` identifies which Home owns the file; when it is not the current Home, the current Home forwards the request to the target Home over an internal mTLS-only cluster route. Files are matched by request ID, and the file system remains the source of truth, so deleted files return `404`.
 
 Path parameters:
 
 | Path | Type | Description |
 | --- | --- | --- |
 | `id` | string | Request ID; slashes are rejected. |
+
+Query parameters:
+
+| Query | Type | Description |
+| --- | --- | --- |
+| `home_ip` | string | Required Home node IP that owns the request log. |
 
 Response: file attachment.
 

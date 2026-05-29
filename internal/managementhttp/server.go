@@ -2,6 +2,7 @@ package managementhttp
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"os"
@@ -96,11 +97,12 @@ func (r *RouteRegistry) Register(group *gin.RouterGroup) {
 type RouteOption func(*RouteRegistry)
 
 type ClusterManagementOption struct {
-	Enabled    bool
-	Repository *cluster.Repository
-	Runtime    *home.Runtime
-	NodeIP     string
-	NodePort   int
+	Enabled          bool
+	Repository       *cluster.Repository
+	Runtime          *home.Runtime
+	NodeIP           string
+	NodePort         int
+	ForwardTLSConfig *tls.Config
 }
 
 type DatabaseManagementOption = ClusterManagementOption
@@ -133,7 +135,9 @@ func WithDatabaseManagement(opt DatabaseManagementOption) RouteOption {
 		}
 		optCopy := opt
 		r.clusterManagement = &optCopy
-		registerClusterManagementRoutes(r, clustermanagement.NewHandler(opt.Repository, opt.Runtime, opt.NodeIP, opt.NodePort))
+		handler := clustermanagement.NewHandler(opt.Repository, opt.Runtime, opt.NodeIP, opt.NodePort)
+		handler.SetForwardTLSConfig(opt.ForwardTLSConfig)
+		registerClusterManagementRoutes(r, handler)
 	}
 }
 
@@ -162,6 +166,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodGet, "/logging-to-file", handler.GetLoggingToFile)
 	r.Set(http.MethodPut, "/logging-to-file", handler.PutLoggingToFile)
 	r.Set(http.MethodPatch, "/logging-to-file", handler.PutLoggingToFile)
+	r.Set(http.MethodGet, "/logs", handler.GetLogs)
 	r.Set(http.MethodGet, "/logs-max-total-size-mb", handler.GetLogsMaxTotalSizeMB)
 	r.Set(http.MethodPut, "/logs-max-total-size-mb", handler.PutLogsMaxTotalSizeMB)
 	r.Set(http.MethodPatch, "/logs-max-total-size-mb", handler.PutLogsMaxTotalSizeMB)
@@ -245,6 +250,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodGet, "/request-log", handler.GetRequestLog)
 	r.Set(http.MethodPut, "/request-log", handler.PutRequestLog)
 	r.Set(http.MethodPatch, "/request-log", handler.PutRequestLog)
+	r.Set(http.MethodGet, "/request-log-by-id/:id", handler.DownloadRequestLogByID)
 	r.Set(http.MethodGet, "/request-retry", handler.GetRequestRetry)
 	r.Set(http.MethodPut, "/request-retry", handler.PutRequestRetry)
 	r.Set(http.MethodPatch, "/request-retry", handler.PutRequestRetry)
@@ -436,6 +442,14 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 		engine.GET("/management.html", serveManagementControlPanel(cfg, configFilePath))
 	}
 
+	if clusterEnabled {
+		clusterHandler := clustermanagement.NewHandler(clusterOpt.Repository, clusterOpt.Runtime, clusterOpt.NodeIP, clusterOpt.NodePort)
+		clusterHandler.SetForwardTLSConfig(clusterOpt.ForwardTLSConfig)
+		clusterGroup := engine.Group("/v0/cluster")
+		clusterGroup.Use(withBuildInfoHeaders(), clusterMTLSMiddleware())
+		registerClusterInternalRoutes(clusterGroup, clusterHandler)
+	}
+
 	mgmt := engine.Group("/v0/management")
 
 	reg := defaultRoutes(handler)
@@ -465,6 +479,14 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 		Handler:     handler,
 		AuthManager: authManager,
 	}, nil
+}
+
+// registerClusterInternalRoutes wires mTLS-only cluster routes.
+func registerClusterInternalRoutes(group *gin.RouterGroup, handler *clustermanagement.Handler) {
+	if group == nil || handler == nil {
+		return
+	}
+	group.GET("/request-log-by-id/:id", handler.DownloadLocalRequestLogByID)
 }
 
 // corsMiddleware returns a Gin middleware handler that adds CORS headers.
@@ -586,6 +608,18 @@ func clusterAvailabilityMiddleware(opt *ClusterManagementOption, handler *cpasdk
 		}
 		if handler != nil {
 			handler.SetConfig(cfg)
+		}
+		c.Next()
+	}
+}
+
+// clusterMTLSMiddleware allows only verified cluster mTLS peers.
+func clusterMTLSMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c == nil || c.Request == nil || c.Request.TLS == nil ||
+			len(c.Request.TLS.PeerCertificates) == 0 || len(c.Request.TLS.VerifiedChains) == 0 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "cluster_mtls_required"})
+			return
 		}
 		c.Next()
 	}
