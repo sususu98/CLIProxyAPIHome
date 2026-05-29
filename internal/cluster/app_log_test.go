@@ -7,9 +7,9 @@ import (
 
 func TestAppLogRecordFromPayloadStoresLineLevelAndTimestamp(t *testing.T) {
 	line := "[2026-05-29 08:00:00] [req-123] [warn ] [manager.go:524] Use API key provider=codex model=gpt-5"
-	payload := `{"line":"` + line + `","level":"warning","timestamp":"2026-05-29T01:02:03Z"}`
+	payload := `{"line":"` + line + `","level":"warning","timestamp":"2026-05-29T01:02:03Z","request_id":"req-123"}`
 
-	record, errRecord := AppLogRecordFromPayload("10.0.0.5", payload)
+	record, errRecord := AppLogRecordFromPayload("10.0.0.5", "192.0.2.10", payload)
 	if errRecord != nil {
 		t.Fatalf("AppLogRecordFromPayload: %v", errRecord)
 	}
@@ -19,6 +19,12 @@ func TestAppLogRecordFromPayloadStoresLineLevelAndTimestamp(t *testing.T) {
 	}
 	if record.Line != line {
 		t.Fatalf("line = %q, want %q", record.Line, line)
+	}
+	if record.RequestID != "req-123" {
+		t.Fatalf("request id = %q, want req-123", record.RequestID)
+	}
+	if record.HomeIP != "192.0.2.10" {
+		t.Fatalf("home ip = %q, want 192.0.2.10", record.HomeIP)
 	}
 	if record.Level != "warn" {
 		t.Fatalf("level = %q, want warn", record.Level)
@@ -33,7 +39,7 @@ func TestAppLogRecordFromPayloadStoresLineLevelAndTimestamp(t *testing.T) {
 
 func TestAppLogRecordFromPayloadRequiresLine(t *testing.T) {
 	payload := `{"message":"payload message"}`
-	record, errRecord := AppLogRecordFromPayload("", payload)
+	record, errRecord := AppLogRecordFromPayload("", "", payload)
 	if errRecord == nil {
 		t.Fatalf("AppLogRecordFromPayload record = %+v, want error", record)
 	}

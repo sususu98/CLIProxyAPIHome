@@ -41,7 +41,8 @@ func TestHandleAppLogPrintsAndStoresDatabaseWhenHomeLoggingToFile(t *testing.T) 
 	if errRuntime != nil {
 		t.Fatalf("NewRuntime: %v", errRuntime)
 	}
-	rt.SetClusterAdapter(cluster.NewRuntimeAdapter(cluster.NewRepository(db)))
+	adapter := cluster.NewRuntimeAdapter(cluster.NewRepository(db), "192.0.2.10")
+	rt.SetClusterAdapter(adapter)
 
 	oldStdout := os.Stdout
 	reader, writer, errPipe := os.Pipe()
@@ -56,7 +57,7 @@ func TestHandleAppLogPrintsAndStoresDatabaseWhenHomeLoggingToFile(t *testing.T) 
 
 	line := "[2026-05-29 08:00:00] [--------] [debug] debug details"
 	timestamp := "2026-05-29T01:02:03Z"
-	payload := `{"line":"` + line + `","level":"debug","timestamp":"` + timestamp + `"}`
+	payload := `{"line":"` + line + `","level":"debug","timestamp":"` + timestamp + `","request_id":"req-app-1"}`
 	reply := handleAppLog(ctx, dispatch.Env{ClientIP: "10.0.0.5", Runtime: rt}, []string{"RPUSH", "app-log", payload})
 	if reply.Kind != dispatch.ReplyKindInteger || reply.Integer != 1 {
 		t.Fatalf("reply = %+v, want integer 1", reply)
@@ -85,6 +86,12 @@ func TestHandleAppLogPrintsAndStoresDatabaseWhenHomeLoggingToFile(t *testing.T) 
 	}
 	if records[0].ClientIP != "10.0.0.5" {
 		t.Fatalf("client ip = %q, want 10.0.0.5", records[0].ClientIP)
+	}
+	if records[0].RequestID != "req-app-1" {
+		t.Fatalf("request id = %q, want req-app-1", records[0].RequestID)
+	}
+	if records[0].HomeIP != "192.0.2.10" {
+		t.Fatalf("home ip = %q, want 192.0.2.10", records[0].HomeIP)
 	}
 	if records[0].Line != line {
 		t.Fatalf("line = %q, want %q", records[0].Line, line)

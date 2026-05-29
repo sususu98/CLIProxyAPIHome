@@ -18,15 +18,17 @@ type RuntimeAdapter struct {
 	repo      *Repository
 	index     map[string]AuthIndex
 	fullCache map[string]*coreauth.Auth
+	homeIP    string
 	mu        sync.RWMutex
 }
 
 // NewRuntimeAdapter creates a new runtime adapter.
-func NewRuntimeAdapter(repo *Repository) *RuntimeAdapter {
+func NewRuntimeAdapter(repo *Repository, homeIP string) *RuntimeAdapter {
 	return &RuntimeAdapter{
 		repo:      repo,
 		index:     make(map[string]AuthIndex),
 		fullCache: make(map[string]*coreauth.Auth),
+		homeIP:    strings.TrimSpace(homeIP),
 	}
 }
 
@@ -89,7 +91,7 @@ func (a *RuntimeAdapter) StoreUsagePayload(ctx context.Context, payload string) 
 	if !a.Enabled() {
 		return fmt.Errorf("cluster runtime adapter is disabled")
 	}
-	_, errAppend := a.repo.AppendUsage(ctx, payload)
+	_, errAppend := a.repo.AppendUsage(ctx, payload, a.homeIP)
 	return errAppend
 }
 
@@ -98,7 +100,7 @@ func (a *RuntimeAdapter) StoreAppLogPayload(ctx context.Context, clientIP string
 	if !a.Enabled() {
 		return fmt.Errorf("cluster runtime adapter is disabled")
 	}
-	_, errAppend := a.repo.AppendAppLog(ctx, clientIP, payload)
+	_, errAppend := a.repo.AppendAppLog(ctx, clientIP, a.homeIP, payload)
 	return errAppend
 }
 

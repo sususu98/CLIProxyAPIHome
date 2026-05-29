@@ -187,7 +187,7 @@ func run() int {
 		return 1
 	}
 	clusterTLSConfig = tlsConfig
-	adapter := cluster.NewRuntimeAdapter(repo)
+	adapter := cluster.NewRuntimeAdapter(repo, clusterClientAddr)
 	clusterAdapter = adapter
 	rt.SetClusterAdapter(adapter)
 	nodeCfg := resolveDatabaseNodeConfig(clusterCfg, clusterExists)
