@@ -64,6 +64,10 @@ type clusterUsageStore interface {
 	StoreUsagePayload(ctx context.Context, payload string) error
 }
 
+type appLogStore interface {
+	StoreAppLogPayload(ctx context.Context, clientIP string, payload string) error
+}
+
 type channelScopedAuthStore interface {
 	AllowedAuthIDsForAPIKey(ctx context.Context, apiKey string) ([]string, error)
 }
@@ -325,6 +329,18 @@ func (r *Runtime) PersistClusterUsagePayload(ctx context.Context, payload string
 		log.Warnf("cluster usage queue is stopped; accepting usage without persistence")
 	}
 	return true, nil
+}
+
+// PersistAppLogPayload stores a CPA app log payload in the runtime database.
+func (r *Runtime) PersistAppLogPayload(ctx context.Context, clientIP string, payload string) (bool, error) {
+	if r == nil || r.clusterAdapter == nil || !r.clusterAdapter.Enabled() {
+		return false, nil
+	}
+	store, ok := r.clusterAdapter.(appLogStore)
+	if !ok || store == nil {
+		return false, fmt.Errorf("app log store is unavailable")
+	}
+	return true, store.StoreAppLogPayload(ctx, clientIP, payload)
 }
 
 // BuildRefreshPayload builds a build refresh payload.

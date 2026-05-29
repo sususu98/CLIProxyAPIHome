@@ -93,6 +93,15 @@ func (a *RuntimeAdapter) StoreUsagePayload(ctx context.Context, payload string) 
 	return errAppend
 }
 
+// StoreAppLogPayload stores a CPA app log payload.
+func (a *RuntimeAdapter) StoreAppLogPayload(ctx context.Context, clientIP string, payload string) error {
+	if !a.Enabled() {
+		return fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	_, errAppend := a.repo.AppendAppLog(ctx, clientIP, payload)
+	return errAppend
+}
+
 // AllowedAuthIDsForAPIKey returns auth IDs allowed by API-key channel bindings.
 func (a *RuntimeAdapter) AllowedAuthIDsForAPIKey(ctx context.Context, apiKey string) ([]string, error) {
 	if !a.Enabled() {

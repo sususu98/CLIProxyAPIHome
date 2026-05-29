@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 
 	homelogging "github.com/router-for-me/CLIProxyAPIHome/internal/logging"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
@@ -14,12 +12,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-var appLogMu sync.Mutex
-
 // handleAppLog handles a CPA application log line.
 func handleAppLog(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
-	_ = ctx
-
 	if len(args) != 3 {
 		return dispatch.Err("wrong number of arguments for 'rpush' command")
 	}
@@ -33,7 +27,7 @@ func handleAppLog(ctx context.Context, env dispatch.Env, args []string) dispatch
 		return dispatch.Err("invalid app-log json")
 	}
 
-	line := gjson.Get(payload, "line").String()
+	line := strings.TrimRight(gjson.Get(payload, "line").String(), "\r\n")
 	if strings.TrimSpace(line) == "" {
 		return dispatch.Err("missing line")
 	}
@@ -43,60 +37,20 @@ func handleAppLog(ctx context.Context, env dispatch.Env, args []string) dispatch
 		clientIP = "unknown"
 	}
 
-	if homeLoggingToFile(env) {
-		if errAppend := appendAppLogFile(clientIP, line); errAppend != nil {
-			log.Errorf("app log write error: %v", errAppend)
-			return dispatch.Err("app log write failed")
-		}
-		return dispatch.Integer(1)
-	}
-
 	writeAppLogConsole(clientIP, line)
-	return dispatch.Integer(1)
-}
 
-func homeLoggingToFile(env dispatch.Env) bool {
-	if env.Runtime == nil {
-		return false
-	}
-	cfg := env.Runtime.Config()
-	return cfg != nil && cfg.LoggingToFile
-}
-
-func appendAppLogFile(clientIP string, line string) error {
-	clientIP = strings.TrimSpace(clientIP)
-	if clientIP == "" {
-		clientIP = "unknown"
-	}
-	line = strings.TrimRight(line, "\r\n")
-	if strings.TrimSpace(line) == "" {
-		return nil
-	}
-
-	appLogMu.Lock()
-	defer appLogMu.Unlock()
-
-	logDir := "logs"
-	if errMk := os.MkdirAll(logDir, 0o755); errMk != nil {
-		return fmt.Errorf("ensure logs dir: %w", errMk)
-	}
-
-	filename := sanitizeForFilename(clientIP) + "-main.log"
-	filePath := filepath.Join(logDir, filename)
-	f, errOpen := os.OpenFile(filePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if errOpen != nil {
-		return fmt.Errorf("open app log: %w", errOpen)
-	}
-	defer func() {
-		if errClose := f.Close(); errClose != nil {
-			log.Errorf("app log close error: %v", errClose)
+	if env.Runtime != nil {
+		persisted, errPersist := env.Runtime.PersistAppLogPayload(ctx, clientIP, payload)
+		if errPersist != nil {
+			log.Errorf("app log database write error: %v", errPersist)
+			return dispatch.Err("app log database write failed")
 		}
-	}()
-
-	if _, errWrite := f.WriteString(line + "\n"); errWrite != nil {
-		return fmt.Errorf("write app log: %w", errWrite)
+		if persisted {
+			return dispatch.Integer(1)
+		}
 	}
-	return nil
+
+	return dispatch.Integer(1)
 }
 
 func writeAppLogConsole(clientIP string, line string) {
