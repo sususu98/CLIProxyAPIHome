@@ -1,6 +1,8 @@
 package managementhttp
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -32,6 +34,43 @@ func TestCORSMiddlewareMatchesCPAHeaders(t *testing.T) {
 		t.Fatalf("GET status = %d, want %d", getResp.Code, http.StatusOK)
 	}
 	assertCORSHeaders(t, getResp)
+}
+
+func TestClusterMTLSMiddlewareRejectsPlainHTTP(t *testing.T) {
+	engine := gin.New()
+	engine.Use(clusterMTLSMiddleware())
+	engine.GET("/v0/cluster/ping", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v0/cluster/ping", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusForbidden)
+	}
+}
+
+func TestClusterMTLSMiddlewareAllowsVerifiedPeer(t *testing.T) {
+	engine := gin.New()
+	engine.Use(clusterMTLSMiddleware())
+	engine.GET("/v0/cluster/ping", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	cert := &x509.Certificate{}
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v0/cluster/ping", nil)
+	req.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{cert},
+		VerifiedChains:   [][]*x509.Certificate{{cert}},
+	}
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusOK)
+	}
 }
 
 func assertCORSHeaders(t *testing.T, resp *httptest.ResponseRecorder) {

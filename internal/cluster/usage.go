@@ -38,6 +38,7 @@ type UsageRecord struct {
 	AuthType            string    `gorm:"column:auth_type"`
 	APIKey              string    `gorm:"column:api_key"`
 	RequestID           string    `gorm:"column:request_id;index:idx_usage_request_id"`
+	HomeIP              string    `gorm:"column:home_ip;index:idx_usage_home_ip"`
 	TokensJSON          JSONB     `gorm:"column:tokens"`
 	FailJSON            JSONB     `gorm:"column:fail"`
 	PayloadJSON         JSONB     `gorm:"column:payload;not null"`
@@ -50,7 +51,7 @@ func (UsageRecord) TableName() string {
 }
 
 // UsageRecordFromPayload derives usage record from payload.
-func UsageRecordFromPayload(payload string) (*UsageRecord, error) {
+func UsageRecordFromPayload(payload string, homeIP string) (*UsageRecord, error) {
 	// Validate input data before converting it into runtime state.
 	payload = strings.TrimSpace(payload)
 	if payload == "" {
@@ -94,6 +95,7 @@ func UsageRecordFromPayload(payload string) (*UsageRecord, error) {
 		AuthType:            strings.TrimSpace(gjson.Get(payload, "auth_type").String()),
 		APIKey:              strings.TrimSpace(gjson.Get(payload, "api_key").String()),
 		RequestID:           strings.TrimSpace(gjson.Get(payload, "request_id").String()),
+		HomeIP:              strings.TrimSpace(homeIP),
 		TokensJSON:          jsonbFromPayloadField(payload, "tokens"),
 		FailJSON:            jsonbFromPayloadField(payload, "fail"),
 		PayloadJSON:         JSONB(payload),
@@ -112,13 +114,13 @@ func usageServiceTierFromPayload(payload string) string {
 }
 
 // AppendUsage appends an usage.
-func (r *Repository) AppendUsage(ctx context.Context, payload string) (*UsageRecord, error) {
+func (r *Repository) AppendUsage(ctx context.Context, payload string, homeIP string) (*UsageRecord, error) {
 	db, errDB := r.database()
 	if errDB != nil {
 		return nil, errDB
 	}
 
-	record, errRecord := UsageRecordFromPayload(payload)
+	record, errRecord := UsageRecordFromPayload(payload, homeIP)
 	if errRecord != nil {
 		return nil, errRecord
 	}

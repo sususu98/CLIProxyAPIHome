@@ -1,0 +1,351 @@
+package management
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
+	"gorm.io/gorm"
+)
+
+func TestGetLogsReturnsDatabaseAppLogs(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	now := time.Date(2026, 5, 29, 1, 2, 3, 0, time.UTC)
+	records := []cluster.AppLogRecord{
+		{Timestamp: now.Add(-time.Minute), ClientIP: "10.0.0.6", RequestID: "req-other", HomeIP: "192.0.2.10", Level: "info", Line: "ignored", CreatedAt: now.Add(-time.Minute)},
+		{Timestamp: now, ClientIP: "10.0.0.5", RequestID: "req-1", HomeIP: "192.0.2.10", Level: "warn", Line: "wanted", CreatedAt: now},
+	}
+	if errCreate := db.Create(&records).Error; errCreate != nil {
+		t.Fatalf("create logs: %v", errCreate)
+	}
+
+	handler := NewHandler(cluster.NewRepository(db), nil, "192.0.2.10", 0)
+	engine := gin.New()
+	engine.GET("/logs", handler.GetLogs)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/logs?home_ip=192.0.2.10&request_id=req-1&limit=10", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+
+	var body struct {
+		Logs []struct {
+			ClientIP  string `json:"client_ip"`
+			RequestID string `json:"request_id"`
+			HomeIP    string `json:"home_ip"`
+			Level     string `json:"level"`
+			Line      string `json:"line"`
+		} `json:"logs"`
+		Total  int64 `json:"total"`
+		Limit  int   `json:"limit"`
+		Offset int   `json:"offset"`
+	}
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if body.Total != 1 || len(body.Logs) != 1 {
+		t.Fatalf("logs total=%d len=%d, want 1", body.Total, len(body.Logs))
+	}
+	if body.Logs[0].ClientIP != "10.0.0.5" || body.Logs[0].RequestID != "req-1" || body.Logs[0].HomeIP != "192.0.2.10" || body.Logs[0].Level != "warn" || body.Logs[0].Line != "wanted" {
+		t.Fatalf("unexpected log record: %+v", body.Logs[0])
+	}
+	if body.Limit != 10 || body.Offset != 0 {
+		t.Fatalf("pagination = limit %d offset %d, want 10/0", body.Limit, body.Offset)
+	}
+}
+
+func TestDownloadRequestLogByIDUsesRequestIDOnlyForFileMatch(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if errMkdir := os.Mkdir("logs", 0o755); errMkdir != nil {
+		t.Fatalf("mkdir logs: %v", errMkdir)
+	}
+	content := "request log content\n"
+	fileName := "10.0.0.9-v1-responses-2026-05-29T010203-req-1.log"
+	if errWrite := os.WriteFile(filepath.Join("logs", fileName), []byte(content), 0o644); errWrite != nil {
+		t.Fatalf("write request log: %v", errWrite)
+	}
+
+	now := time.Date(2026, 5, 29, 1, 2, 3, 0, time.UTC)
+	record := cluster.AppLogRecord{
+		Timestamp: now,
+		ClientIP:  "10.0.0.5",
+		RequestID: "req-1",
+		HomeIP:    "192.0.2.10",
+		Level:     "info",
+		Line:      "line",
+		CreatedAt: now,
+	}
+	if errCreate := db.Create(&record).Error; errCreate != nil {
+		t.Fatalf("create log: %v", errCreate)
+	}
+
+	handler := NewHandler(cluster.NewRepository(db), nil, "192.0.2.10", 0)
+	engine := gin.New()
+	engine.GET("/request-log-by-id/:id", handler.DownloadRequestLogByID)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/request-log-by-id/req-1?home_ip=192.0.2.10", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	if got := resp.Body.String(); got != content {
+		t.Fatalf("body = %q, want %q", got, content)
+	}
+	if got := resp.Header().Get("Content-Disposition"); got == "" {
+		t.Fatal("Content-Disposition is empty")
+	}
+}
+
+func TestDownloadRequestLogByIDWithoutHomeIPUsesLocalNode(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if errMkdir := os.Mkdir("logs", 0o755); errMkdir != nil {
+		t.Fatalf("mkdir logs: %v", errMkdir)
+	}
+	content := "local request log without home ip\n"
+	fileName := "10.0.0.9-v1-responses-2026-05-29T010203-req-local.log"
+	if errWrite := os.WriteFile(filepath.Join("logs", fileName), []byte(content), 0o644); errWrite != nil {
+		t.Fatalf("write request log: %v", errWrite)
+	}
+
+	handler := NewHandler(cluster.NewRepository(db), nil, "192.0.2.10", 0)
+	engine := gin.New()
+	engine.GET("/request-log-by-id/:id", handler.DownloadRequestLogByID)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/request-log-by-id/req-local", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	if got := resp.Body.String(); got != content {
+		t.Fatalf("body = %q, want %q", got, content)
+	}
+}
+
+func TestDownloadRequestLogByIDFallsBackToFilesystemWithoutDatabaseRecord(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if errMkdir := os.Mkdir("logs", 0o755); errMkdir != nil {
+		t.Fatalf("mkdir logs: %v", errMkdir)
+	}
+	content := "filesystem only request log\n"
+	fileName := "10.0.0.5-v1-responses-2026-05-29T010203-req-2.log"
+	if errWrite := os.WriteFile(filepath.Join("logs", fileName), []byte(content), 0o644); errWrite != nil {
+		t.Fatalf("write request log: %v", errWrite)
+	}
+
+	handler := NewHandler(cluster.NewRepository(db), nil, "192.0.2.10", 0)
+	engine := gin.New()
+	engine.GET("/request-log-by-id/:id", handler.DownloadRequestLogByID)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/request-log-by-id/req-2?home_ip=192.0.2.10", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	if got := resp.Body.String(); got != content {
+		t.Fatalf("body = %q, want %q", got, content)
+	}
+}
+
+func TestDownloadRequestLogByIDReturnsNotFoundWhenDatabaseRecordExistsButFileMissing(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if errMkdir := os.Mkdir("logs", 0o755); errMkdir != nil {
+		t.Fatalf("mkdir logs: %v", errMkdir)
+	}
+
+	now := time.Date(2026, 5, 29, 1, 2, 3, 0, time.UTC)
+	record := cluster.AppLogRecord{
+		Timestamp: now,
+		ClientIP:  "10.0.0.5",
+		RequestID: "req-deleted",
+		HomeIP:    "192.0.2.10",
+		Level:     "info",
+		Line:      "line",
+		CreatedAt: now,
+	}
+	if errCreate := db.Create(&record).Error; errCreate != nil {
+		t.Fatalf("create log: %v", errCreate)
+	}
+
+	handler := NewHandler(cluster.NewRepository(db), nil, "192.0.2.10", 0)
+	engine := gin.New()
+	engine.GET("/request-log-by-id/:id", handler.DownloadRequestLogByID)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/request-log-by-id/req-deleted?home_ip=192.0.2.10", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestDownloadRequestLogByIDForwardsToTargetHomeOverMTLS(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+	repo := cluster.NewRepository(db)
+
+	targetTLSConfig, errTargetTLS := repo.EnsureClusterCertificates(context.Background(), "127.0.0.1")
+	if errTargetTLS != nil {
+		t.Fatalf("EnsureClusterCertificates target: %v", errTargetTLS)
+	}
+	currentTLSConfig, errCurrentTLS := repo.EnsureClusterCertificates(context.Background(), "127.0.0.2")
+	if errCurrentTLS != nil {
+		t.Fatalf("EnsureClusterCertificates current: %v", errCurrentTLS)
+	}
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if errMkdir := os.Mkdir("logs", 0o755); errMkdir != nil {
+		t.Fatalf("mkdir logs: %v", errMkdir)
+	}
+	content := "remote request log\n"
+	fileName := "10.0.0.5-v1-responses-2026-05-29T010203-req-remote.log"
+	if errWrite := os.WriteFile(filepath.Join("logs", fileName), []byte(content), 0o644); errWrite != nil {
+		t.Fatalf("write request log: %v", errWrite)
+	}
+
+	now := time.Date(2026, 5, 29, 1, 2, 3, 0, time.UTC)
+	record := cluster.AppLogRecord{
+		Timestamp: now,
+		ClientIP:  "10.0.0.5",
+		RequestID: "req-remote",
+		HomeIP:    "127.0.0.1",
+		Level:     "info",
+		Line:      "line",
+		CreatedAt: now,
+	}
+	if errCreate := db.Create(&record).Error; errCreate != nil {
+		t.Fatalf("create log: %v", errCreate)
+	}
+
+	listener, errListen := net.Listen("tcp", "127.0.0.1:0")
+	if errListen != nil {
+		t.Fatalf("listen target: %v", errListen)
+	}
+	targetPort := listener.Addr().(*net.TCPAddr).Port
+	heartbeatAt := time.Now().UTC()
+	if errCreateNode := db.Create(&cluster.ClusterNodeRecord{
+		IP:         "127.0.0.1",
+		Port:       targetPort,
+		StartedAt:  heartbeatAt,
+		LastSeenAt: heartbeatAt,
+	}).Error; errCreateNode != nil {
+		t.Fatalf("create target node: %v", errCreateNode)
+	}
+
+	targetHandler := NewHandler(repo, nil, "127.0.0.1", targetPort)
+	targetEngine := gin.New()
+	targetHeadersCh := make(chan http.Header, 1)
+	targetEngine.Use(func(c *gin.Context) {
+		targetHeadersCh <- c.Request.Header.Clone()
+		c.Next()
+	})
+	targetEngine.GET("/v0/cluster/request-log-by-id/:id", targetHandler.DownloadLocalRequestLogByID)
+	targetServer := &http.Server{Handler: targetEngine}
+	t.Cleanup(func() {
+		_ = targetServer.Close()
+	})
+	go func() {
+		_ = targetServer.Serve(tls.NewListener(listener, targetTLSConfig))
+	}()
+
+	currentHandler := NewHandler(repo, nil, "127.0.0.2", 0)
+	currentHandler.SetForwardTLSConfig(currentTLSConfig)
+	currentEngine := gin.New()
+	currentEngine.GET("/request-log-by-id/:id", currentHandler.DownloadRequestLogByID)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/request-log-by-id/req-remote?home_ip=127.0.0.1", nil)
+	req.Header.Set("Authorization", "Bearer management-secret")
+	req.Header.Set("Cookie", "management_session=secret")
+	req.Header.Set("X-Management-Key", "secret")
+	req.Header.Set("If-None-Match", `"request-log-etag"`)
+	currentEngine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	if got := resp.Body.String(); got != content {
+		t.Fatalf("body = %q, want %q", got, content)
+	}
+
+	var targetHeaders http.Header
+	select {
+	case targetHeaders = <-targetHeadersCh:
+	case <-time.After(time.Second):
+		t.Fatal("target home did not receive forwarded request")
+	}
+	if got := targetHeaders.Get("Authorization"); got != "" {
+		t.Fatalf("forwarded Authorization header = %q, want empty", got)
+	}
+	if got := targetHeaders.Get("Cookie"); got != "" {
+		t.Fatalf("forwarded Cookie header = %q, want empty", got)
+	}
+	if got := targetHeaders.Get("X-Management-Key"); got != "" {
+		t.Fatalf("forwarded X-Management-Key header = %q, want empty", got)
+	}
+	if got := targetHeaders.Get("If-None-Match"); got != `"request-log-etag"` {
+		t.Fatalf("forwarded If-None-Match header = %q, want request-log-etag", got)
+	}
+}
+
+func openManagementLogTestDB(t *testing.T) (*gorm.DB, func()) {
+	t.Helper()
+
+	db, errOpen := cluster.OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "home.db"))
+	if errOpen != nil {
+		t.Fatalf("OpenSQLite: %v", errOpen)
+	}
+	sqlDB, errDB := db.DB()
+	if errDB != nil {
+		t.Fatalf("DB: %v", errDB)
+	}
+	if errMigrate := cluster.AutoMigrate(db); errMigrate != nil {
+		_ = sqlDB.Close()
+		t.Fatalf("AutoMigrate: %v", errMigrate)
+	}
+	cleanup := func() {
+		if errClose := sqlDB.Close(); errClose != nil {
+			t.Errorf("close db: %v", errClose)
+		}
+	}
+	return db, cleanup
+}

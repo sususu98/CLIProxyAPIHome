@@ -16,10 +16,25 @@ var (
 	setupOnce sync.Once
 )
 
+const logSourceLabelWidth = len("255.255.255.255")
+
 // LogFormatter defines a custom log format for logrus.
-// This formatter adds timestamp, level, request ID, and source location to each log entry.
-// Format: [2025-12-23 20:14:04] [debug] [manager.go:524] | a1b2c3d4 | Use API key sk-9...0RHO for model gpt-5.2
+// This formatter adds source, timestamp, level, request ID, and source location to each log entry.
+// Format: [CLIProxyAPIHome] [2025-12-23 20:14:04] [debug] [manager.go:524] | a1b2c3d4 | Use API key sk-9...0RHO for model gpt-5.2
 type LogFormatter struct{}
+
+// FormatLogSourcePrefix renders a fixed-width log source column.
+func FormatLogSourcePrefix(source string) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "UNKNOWN"
+	}
+	sourceRunes := []rune(source)
+	if len(sourceRunes) > logSourceLabelWidth {
+		source = string(sourceRunes[len(sourceRunes)-logSourceLabelWidth:])
+	}
+	return fmt.Sprintf("[%-*s]", logSourceLabelWidth, source)
+}
 
 // logFieldOrder defines the display order for common log fields.
 var logFieldOrder = []string{"provider", "model", "mode", "budget", "level", "original_mode", "original_value", "min", "max", "clamped_to", "error"}
@@ -61,11 +76,12 @@ func (m *LogFormatter) Format(entry *log.Entry) ([]byte, error) {
 		}
 	}
 
+	sourcePrefix := FormatLogSourcePrefix("CLIProxyAPIHome")
 	var formatted string
 	if entry.Caller != nil {
-		formatted = fmt.Sprintf("[%s] [%s] [%s] [%s:%d] %s%s\n", timestamp, reqID, levelStr, filepath.Base(entry.Caller.File), entry.Caller.Line, message, fieldsStr)
+		formatted = fmt.Sprintf("%s [%s] [%s] [%s] [%s:%d] %s%s\n", sourcePrefix, timestamp, reqID, levelStr, filepath.Base(entry.Caller.File), entry.Caller.Line, message, fieldsStr)
 	} else {
-		formatted = fmt.Sprintf("[%s] [%s] [%s] %s%s\n", timestamp, reqID, levelStr, message, fieldsStr)
+		formatted = fmt.Sprintf("%s [%s] [%s] [%s] %s%s\n", sourcePrefix, timestamp, reqID, levelStr, message, fieldsStr)
 	}
 	buffer.WriteString(formatted)
 

@@ -303,6 +303,26 @@ func respClientTLSConfig(tlsConfig *tls.Config, serverName string) (*tls.Config,
 	return cfg, nil
 }
 
+// HTTPClientTLSConfig derives an mTLS client config for cluster HTTP calls.
+func HTTPClientTLSConfig(tlsConfig *tls.Config, serverName string) (*tls.Config, error) {
+	if tlsConfig == nil {
+		return nil, fmt.Errorf("cluster http: tls config is required")
+	}
+	cfg := tlsConfig.Clone()
+	cfg.ClientAuth = tls.NoClientCert
+	cfg.NextProtos = []string{"http/1.1"}
+	if strings.TrimSpace(cfg.ServerName) == "" {
+		cfg.ServerName = strings.TrimSpace(serverName)
+	}
+	if cfg.RootCAs == nil {
+		return nil, fmt.Errorf("cluster http: tls root ca is required")
+	}
+	if len(cfg.Certificates) == 0 && cfg.GetClientCertificate == nil {
+		return nil, fmt.Errorf("cluster http: client certificate is required")
+	}
+	return cfg, nil
+}
+
 // encodeRESPArray encodes a resp array.
 func encodeRESPArray(args ...string) []byte {
 	var buf bytes.Buffer

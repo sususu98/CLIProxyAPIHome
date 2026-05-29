@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"crypto/tls"
 	"net/http"
 	"strings"
 	"time"
@@ -13,15 +14,24 @@ import (
 )
 
 type Handler struct {
-	repo     *cluster.Repository
-	runtime  *home.Runtime
-	nodeIP   string
-	nodePort int
+	repo             *cluster.Repository
+	runtime          *home.Runtime
+	nodeIP           string
+	nodePort         int
+	forwardTLSConfig *tls.Config
 }
 
 // NewHandler creates a new handler.
 func NewHandler(repo *cluster.Repository, runtime *home.Runtime, nodeIP string, nodePort int) *Handler {
 	return &Handler{repo: repo, runtime: runtime, nodeIP: strings.TrimSpace(nodeIP), nodePort: nodePort}
+}
+
+// SetForwardTLSConfig sets the TLS config used for cluster HTTP forwarding.
+func (h *Handler) SetForwardTLSConfig(tlsConfig *tls.Config) {
+	if h == nil {
+		return
+	}
+	h.forwardTLSConfig = tlsConfig
 }
 
 // RegisterRoutes handles a register routes.
@@ -42,6 +52,7 @@ func (h *Handler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/logging-to-file", h.GetLoggingToFile)
 	group.PUT("/logging-to-file", h.PutLoggingToFile)
 	group.PATCH("/logging-to-file", h.PutLoggingToFile)
+	group.GET("/logs", h.GetLogs)
 	group.GET("/logs-max-total-size-mb", h.GetLogsMaxTotalSizeMB)
 	group.PUT("/logs-max-total-size-mb", h.PutLogsMaxTotalSizeMB)
 	group.PATCH("/logs-max-total-size-mb", h.PutLogsMaxTotalSizeMB)
@@ -98,6 +109,7 @@ func (h *Handler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/request-log", h.GetRequestLog)
 	group.PUT("/request-log", h.PutRequestLog)
 	group.PATCH("/request-log", h.PutRequestLog)
+	group.GET("/request-log-by-id/:id", h.DownloadRequestLogByID)
 	group.GET("/ampcode", h.GetAmpCode)
 	group.GET("/ampcode/upstream-url", h.GetAmpUpstreamURL)
 	group.PUT("/ampcode/upstream-url", h.PutAmpUpstreamURL)
