@@ -11,19 +11,19 @@ import (
 )
 
 type AppLogRecord struct {
-	ID        uint      `gorm:"column:id;primaryKey;autoIncrement;index:idx_app_log_time_order,priority:2"`
-	Timestamp time.Time `gorm:"column:timestamp;not null;index:idx_app_log_timestamp;index:idx_app_log_time_order,priority:1,sort:desc;index:idx_app_log_client_time,priority:2,sort:desc;index:idx_app_log_level_time,priority:2,sort:desc"`
-	ClientIP  string    `gorm:"column:client_ip;index:idx_app_log_client_ip;index:idx_app_log_client_time,priority:1"`
-	RequestID string    `gorm:"column:request_id;index:idx_app_log_request_id"`
-	HomeIP    string    `gorm:"column:home_ip;index:idx_app_log_home_ip"`
-	Level     string    `gorm:"column:level;index:idx_app_log_level;index:idx_app_log_level_time,priority:1"`
+	ID        uint      `gorm:"column:id;primaryKey;autoIncrement;index:idx_log_time_order,priority:2"`
+	Timestamp time.Time `gorm:"column:timestamp;not null;index:idx_log_timestamp;index:idx_log_time_order,priority:1,sort:desc;index:idx_log_client_time,priority:2,sort:desc;index:idx_log_level_time,priority:2,sort:desc"`
+	ClientIP  string    `gorm:"column:client_ip;index:idx_log_client_ip;index:idx_log_client_time,priority:1"`
+	RequestID string    `gorm:"column:request_id;index:idx_log_request_id"`
+	HomeIP    string    `gorm:"column:home_ip;index:idx_log_home_ip"`
+	Level     string    `gorm:"column:level;index:idx_log_level;index:idx_log_level_time,priority:1"`
 	Line      string    `gorm:"column:line;type:text;not null"`
-	CreatedAt time.Time `gorm:"column:created_at;not null;index:idx_app_log_created_at"`
+	CreatedAt time.Time `gorm:"column:created_at;not null;index:idx_log_created_at"`
 }
 
 // TableName returns the database table name.
 func (AppLogRecord) TableName() string {
-	return "app_log"
+	return "log"
 }
 
 // AppLogRecordFromPayload creates an app log record from a CPA payload.
