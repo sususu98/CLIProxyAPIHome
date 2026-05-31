@@ -9,7 +9,7 @@ services:
         VERSION: ${VERSION:-dev}
         COMMIT: ${COMMIT:-none}
         BUILD_DATE: ${BUILD_DATE:-unknown}
-    container_name: cliproxy-api-home
+    container_name: cli-proxy-api-home
     environment:
       DEPLOY: ${DEPLOY:-}
     ports:
