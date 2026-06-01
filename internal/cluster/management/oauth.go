@@ -1016,19 +1016,6 @@ func syncOAuthDisabledState(auth *coreauth.Auth) {
 	auth.StatusMessage = ""
 }
 
-// requiredBoolField handles a required bool field.
-func requiredBoolField(fields map[string]any, key string) (bool, error) {
-	raw, ok := fields[key]
-	if !ok {
-		return false, fmt.Errorf("%s is required", key)
-	}
-	value, ok := raw.(bool)
-	if !ok {
-		return false, fmt.Errorf("%s must be boolean", key)
-	}
-	return value, nil
-}
-
 // multipartHeaders handles a multipart headers.
 func multipartHeaders(c *gin.Context) ([]*multipart.FileHeader, error) {
 	form, errForm := c.MultipartForm()
@@ -1060,16 +1047,6 @@ func stringFromAny(value any) string {
 	default:
 		return ""
 	}
-}
-
-// firstStringField handles a first string field.
-func firstStringField(values map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if value := stringFromAny(values[key]); value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 // boolFromAny derives bool from any.

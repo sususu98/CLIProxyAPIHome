@@ -199,22 +199,6 @@ func (s *authScheduler) setSelector(selector Selector) {
 	clear(s.mixedCursors)
 }
 
-// rebuild recreates the complete scheduler state from an auth snapshot.
-func (s *authScheduler) rebuild(auths []*Auth) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.providers = make(map[string]*providerScheduler)
-	s.authProviders = make(map[string]string)
-	s.mixedCursors = make(map[string]int)
-	now := time.Now()
-	for _, auth := range auths {
-		s.upsertAuthLocked(auth, now)
-	}
-}
-
 // upsertAuth incrementally synchronizes one auth into the scheduler.
 func (s *authScheduler) upsertAuth(auth *Auth) {
 	if s == nil {
@@ -427,20 +411,6 @@ func (s *authScheduler) mixedUnavailableErrorLocked(providers []string, model st
 		return newModelCooldownError(model, "", resetIn)
 	}
 	return &Error{Code: "auth_unavailable", Message: "no auth available"}
-}
-
-// triedPredicate builds a filter that excludes auths already attempted for the current request.
-func triedPredicate(tried map[string]struct{}) func(*scheduledAuth) bool {
-	if len(tried) == 0 {
-		return func(entry *scheduledAuth) bool { return entry != nil && entry.auth != nil }
-	}
-	return func(entry *scheduledAuth) bool {
-		if entry == nil || entry.auth == nil {
-			return false
-		}
-		_, ok := tried[entry.auth.ID]
-		return !ok
-	}
 }
 
 // normalizeProviderKeys lowercases, trims, and de-duplicates provider keys while preserving order.

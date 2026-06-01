@@ -3,7 +3,6 @@ package home
 import (
 	"context"
 	"strings"
-	"time"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
@@ -236,9 +235,4 @@ func extractAccessToken(auth *coreauth.Auth) string {
 		}
 	}
 	return ""
-}
-
-// nowUTC handles a now utc.
-func nowUTC() time.Time {
-	return time.Now().UTC()
 }

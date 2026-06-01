@@ -883,9 +883,3 @@ func extractResponsesAPIContent(content gjson.Result) string {
 	}
 	return ""
 }
-
-// extractSessionID is kept for backward compatibility.
-// Deprecated: Use ExtractSessionID instead.
-func extractSessionID(payload []byte) string {
-	return ExtractSessionID(nil, payload, nil)
-}

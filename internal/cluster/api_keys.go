@@ -417,15 +417,6 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 	return stats, nil
 }
 
-func apiKeyEntryUpdatesFromKeys(keys []string) []APIKeyEntryUpdate {
-	keys = normalizeAPIKeys(keys)
-	entries := make([]APIKeyEntryUpdate, 0, len(keys))
-	for _, key := range keys {
-		entries = append(entries, APIKeyEntryUpdate{APIKey: key})
-	}
-	return entries
-}
-
 func normalizeAPIKeyEntryUpdates(entries []APIKeyEntryUpdate) []APIKeyEntryUpdate {
 	if len(entries) == 0 {
 		return nil

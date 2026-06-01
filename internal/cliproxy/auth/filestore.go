@@ -4,18 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // FileTokenStore persists token records and auth metadata using the filesystem as backing storage.
@@ -305,74 +300,6 @@ func (s *FileTokenStore) baseDirSnapshot() string {
 	s.dirLock.RLock()
 	defer s.dirLock.RUnlock()
 	return s.baseDir
-}
-
-// extractAccessToken extracts an access token.
-func extractAccessToken(metadata map[string]any) string {
-	if at, ok := metadata["access_token"].(string); ok {
-		if v := strings.TrimSpace(at); v != "" {
-			return v
-		}
-	}
-	if tokenMap, ok := metadata["token"].(map[string]any); ok {
-		if at, ok := tokenMap["access_token"].(string); ok {
-			if v := strings.TrimSpace(at); v != "" {
-				return v
-			}
-		}
-	}
-	return ""
-}
-
-// refreshGeminiAccessToken converts refresh gemini access token.
-func refreshGeminiAccessToken(tokenMap map[string]any, httpClient *http.Client) (string, error) {
-	// Resolve credential context before calling upstream OAuth services.
-	refreshToken, _ := tokenMap["refresh_token"].(string)
-	clientID, _ := tokenMap["client_id"].(string)
-	clientSecret, _ := tokenMap["client_secret"].(string)
-	tokenURI, _ := tokenMap["token_uri"].(string)
-
-	if refreshToken == "" || clientID == "" || clientSecret == "" {
-		return "", fmt.Errorf("missing refresh credentials")
-	}
-	if tokenURI == "" {
-		tokenURI = "https://oauth2.googleapis.com/token"
-	}
-
-	data := url.Values{
-		"grant_type":    {"refresh_token"},
-		"refresh_token": {refreshToken},
-		"client_id":     {clientID},
-		"client_secret": {clientSecret},
-	}
-
-	resp, err := httpClient.PostForm(tokenURI, data)
-	if err != nil {
-		return "", fmt.Errorf("refresh request: %w", err)
-	}
-	defer func() {
-		if errClose := resp.Body.Close(); errClose != nil {
-			log.Errorf("gemini refresh: response body close error: %v", errClose)
-		}
-	}()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("refresh failed: status %d", resp.StatusCode)
-	}
-
-	var result map[string]any
-	if errUnmarshal := json.Unmarshal(body, &result); errUnmarshal != nil {
-		return "", fmt.Errorf("decode refresh response: %w", errUnmarshal)
-	}
-
-	newAccessToken, _ := result["access_token"].(string)
-	if newAccessToken == "" {
-		return "", fmt.Errorf("no access_token in refresh response")
-	}
-
-	tokenMap["access_token"] = newAccessToken
-	return newAccessToken, nil
 }
 
 // jsonEqual compares two JSON blobs by parsing them into Go objects and deep comparing.
