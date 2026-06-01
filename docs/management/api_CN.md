@@ -197,6 +197,7 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/model-groups/:id` |
 | `PATCH` | `/model-groups/:id` |
 | `PUT` | `/model-groups/:id` |
+| `GET` | `/models` |
 | `GET` | `/nodes` |
 | `POST` | `/oauth-callback` |
 | `DELETE` | `/oauth-excluded-models` |
@@ -1620,6 +1621,62 @@ Query 参数：
 
 ## 模型
 
+### GET `/models?scope=available|static`
+
+从当前 runtime registry 或静态模型目录返回模型定义。
+
+Query 参数：
+
+| Query | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `scope` | string | 否 | `available` 返回当前 active credentials 已注册的模型；`static` 返回静态模型定义。默认：`available`。Alias：`source`、`mode`、`type`。 |
+| `channel` | string | 否 | 仅用于静态模型，筛选单个 channel。Alias：`provider`。 |
+
+支持的 `scope` alias：
+
+| 值 | 行为 |
+| --- | --- |
+| `available`, `active`, `current` | 返回当前 runtime 可用模型。 |
+| `static`, `all-static`, `definitions` | 返回静态模型定义。 |
+
+可用模型输出示例：
+
+```json
+{
+  "scope": "available",
+  "models": [
+    {
+      "id": "gpt-5.5",
+      "object": "model",
+      "created": 1704067200,
+      "owned_by": "openai",
+      "type": "openai",
+      "display_name": "GPT-5.5"
+    }
+  ]
+}
+```
+
+静态模型输出示例：
+
+```json
+{
+  "scope": "static",
+  "models": {
+    "codex-pro": [
+      {
+        "id": "gpt-5.5",
+        "object": "model",
+        "created": 1704067200,
+        "owned_by": "openai",
+        "type": "openai",
+        "display_name": "GPT-5.5"
+      }
+    ]
+  }
+}
+```
+
 ### GET `/model-definitions/:channel`
 
 返回指定 channel 的静态模型 metadata。
@@ -1632,6 +1689,10 @@ gemini
 vertex
 gemini-cli
 codex
+codex-free
+codex-team
+codex-plus
+codex-pro
 kimi
 antigravity
 xai

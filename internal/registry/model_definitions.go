@@ -82,6 +82,23 @@ func GetXAIModels() []*ModelInfo {
 	return WithXAIBuiltins(cloneModelInfos(getModels().XAI))
 }
 
+// GetAllStaticModelDefinitions returns static model definitions grouped by channel.
+func GetAllStaticModelDefinitions() map[string][]*ModelInfo {
+	return map[string][]*ModelInfo{
+		"claude":      GetClaudeModels(),
+		"gemini":      GetGeminiModels(),
+		"vertex":      GetGeminiVertexModels(),
+		"gemini-cli":  GetGeminiCLIModels(),
+		"codex-free":  GetCodexFreeModels(),
+		"codex-team":  GetCodexTeamModels(),
+		"codex-plus":  GetCodexPlusModels(),
+		"codex-pro":   GetCodexProModels(),
+		"kimi":        GetKimiModels(),
+		"antigravity": GetAntigravityModels(),
+		"xai":         GetXAIModels(),
+	}
+}
+
 // WithCodexBuiltins injects hard-coded Codex-only model definitions that should
 // not depend on remote models.json updates. Built-ins replace any matching IDs
 // already present in the provided slice.
@@ -220,8 +237,14 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetGeminiVertexModels()
 	case "gemini-cli":
 		return GetGeminiCLIModels()
-	case "codex":
+	case "codex", "codex-pro":
 		return GetCodexProModels()
+	case "codex-plus":
+		return GetCodexPlusModels()
+	case "codex-team":
+		return GetCodexTeamModels()
+	case "codex-free":
+		return GetCodexFreeModels()
 	case "kimi":
 		return GetKimiModels()
 	case "antigravity":

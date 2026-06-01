@@ -64,6 +64,43 @@ func (h *Handler) GetAuthFileModels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"models": result})
 }
 
+// GetModels returns static or currently available model definitions.
+func (h *Handler) GetModels(c *gin.Context) {
+	scope := strings.ToLower(strings.TrimSpace(firstNonEmptyQuery(c, "scope", "source", "mode", "type")))
+	if scope == "" {
+		scope = "available"
+	}
+
+	switch scope {
+	case "available", "active", "current":
+		c.JSON(http.StatusOK, gin.H{
+			"scope":  "available",
+			"models": registry.GetGlobalRegistry().GetAvailableModelDefinitions(),
+		})
+	case "static", "all-static", "definitions":
+		channel := strings.TrimSpace(firstNonEmptyQuery(c, "channel", "provider"))
+		if channel == "" {
+			c.JSON(http.StatusOK, gin.H{
+				"scope":  "static",
+				"models": registry.GetAllStaticModelDefinitions(),
+			})
+			return
+		}
+		models := registry.GetStaticModelDefinitionsByChannel(channel)
+		if models == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown channel", "channel": channel})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"scope":   "static",
+			"channel": strings.ToLower(strings.TrimSpace(channel)),
+			"models":  models,
+		})
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid scope", "scope": scope})
+	}
+}
+
 // GetStaticModelDefinitions returns a static model definitions.
 func (h *Handler) GetStaticModelDefinitions(c *gin.Context) {
 	channel := strings.TrimSpace(c.Param("channel"))

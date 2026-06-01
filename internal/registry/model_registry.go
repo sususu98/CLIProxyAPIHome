@@ -798,6 +798,25 @@ func (r *ModelRegistry) GetAvailableModels(handlerType string) []map[string]any 
 	return models
 }
 
+// GetAvailableModelDefinitions returns registered model definitions with at least one available client.
+func (r *ModelRegistry) GetAvailableModelDefinitions() []*ModelInfo {
+	now := time.Now()
+
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	models := make([]*ModelInfo, 0, len(r.models))
+	for _, registration := range r.models {
+		available, _ := modelRegistrationAvailability(registration, now)
+		if !available || registration == nil || registration.Info == nil {
+			continue
+		}
+		models = append(models, cloneModelInfo(registration.Info))
+	}
+	sortModelInfosByID(models)
+	return models
+}
+
 // buildAvailableModelsLocked builds an available models locked.
 func (r *ModelRegistry) buildAvailableModelsLocked(handlerType string, now time.Time) ([]map[string]any, time.Time) {
 	// Build the candidate view before applying availability rules.
@@ -805,40 +824,11 @@ func (r *ModelRegistry) buildAvailableModelsLocked(handlerType string, now time.
 	var expiresAt time.Time
 
 	for _, registration := range r.models {
-		availableClients := registration.Count
-
-		expiredClients := 0
-		for _, quotaTime := range registration.QuotaExceededClients {
-			if quotaTime == nil {
-				continue
-			}
-			recoveryAt := quotaTime.Add(modelQuotaExceededWindow)
-			if now.Before(recoveryAt) {
-				expiredClients++
-				if expiresAt.IsZero() || recoveryAt.Before(expiresAt) {
-					expiresAt = recoveryAt
-				}
-			}
+		available, registrationExpiresAt := modelRegistrationAvailability(registration, now)
+		if !registrationExpiresAt.IsZero() && (expiresAt.IsZero() || registrationExpiresAt.Before(expiresAt)) {
+			expiresAt = registrationExpiresAt
 		}
-
-		cooldownSuspended := 0
-		otherSuspended := 0
-		if registration.SuspendedClients != nil {
-			for _, reason := range registration.SuspendedClients {
-				if strings.EqualFold(reason, "quota") {
-					cooldownSuspended++
-					continue
-				}
-				otherSuspended++
-			}
-		}
-
-		effectiveClients := availableClients - expiredClients - otherSuspended
-		if effectiveClients < 0 {
-			effectiveClients = 0
-		}
-
-		if effectiveClients > 0 || (availableClients > 0 && (expiredClients > 0 || cooldownSuspended > 0) && otherSuspended == 0) {
+		if available {
 			model := r.convertModelToMap(registration.Info, handlerType)
 			if model != nil {
 				models = append(models, model)
@@ -847,6 +837,64 @@ func (r *ModelRegistry) buildAvailableModelsLocked(handlerType string, now time.
 	}
 
 	return models, expiresAt
+}
+
+// modelRegistrationAvailability applies the registry visibility rules to one model registration.
+func modelRegistrationAvailability(registration *ModelRegistration, now time.Time) (bool, time.Time) {
+	if registration == nil {
+		return false, time.Time{}
+	}
+
+	availableClients := registration.Count
+
+	expiredClients := 0
+	var expiresAt time.Time
+	for _, quotaTime := range registration.QuotaExceededClients {
+		if quotaTime == nil {
+			continue
+		}
+		recoveryAt := quotaTime.Add(modelQuotaExceededWindow)
+		if now.Before(recoveryAt) {
+			expiredClients++
+			if expiresAt.IsZero() || recoveryAt.Before(expiresAt) {
+				expiresAt = recoveryAt
+			}
+		}
+	}
+
+	cooldownSuspended := 0
+	otherSuspended := 0
+	if registration.SuspendedClients != nil {
+		for _, reason := range registration.SuspendedClients {
+			if strings.EqualFold(reason, "quota") {
+				cooldownSuspended++
+				continue
+			}
+			otherSuspended++
+		}
+	}
+
+	effectiveClients := availableClients - expiredClients - otherSuspended
+	if effectiveClients < 0 {
+		effectiveClients = 0
+	}
+
+	return effectiveClients > 0 || (availableClients > 0 && (expiredClients > 0 || cooldownSuspended > 0) && otherSuspended == 0), expiresAt
+}
+
+// sortModelInfosByID keeps management responses stable.
+func sortModelInfosByID(models []*ModelInfo) {
+	sort.Slice(models, func(i, j int) bool {
+		return modelInfoSortKey(models[i]) < modelInfoSortKey(models[j])
+	})
+}
+
+// modelInfoSortKey returns a normalized model sort key.
+func modelInfoSortKey(model *ModelInfo) string {
+	if model == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(model.ID))
 }
 
 // cloneModelMaps clones a model maps.

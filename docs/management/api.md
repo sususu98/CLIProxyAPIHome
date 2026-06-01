@@ -197,6 +197,7 @@ The table below is extracted from the final Home route registry built by `intern
 | `GET` | `/model-groups/:id` |
 | `PATCH` | `/model-groups/:id` |
 | `PUT` | `/model-groups/:id` |
+| `GET` | `/models` |
 | `GET` | `/nodes` |
 | `POST` | `/oauth-callback` |
 | `DELETE` | `/oauth-excluded-models` |
@@ -1620,6 +1621,62 @@ Response: file attachment.
 
 ## Models
 
+### GET `/models?scope=available|static`
+
+Returns model definitions from either the current runtime registry or the static model catalog.
+
+Query parameters:
+
+| Query | Type | Required | Description |
+| --- | --- | --- | --- |
+| `scope` | string | no | `available` returns models currently registered by active credentials. `static` returns static model definitions. Default: `available`. Aliases: `source`, `mode`, `type`. |
+| `channel` | string | no | Static-only filter for one channel. Alias: `provider`. |
+
+Supported `scope` aliases:
+
+| Value | Behavior |
+| --- | --- |
+| `available`, `active`, `current` | Return currently available runtime models. |
+| `static`, `all-static`, `definitions` | Return static model definitions. |
+
+Example available response:
+
+```json
+{
+  "scope": "available",
+  "models": [
+    {
+      "id": "gpt-5.5",
+      "object": "model",
+      "created": 1704067200,
+      "owned_by": "openai",
+      "type": "openai",
+      "display_name": "GPT-5.5"
+    }
+  ]
+}
+```
+
+Example static response:
+
+```json
+{
+  "scope": "static",
+  "models": {
+    "codex-pro": [
+      {
+        "id": "gpt-5.5",
+        "object": "model",
+        "created": 1704067200,
+        "owned_by": "openai",
+        "type": "openai",
+        "display_name": "GPT-5.5"
+      }
+    ]
+  }
+}
+```
+
 ### GET `/model-definitions/:channel`
 
 Returns static model metadata for one channel.
@@ -1632,6 +1689,10 @@ gemini
 vertex
 gemini-cli
 codex
+codex-free
+codex-team
+codex-plus
+codex-pro
 kimi
 antigravity
 xai
