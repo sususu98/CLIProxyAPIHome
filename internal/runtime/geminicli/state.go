@@ -114,15 +114,6 @@ func ResolveSharedCredential(runtime any) *SharedCredential {
 	}
 }
 
-// IsVirtual reports whether the runtime payload represents a virtual credential.
-func IsVirtual(runtime any) bool {
-	if runtime == nil {
-		return false
-	}
-	_, ok := runtime.(*VirtualCredential)
-	return ok
-}
-
 // cloneMap clones a map.
 func cloneMap(in map[string]any) map[string]any {
 	if len(in) == 0 {

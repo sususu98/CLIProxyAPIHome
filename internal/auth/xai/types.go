@@ -1,8 +1,6 @@
 // Package xai provides OAuth2 authentication helpers for xAI Grok.
 package xai
 
-import "time"
-
 const (
 	// DefaultAPIBaseURL is the default xAI Responses API base URL.
 	DefaultAPIBaseURL = "https://api.x.ai/v1"
@@ -21,13 +19,6 @@ const (
 	// RedirectPath is the loopback callback path registered by the xAI client.
 	RedirectPath = "/callback"
 )
-
-var refreshLead = 5 * time.Minute
-
-// RefreshLead returns the refresh lead time for xAI OAuth credentials.
-func RefreshLead() time.Duration {
-	return refreshLead
-}
 
 // PKCECodes holds the PKCE verifier/challenge pair.
 type PKCECodes struct {

@@ -170,59 +170,6 @@ func subscriptionPong(payload []byte) dispatch.Reply {
 	)
 }
 
-// ListenAndServe returns an en and serve.
-func (s *Server) ListenAndServe(ctx context.Context) error {
-	// Decode the wire frame before dispatching command handling.
-	if s == nil {
-		return fmt.Errorf("resp server: server is nil")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if strings.TrimSpace(s.addr) == "" {
-		return fmt.Errorf("resp server: addr is empty")
-	}
-
-	listener, errListen := net.Listen("tcp", s.addr)
-	if errListen != nil {
-		return errListen
-	}
-	defer func() {
-		if errClose := listener.Close(); errClose != nil {
-			log.Errorf("resp listener close error: %v", errClose)
-		}
-	}()
-
-	log.Infof("RESP server listening on %s", s.addr)
-
-	closeCh := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = listener.Close()
-		case <-closeCh:
-		}
-	}()
-	defer close(closeCh)
-
-	for {
-		conn, errAccept := listener.Accept()
-		if errAccept != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if errors.Is(errAccept, net.ErrClosed) {
-				return nil
-			}
-			log.Errorf("resp accept error: %v", errAccept)
-			time.Sleep(50 * time.Millisecond)
-			continue
-		}
-
-		go s.HandleConn(ctx, conn)
-	}
-}
-
 // HandleConn handles handle conn.
 func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 	// Validate request inputs before mutating persisted state.

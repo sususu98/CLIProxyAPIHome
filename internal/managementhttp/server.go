@@ -57,19 +57,6 @@ func (r *RouteRegistry) Set(method, path string, handler gin.HandlerFunc) {
 	r.routes[RouteKey{Method: method, Path: path}] = handler
 }
 
-// Delete handles delete.
-func (r *RouteRegistry) Delete(method, path string) {
-	if r == nil {
-		return
-	}
-	method = strings.ToUpper(strings.TrimSpace(method))
-	path = strings.TrimSpace(path)
-	if method == "" || path == "" {
-		return
-	}
-	delete(r.routes, RouteKey{Method: method, Path: path})
-}
-
 // Register wires package handlers into the provided registry.
 func (r *RouteRegistry) Register(group *gin.RouterGroup) {
 	if r == nil || group == nil || len(r.routes) == 0 {
@@ -107,26 +94,6 @@ type ClusterManagementOption struct {
 
 type DatabaseManagementOption = ClusterManagementOption
 
-// WithRoute applies the route option.
-func WithRoute(method, path string, handler gin.HandlerFunc) RouteOption {
-	return func(r *RouteRegistry) {
-		if r == nil {
-			return
-		}
-		r.Set(method, path, handler)
-	}
-}
-
-// WithoutRoute removes a route from the registry.
-func WithoutRoute(method, path string) RouteOption {
-	return func(r *RouteRegistry) {
-		if r == nil {
-			return
-		}
-		r.Delete(method, path)
-	}
-}
-
 // WithDatabaseManagement applies the database-backed management option.
 func WithDatabaseManagement(opt DatabaseManagementOption) RouteOption {
 	return func(r *RouteRegistry) {
@@ -139,11 +106,6 @@ func WithDatabaseManagement(opt DatabaseManagementOption) RouteOption {
 		handler.SetForwardTLSConfig(opt.ForwardTLSConfig)
 		registerClusterManagementRoutes(r, handler)
 	}
-}
-
-// WithClusterManagement applies the cluster management option.
-func WithClusterManagement(opt ClusterManagementOption) RouteOption {
-	return WithDatabaseManagement(opt)
 }
 
 // registerClusterManagementRoutes handles a register cluster management routes.

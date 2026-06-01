@@ -40,11 +40,6 @@ func NewRESPHandler(coordinator *Coordinator, refresh *RefreshController, repo *
 	}
 }
 
-// IsClientClusterCommand reports whether a CLUSTER command is for authenticated CPA clients.
-func IsClientClusterCommand(args []string) bool {
-	return len(args) >= 2 && strings.EqualFold(strings.TrimSpace(args[0]), "CLUSTER") && strings.EqualFold(strings.TrimSpace(args[1]), "NODES")
-}
-
 // UpdateClientCount stores the current active CPA client count for this node.
 func (h *RESPHandler) UpdateClientCount(ctx context.Context, clientCount int) error {
 	if h == nil || h.coordinator == nil {

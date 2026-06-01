@@ -128,11 +128,6 @@ type ClaudeAuth struct {
 	httpClient *http.Client
 }
 
-// NewClaudeAuth creates a new claude auth.
-func NewClaudeAuth(cfg *config.Config) *ClaudeAuth {
-	return NewClaudeAuthWithProxyURL(cfg, "")
-}
-
 // NewClaudeAuthWithProxyURL creates a new refresh client instance.
 // proxyURL takes precedence over cfg.ProxyURL when non-empty.
 func NewClaudeAuthWithProxyURL(cfg *config.Config, proxyURL string) *ClaudeAuth {

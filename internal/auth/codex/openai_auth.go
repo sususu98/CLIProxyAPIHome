@@ -30,12 +30,6 @@ type CodexAuth struct {
 	httpClient *http.Client
 }
 
-// NewCodexAuth creates a new CodexAuth service instance.
-// It initializes an HTTP client with proxy settings from the provided configuration.
-func NewCodexAuth(cfg *config.Config) *CodexAuth {
-	return NewCodexAuthWithProxyURL(cfg, "")
-}
-
 // NewCodexAuthWithProxyURL creates a new CodexAuth service instance.
 // proxyURL takes precedence over cfg.ProxyURL when non-empty.
 func NewCodexAuthWithProxyURL(cfg *config.Config, proxyURL string) *CodexAuth {

@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"reflect"
-	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -16,19 +14,6 @@ import (
 	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"gopkg.in/yaml.v3"
 )
-
-// ConfigRootRoutes handles a config root routes.
-func ConfigRootRoutes() []string {
-	routes := make([]string, 0, len(configRootKeys()))
-	for _, key := range configRootKeys() {
-		if isCredentialConfigKey(key) {
-			continue
-		}
-		routes = append(routes, "/"+key)
-	}
-	sort.Strings(routes)
-	return routes
-}
 
 // GetConfig returns a config.
 func (h *Handler) GetConfig(c *gin.Context) {
@@ -274,51 +259,6 @@ func readConfigValue(c *gin.Context, key string) (any, error) {
 		}
 	}
 	return value, nil
-}
-
-// configRootKeys handles a config root keys.
-func configRootKeys() []string {
-	cfgType := reflect.TypeOf(appconfig.Config{})
-	keys := make([]string, 0, cfgType.NumField())
-	for i := 0; i < cfgType.NumField(); i++ {
-		field := cfgType.Field(i)
-		if field.Anonymous {
-			keys = append(keys, sdkConfigRootKeys()...)
-			continue
-		}
-		key := yamlTagName(field.Tag.Get("yaml"))
-		if key == "" || key == "-" {
-			continue
-		}
-		keys = append(keys, key)
-	}
-	return keys
-}
-
-// sdkConfigRootKeys handles a sdk config root keys.
-func sdkConfigRootKeys() []string {
-	cfgType := reflect.TypeOf(appconfig.SDKConfig{})
-	keys := make([]string, 0, cfgType.NumField())
-	for i := 0; i < cfgType.NumField(); i++ {
-		key := yamlTagName(cfgType.Field(i).Tag.Get("yaml"))
-		if key == "" || key == "-" {
-			continue
-		}
-		keys = append(keys, key)
-	}
-	return keys
-}
-
-// yamlTagName handles a yaml tag name.
-func yamlTagName(tag string) string {
-	tag = strings.TrimSpace(tag)
-	if tag == "" {
-		return ""
-	}
-	if idx := strings.Index(tag, ","); idx >= 0 {
-		tag = tag[:idx]
-	}
-	return strings.TrimSpace(tag)
 }
 
 // isCredentialConfigKey reports whether credential config key.

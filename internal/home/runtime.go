@@ -373,14 +373,6 @@ func BuildRefreshPayload(updated *coreauth.Auth) ([]byte, error) {
 	return out, nil
 }
 
-// AccessManager handles an access manager.
-func (r *Runtime) AccessManager() *access.Manager {
-	if r == nil {
-		return nil
-	}
-	return r.accessManager
-}
-
 // Authenticate validates request credentials and returns the access result.
 func (r *Runtime) Authenticate(ctx context.Context, headers http.Header) (*access.Result, *access.AuthError) {
 	return r.authenticateRequest(ctx, headers)
@@ -474,15 +466,6 @@ type DispatchResult struct {
 	Provider string
 
 	Auth *coreauth.Auth
-}
-
-// Dispatch processes dispatch.
-func (r *Runtime) Dispatch(ctx context.Context, reqModel string, headers http.Header) (*DispatchResult, error) {
-	opts := coreauth.Options{}
-	if headers != nil {
-		opts.Headers = headers.Clone()
-	}
-	return r.dispatchWithOptions(ctx, reqModel, opts)
 }
 
 // DispatchForAPIKey processes dispatch with API-key channel restrictions.

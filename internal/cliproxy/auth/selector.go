@@ -431,14 +431,6 @@ type SessionAffinityConfig struct {
 	TTL      time.Duration
 }
 
-// NewSessionAffinitySelector creates a new session-aware selector.
-func NewSessionAffinitySelector(fallback Selector) *SessionAffinitySelector {
-	return NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
-		Fallback: fallback,
-		TTL:      time.Hour,
-	})
-}
-
 // NewSessionAffinitySelectorWithConfig creates a selector with custom configuration.
 func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAffinitySelector {
 	if cfg.Fallback == nil {
@@ -554,21 +546,6 @@ func (s *SessionAffinitySelector) InvalidateAuth(authID string) {
 	if s.cache != nil {
 		s.cache.InvalidateAuth(authID)
 	}
-}
-
-// ExtractSessionID extracts session identifier from multiple sources.
-// Priority order:
-//  1. metadata.user_id (Claude Code format with _session_{uuid}) - highest priority for Claude Code clients
-//  2. X-Session-ID header
-//  3. Session_id header (Codex)
-//  4. X-Amp-Thread-Id header (Amp CLI thread ID)
-//  5. X-Client-Request-Id header (PI)
-//  6. metadata.user_id (non-Claude Code format)
-//  7. conversation_id field in request body
-//  8. Stable hash from first few messages content (fallback)
-func ExtractSessionID(headers http.Header, payload []byte, metadata map[string]any) string {
-	primary, _ := extractSessionIDs(headers, payload, metadata)
-	return primary
 }
 
 // extractSessionIDs returns (primaryID, fallbackID) for session affinity.

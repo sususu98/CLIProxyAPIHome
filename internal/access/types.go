@@ -31,17 +31,3 @@ const (
 	// DefaultAccessProviderName is applied when no provider name is supplied.
 	DefaultAccessProviderName = "config-inline"
 )
-
-// MakeInlineAPIKeyProvider constructs an inline API key provider configuration.
-// It returns nil when no keys are supplied.
-func MakeInlineAPIKeyProvider(keys []string) *AccessProvider {
-	if len(keys) == 0 {
-		return nil
-	}
-	provider := &AccessProvider{
-		Name:    DefaultAccessProviderName,
-		Type:    AccessProviderTypeConfigAPIKey,
-		APIKeys: append([]string(nil), keys...),
-	}
-	return provider
-}

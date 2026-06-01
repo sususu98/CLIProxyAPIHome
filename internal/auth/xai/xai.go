@@ -247,29 +247,6 @@ func (a *XAIAuth) postTokenForm(ctx context.Context, tokenEndpoint string, form 
 	}, nil
 }
 
-// CreateTokenStorage converts an auth bundle into persistable storage.
-func (a *XAIAuth) CreateTokenStorage(bundle *AuthBundle) *TokenStorage {
-	if bundle == nil {
-		return nil
-	}
-	return &TokenStorage{
-		Type:          "xai",
-		AccessToken:   bundle.TokenData.AccessToken,
-		RefreshToken:  bundle.TokenData.RefreshToken,
-		IDToken:       bundle.TokenData.IDToken,
-		TokenType:     bundle.TokenData.TokenType,
-		ExpiresIn:     bundle.TokenData.ExpiresIn,
-		Expire:        bundle.TokenData.Expire,
-		LastRefresh:   bundle.LastRefresh,
-		Email:         strings.TrimSpace(bundle.TokenData.Email),
-		Subject:       bundle.TokenData.Subject,
-		BaseURL:       firstNonEmpty(bundle.BaseURL, DefaultAPIBaseURL),
-		RedirectURI:   bundle.RedirectURI,
-		TokenEndpoint: bundle.TokenEndpoint,
-		AuthKind:      "oauth",
-	}
-}
-
 func parseJWTIdentity(token string) (email string, subject string) {
 	parts := strings.Split(token, ".")
 	if len(parts) < 2 {
@@ -292,13 +269,4 @@ func parseJWTIdentity(token string) (email string, subject string) {
 		subject = strings.TrimSpace(v)
 	}
 	return email, subject
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }

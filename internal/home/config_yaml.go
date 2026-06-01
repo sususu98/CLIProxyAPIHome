@@ -21,11 +21,6 @@ func (r *Runtime) ConfigPath() string {
 	return strings.TrimSpace(r.configPath)
 }
 
-// ReadConfigYAML loads read config yaml.
-func (r *Runtime) ReadConfigYAML() ([]byte, error) {
-	return r.ReadConfigYAMLContext(context.Background())
-}
-
 // ReadConfigYAMLContext loads read config yaml context.
 func (r *Runtime) ReadConfigYAMLContext(ctx context.Context) ([]byte, error) {
 	// Normalize source data before building the derived payload.

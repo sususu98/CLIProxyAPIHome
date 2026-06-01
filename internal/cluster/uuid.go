@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 )
 
 var clusterUUIDNamespace = []byte("0f6c4f02-df9f-4d8d-a383-0c6e4b7a9d43")
@@ -68,26 +66,6 @@ func DeterministicAPIKeyUUID(provider, baseURL, apiKeyHash, compatName, provider
 func DeterministicVirtualUUID(parentUUID, projectID string) string {
 	input := strings.Join([]string{strings.TrimSpace(parentUUID), strings.TrimSpace(projectID)}, "\x00")
 	return deterministicUUID(input)
-}
-
-// NormalizeClusterAuth normalizes a cluster auth.
-func NormalizeClusterAuth(auth *coreauth.Auth, uuidValue string) {
-	if auth == nil {
-		return
-	}
-	trimmedUUID := strings.TrimSpace(uuidValue)
-	if trimmedUUID == "" {
-		return
-	}
-	auth.ID = trimmedUUID
-	auth.Index = trimmedUUID
-	if auth.Attributes == nil {
-		auth.Attributes = make(map[string]string)
-	}
-	auth.Attributes["cluster_uuid"] = trimmedUUID
-	if auth.Metadata != nil {
-		auth.Metadata["uuid"] = trimmedUUID
-	}
 }
 
 // APIKeyHash handles an api key hash.

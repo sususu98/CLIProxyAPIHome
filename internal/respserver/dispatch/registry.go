@@ -3,7 +3,6 @@ package dispatch
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
@@ -99,21 +98,6 @@ func Err(message string) Reply {
 }
 
 type Handler func(ctx context.Context, env Env, args []string) Reply
-
-type RouteKind int
-
-const (
-	RouteKindDirect RouteKind = iota
-	RouteKindDynamic
-)
-
-type Route struct {
-	Kind      RouteKind
-	Command   string
-	Key       string
-	Type      string
-	IsDefault bool
-}
 
 type Registry struct {
 	directHandlers        map[string]map[string]Handler
@@ -291,67 +275,6 @@ func (r *Registry) Execute(ctx context.Context, env Env, args []string) Reply {
 	}
 
 	return RedisError(fmt.Sprintf("ERR unknown command '%s'", strings.ToLower(command)))
-}
-
-// Routes handles a routes.
-func (r *Registry) Routes() []Route {
-	// Decode the wire frame before dispatching command handling.
-	if r == nil {
-		return nil
-	}
-	var routes []Route
-	for cmd, direct := range r.directHandlers {
-		for key := range direct {
-			routes = append(routes, Route{
-				Kind:    RouteKindDirect,
-				Command: cmd,
-				Key:     key,
-			})
-		}
-		if r.directDefaultHandlers[cmd] != nil {
-			routes = append(routes, Route{
-				Kind:      RouteKindDirect,
-				Command:   cmd,
-				IsDefault: true,
-			})
-		}
-	}
-	for cmd, dyn := range r.dynamicHandlers {
-		if dyn == nil {
-			continue
-		}
-		for typeValue := range dyn.byType {
-			routes = append(routes, Route{
-				Kind:    RouteKindDynamic,
-				Command: cmd,
-				Type:    typeValue,
-			})
-		}
-		if dyn.defaultHandler != nil {
-			routes = append(routes, Route{
-				Kind:      RouteKindDynamic,
-				Command:   cmd,
-				IsDefault: true,
-			})
-		}
-	}
-
-	sort.Slice(routes, func(i, j int) bool {
-		if routes[i].Command != routes[j].Command {
-			return routes[i].Command < routes[j].Command
-		}
-		if routes[i].Kind != routes[j].Kind {
-			return routes[i].Kind < routes[j].Kind
-		}
-		if routes[i].IsDefault != routes[j].IsDefault {
-			return routes[i].IsDefault
-		}
-		if routes[i].Key != routes[j].Key {
-			return routes[i].Key < routes[j].Key
-		}
-		return routes[i].Type < routes[j].Type
-	})
-	return routes
 }
 
 // ExtractJSONArgument extracts a json argument.
