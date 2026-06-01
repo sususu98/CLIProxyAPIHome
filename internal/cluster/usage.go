@@ -30,6 +30,7 @@ type UsageRecord struct {
 	FailStatusCode      int       `gorm:"column:fail_status_code;not null;default:0"`
 	FailBody            string    `gorm:"column:fail_body;type:text"`
 	Provider            string    `gorm:"column:provider;index:idx_usage_provider_model,priority:1;index:idx_usage_provider_model_time,priority:1"`
+	ExecutorType        string    `gorm:"column:executor_type"`
 	Model               string    `gorm:"column:model;index:idx_usage_provider_model,priority:2;index:idx_usage_provider_model_time,priority:2"`
 	Alias               string    `gorm:"column:alias"`
 	Effort              string    `gorm:"column:effort"`
@@ -87,6 +88,7 @@ func UsageRecordFromPayload(payload string, homeIP string) (*UsageRecord, error)
 		FailStatusCode:      int(gjson.Get(payload, "fail.status_code").Int()),
 		FailBody:            gjson.Get(payload, "fail.body").String(),
 		Provider:            strings.TrimSpace(gjson.Get(payload, "provider").String()),
+		ExecutorType:        strings.TrimSpace(gjson.Get(payload, "executor_type").String()),
 		Model:               strings.TrimSpace(gjson.Get(payload, "model").String()),
 		Alias:               strings.TrimSpace(gjson.Get(payload, "alias").String()),
 		Effort:              strings.TrimSpace(gjson.Get(payload, "reasoning_effort").String()),

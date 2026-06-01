@@ -1507,6 +1507,7 @@ Example response:
 [
   {
     "request_id": "req-1",
+    "executor_type": "CodexWebsocketsExecutor",
     "model": "gpt-5.5",
     "endpoint": "/v1/responses",
     "failed": false
