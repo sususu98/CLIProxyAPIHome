@@ -379,7 +379,7 @@ Replaces the full config.
 
 Input: a complete YAML document in the request body.
 
-Home removes credential roots from the uploaded YAML before persisting the config snapshot. Manage these roots through provider-key or auth-file APIs instead:
+Home persists non-credential roots into the config snapshot. Credential roots included in the uploaded YAML are synchronized into DB-backed auth records, while omitted credential roots are left unchanged. Send an empty list for a credential root to clear the corresponding provider-key records:
 
 ```text
 auth-dir
@@ -390,10 +390,12 @@ claude-api-key
 openai-compatibility
 ```
 
+`auth-dir` is still treated as an import/export path and is not persisted into the runtime config snapshot.
+
 Example response:
 
 ```json
-{ "ok": true, "changed": ["config"] }
+{ "ok": true, "changed": ["config", "auth"] }
 ```
 
 ### Simple Config Leaf Routes

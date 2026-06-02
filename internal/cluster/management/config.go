@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"gopkg.in/yaml.v3"
@@ -71,13 +72,19 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "invalid_yaml", fmt.Errorf("cannot read request body"))
 		return
 	}
-	root, errRoot := configRootFromYAML(body)
+	fullRoot, errRoot := rawConfigRootFromYAML(body)
 	if errRoot != nil {
 		respondError(c, http.StatusBadRequest, "invalid_yaml", errRoot)
 		return
 	}
+	root := configRootWithoutCredentials(fullRoot)
 	if _, errConfig := configFromRoot(root); errConfig != nil {
 		respondError(c, http.StatusUnprocessableEntity, "invalid_config", errConfig)
+		return
+	}
+	credentialAuths, credentialsChanged, errCredentials := h.credentialConfigAuthsFromRoot(fullRoot)
+	if errCredentials != nil {
+		respondError(c, http.StatusBadRequest, "invalid_body", errCredentials)
 		return
 	}
 
@@ -87,11 +94,63 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "write_failed", errReplace)
 		return
 	}
+	if credentialsChanged {
+		if errReplaceCredentials := h.replaceCredentialConfigAuths(ctx, credentialAuths); errReplaceCredentials != nil {
+			respondError(c, http.StatusInternalServerError, "write_failed", errReplaceCredentials)
+			return
+		}
+	}
 	if errRefresh := h.refreshConfig(ctx); errRefresh != nil {
 		respondError(c, http.StatusInternalServerError, "reload_failed", errRefresh)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "changed": []string{"config"}})
+	if credentialsChanged {
+		if errRefreshAuths := h.refreshAuths(ctx); errRefreshAuths != nil {
+			respondError(c, http.StatusInternalServerError, "reload_failed", errRefreshAuths)
+			return
+		}
+	}
+	changed := []string{"config"}
+	if credentialsChanged {
+		changed = append(changed, "auth")
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "changed": changed})
+}
+
+type credentialConfigAuthList struct {
+	Key   string
+	Auths []*coreauth.Auth
+}
+
+// credentialConfigAuthsFromRoot synthesizes DB-backed credentials present in YAML config.
+func (h *Handler) credentialConfigAuthsFromRoot(root map[string]any) ([]credentialConfigAuthList, bool, error) {
+	out := make([]credentialConfigAuthList, 0, 5)
+	for _, key := range []string{"gemini-api-key", "vertex-api-key", "codex-api-key", "claude-api-key", "openai-compatibility"} {
+		value, exists := root[key]
+		if !exists {
+			continue
+		}
+		rawJSON, errMarshal := json.Marshal(value)
+		if errMarshal != nil {
+			return nil, false, errMarshal
+		}
+		auths, errSynthesize := h.synthesizeAPIKeyBody(key, rawJSON)
+		if errSynthesize != nil {
+			return nil, false, errSynthesize
+		}
+		out = append(out, credentialConfigAuthList{Key: key, Auths: auths})
+	}
+	return out, len(out) > 0, nil
+}
+
+// replaceCredentialConfigAuths replaces DB-backed credentials present in YAML config.
+func (h *Handler) replaceCredentialConfigAuths(ctx context.Context, entries []credentialConfigAuthList) error {
+	for _, entry := range entries {
+		if errReplace := h.replaceAPIKeyAuths(ctx, entry.Key, entry.Auths); errReplace != nil {
+			return errReplace
+		}
+	}
+	return nil
 }
 
 // GetConfigRoot returns a config root.
@@ -201,8 +260,8 @@ func (h *Handler) applyCredentialConfig(ctx context.Context, root map[string]any
 	return nil
 }
 
-// configRootFromYAML derives config root from yaml.
-func configRootFromYAML(data []byte) (map[string]any, error) {
+// rawConfigRootFromYAML derives config root from yaml without dropping credential roots.
+func rawConfigRootFromYAML(data []byte) (map[string]any, error) {
 	var root map[string]any
 	if errUnmarshal := yaml.Unmarshal(data, &root); errUnmarshal != nil {
 		return nil, errUnmarshal
@@ -210,12 +269,28 @@ func configRootFromYAML(data []byte) (map[string]any, error) {
 	if root == nil {
 		root = make(map[string]any)
 	}
-	for key := range root {
-		if isCredentialConfigKey(key) {
-			delete(root, key)
-		}
-	}
 	return root, nil
+}
+
+// configRootFromYAML derives config root from yaml.
+func configRootFromYAML(data []byte) (map[string]any, error) {
+	root, errRoot := rawConfigRootFromYAML(data)
+	if errRoot != nil {
+		return nil, errRoot
+	}
+	return configRootWithoutCredentials(root), nil
+}
+
+// configRootWithoutCredentials returns the config roots persisted in config snapshot.
+func configRootWithoutCredentials(root map[string]any) map[string]any {
+	out := make(map[string]any, len(root))
+	for key, value := range root {
+		if isCredentialConfigKey(key) {
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 // configFromRoot derives config from root.

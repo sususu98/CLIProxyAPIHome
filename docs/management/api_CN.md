@@ -379,7 +379,7 @@ application/yaml; charset=utf-8
 
 输入：请求体为完整 YAML 文档。
 
-Home 会在持久化 config snapshot 前移除 credential roots，这些配置应通过 provider key 或 auth file 专用接口管理：
+Home 会把非 credential roots 持久化到 config snapshot。上传 YAML 中包含的 credential roots 会同步到 DB-backed auth 记录；未提交的 credential roots 会保持不变。如需清空某类 provider-key 记录，请提交该 credential root 的空列表：
 
 ```text
 auth-dir
@@ -390,10 +390,12 @@ claude-api-key
 openai-compatibility
 ```
 
+`auth-dir` 仍然只作为 import/export 路径处理，不会持久化到运行时 config snapshot。
+
 输出示例：
 
 ```json
-{ "ok": true, "changed": ["config"] }
+{ "ok": true, "changed": ["config", "auth"] }
 ```
 
 ### 简单配置 Leaf Routes
