@@ -22,6 +22,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/managementasset"
 	mgmthandlers "github.com/router-for-me/CLIProxyAPIHome/internal/managementhttp/hanlders"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/userapi"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
@@ -411,6 +412,12 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 		clusterGroup := engine.Group("/v0/cluster")
 		clusterGroup.Use(withBuildInfoHeaders(), clusterMTLSMiddleware())
 		registerClusterInternalRoutes(clusterGroup, clusterHandler)
+	}
+
+	if clusterEnabled {
+		userGroup := engine.Group("/user")
+		userGroup.Use(withBuildInfoHeaders())
+		userapi.Register(userGroup, userapi.NewHandler(clusterOpt.Repository, clusterOpt.Runtime))
 	}
 
 	mgmt := engine.Group("/v0/management")

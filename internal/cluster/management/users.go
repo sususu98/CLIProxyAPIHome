@@ -3,11 +3,13 @@ package management
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -16,6 +18,7 @@ type userWriteRequest struct {
 	UserName     *string         `json:"user_name"`
 	UserNameDash *string         `json:"user-name"`
 	Password     *string         `json:"password"`
+	Credits      *float64        `json:"credits"`
 	MFA          json.RawMessage `json:"mfa"`
 	Passkey      json.RawMessage `json:"passkey"`
 }
@@ -70,6 +73,10 @@ func (h *Handler) CreateUser(c *gin.Context) {
 	defer cancel()
 	record, errCreate := h.repo.CreateUser(ctx, update)
 	if errCreate != nil {
+		if cluster.IsUserConflictError(errCreate) {
+			respondError(c, http.StatusConflict, "user_exists", errCreate)
+			return
+		}
 		respondError(c, http.StatusInternalServerError, "user_create_failed", errCreate)
 		return
 	}
@@ -131,7 +138,13 @@ func userUpdateFromRequest(c *gin.Context, body userWriteRequest, requireUsernam
 		respondError(c, http.StatusBadRequest, "invalid body", errRequired("username"))
 		return update, false
 	}
-	update.Password = body.Password
+	password, errPassword := managementPasswordValue(body.Password)
+	if errPassword != nil {
+		respondError(c, http.StatusBadRequest, "invalid body", errPassword)
+		return update, false
+	}
+	update.Password = password
+	update.Credits = body.Credits
 	if len(body.MFA) > 0 {
 		mfa, errMFA := cluster.NormalizeJSONB(body.MFA)
 		if errMFA != nil {
@@ -176,7 +189,35 @@ func respondUserRecordError(c *gin.Context, code string, err error) {
 		respondError(c, http.StatusNotFound, "not_found", err)
 		return
 	}
+	if cluster.IsUserConflictError(err) {
+		respondError(c, http.StatusConflict, "user_exists", err)
+		return
+	}
 	respondError(c, http.StatusInternalServerError, code, err)
+}
+
+func managementPasswordValue(password *string) (*string, error) {
+	if password == nil {
+		return nil, nil
+	}
+	value := *password
+	if value == "" || isBcryptPasswordHash(value) {
+		return &value, nil
+	}
+	hashed, errHash := bcrypt.GenerateFromPassword([]byte(value), bcrypt.DefaultCost)
+	if errHash != nil {
+		return nil, fmt.Errorf("password hash failed: %w", errHash)
+	}
+	next := string(hashed)
+	return &next, nil
+}
+
+func isBcryptPasswordHash(value string) bool {
+	if value == "" {
+		return false
+	}
+	_, errCost := bcrypt.Cost([]byte(value))
+	return errCost == nil
 }
 
 func userRecordToMap(record *cluster.UserRecord) gin.H {
@@ -184,13 +225,14 @@ func userRecordToMap(record *cluster.UserRecord) gin.H {
 		return gin.H{}
 	}
 	return gin.H{
-		"id":         record.ID,
-		"username":   record.Username,
-		"password":   record.Password,
-		"mfa":        record.MFA,
-		"passkey":    record.Passkey,
-		"created_at": record.CreatedAt,
-		"updated_at": record.UpdatedAt,
-		"deleted_at": deletedAtValue(record.DeletedAt),
+		"id":           record.ID,
+		"username":     record.Username,
+		"password_set": record.Password != "",
+		"credits":      record.Credits,
+		"mfa":          record.MFA,
+		"passkey":      record.Passkey,
+		"created_at":   record.CreatedAt,
+		"updated_at":   record.UpdatedAt,
+		"deleted_at":   deletedAtValue(record.DeletedAt),
 	}
 }

@@ -14,9 +14,25 @@ import (
 // ErrUserNotFound indicates that the referenced user record does not exist.
 var ErrUserNotFound = errors.New("user not found")
 
+// IsUserConflictError reports whether an error is a username uniqueness conflict.
+func IsUserConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "idx_user_username_active_unique") {
+		return true
+	}
+	if strings.Contains(message, "unique constraint") && strings.Contains(message, "user") && strings.Contains(message, "username") {
+		return true
+	}
+	return strings.Contains(message, "duplicate key") && strings.Contains(message, "username")
+}
+
 type UserUpdate struct {
 	Username *string
 	Password *string
+	Credits  *float64
 	MFA      *JSONB
 	Passkey  *JSONB
 }
@@ -52,6 +68,24 @@ func (r *Repository) GetUser(ctx context.Context, id uint) (*UserRecord, error) 
 	return record, nil
 }
 
+// GetUserByUsername returns a user by username.
+func (r *Repository) GetUserByUsername(ctx context.Context, username string) (*UserRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return nil, fmt.Errorf("username is required")
+	}
+
+	record := &UserRecord{}
+	if errFirst := db.WithContext(contextOrBackground(ctx)).Where("username = ?", username).Order("id").First(record).Error; errFirst != nil {
+		return nil, errFirst
+	}
+	return record, nil
+}
+
 // CreateUser creates a user.
 func (r *Repository) CreateUser(ctx context.Context, update UserUpdate) (*UserRecord, error) {
 	db, errDB := r.database()
@@ -71,6 +105,9 @@ func (r *Repository) CreateUser(ctx context.Context, update UserUpdate) (*UserRe
 	}
 	if update.Password != nil {
 		record.Password = *update.Password
+	}
+	if update.Credits != nil {
+		record.Credits = *update.Credits
 	}
 	if update.MFA != nil {
 		record.MFA = cloneJSONB(*update.MFA)
@@ -109,6 +146,9 @@ func (r *Repository) UpdateUser(ctx context.Context, id uint, update UserUpdate)
 		}
 		if update.Password != nil {
 			record.Password = *update.Password
+		}
+		if update.Credits != nil {
+			record.Credits = *update.Credits
 		}
 		if update.MFA != nil {
 			record.MFA = cloneJSONB(*update.MFA)

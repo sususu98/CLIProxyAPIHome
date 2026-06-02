@@ -3,14 +3,19 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
 	"strings"
 	"time"
 
+	homeerrors "github.com/router-for-me/CLIProxyAPIHome/internal/errors"
 	"gorm.io/gorm"
 )
+
+// ErrAPIKeyExists indicates that an API key value is already owned by another record.
+var ErrAPIKeyExists = errors.New("api key already exists")
 
 type APIKeyEntry struct {
 	APIKey      string
@@ -22,6 +27,12 @@ type APIKeyEntry struct {
 type APIKeyEntryUpdate struct {
 	APIKey      string
 	UserID      *uint
+	Channels    *[]uint
+	ModelGroups *[]uint
+}
+
+type APIKeyUserUpdate struct {
+	APIKey      *string
 	Channels    *[]uint
 	ModelGroups *[]uint
 }
@@ -132,6 +143,228 @@ func (r *Repository) UpdateAPIKeyChannels(ctx context.Context, apiKey string, ch
 	return r.UpdateAPIKeyBindings(ctx, apiKey, nil, &channels, nil)
 }
 
+// ListAPIKeyRecordsForUser returns active API key rows owned by one user.
+func (r *Repository) ListAPIKeyRecordsForUser(ctx context.Context, userID uint) ([]APIKeyRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	if userID == 0 {
+		return nil, fmt.Errorf("user id is required")
+	}
+
+	var records []APIKeyRecord
+	if errFind := db.WithContext(contextOrBackground(ctx)).Where("user_id = ?", userID).Order("id").Find(&records).Error; errFind != nil {
+		return nil, errFind
+	}
+	return records, nil
+}
+
+// CreateAPIKeyForUser creates an API key owned by one user.
+func (r *Repository) CreateAPIKeyForUser(ctx context.Context, userID uint, update APIKeyUserUpdate) (*APIKeyRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	if userID == 0 {
+		return nil, fmt.Errorf("user id is required")
+	}
+	if update.APIKey == nil || strings.TrimSpace(*update.APIKey) == "" {
+		return nil, fmt.Errorf("api key is required")
+	}
+
+	record := &APIKeyRecord{}
+	ctx = contextOrBackground(ctx)
+	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errUser := ensureUserExists(ctx, tx, userID); errUser != nil {
+			return errUser
+		}
+		channelsJSON := emptyAPIKeyChannelsJSON()
+		if update.Channels != nil {
+			nextChannels, errChannels := apiKeyChannelsJSON(*update.Channels)
+			if errChannels != nil {
+				return errChannels
+			}
+			channelsJSON = nextChannels
+		}
+		modelGroupsJSON := emptyAPIKeyModelGroupsJSON()
+		if update.ModelGroups != nil {
+			nextModelGroups, errModelGroups := apiKeyModelGroupsJSON(*update.ModelGroups)
+			if errModelGroups != nil {
+				return errModelGroups
+			}
+			modelGroupsJSON = nextModelGroups
+		}
+		key := strings.TrimSpace(*update.APIKey)
+		existing := &APIKeyRecord{}
+		errFirst := tx.WithContext(ctx).Unscoped().Where("api_key = ?", key).First(existing).Error
+		switch {
+		case errors.Is(errFirst, gorm.ErrRecordNotFound):
+			record.APIKey = key
+			record.UserID = &userID
+			record.Channels = channelsJSON
+			record.ModelGroups = modelGroupsJSON
+			if errCreate := tx.WithContext(ctx).Create(record).Error; errCreate != nil {
+				return errCreate
+			}
+		case errFirst != nil:
+			return errFirst
+		case existing.DeletedAt.Valid:
+			if errRestore := tx.WithContext(ctx).Unscoped().
+				Model(&APIKeyRecord{}).
+				Where("id = ?", existing.ID).
+				Updates(map[string]any{
+					"user_id":      &userID,
+					"channels":     channelsJSON,
+					"model_groups": modelGroupsJSON,
+					"deleted_at":   nil,
+				}).Error; errRestore != nil {
+				return errRestore
+			}
+			if errReload := tx.WithContext(ctx).Where("id = ?", existing.ID).First(record).Error; errReload != nil {
+				return errReload
+			}
+		default:
+			if !sameOptionalUint(existing.UserID, &userID) {
+				return ErrAPIKeyExists
+			}
+			existing.Channels = channelsJSON
+			existing.ModelGroups = modelGroupsJSON
+			if errSave := tx.WithContext(ctx).Save(existing).Error; errSave != nil {
+				return errSave
+			}
+			record = existing
+		}
+		return appendEvent(tx, "config", "upsert", configAPIKeysRootKey, time.Now().UTC().UnixNano())
+	})
+	if errTransaction != nil {
+		return nil, errTransaction
+	}
+	return record, nil
+}
+
+// UpdateAPIKeyForUser updates one API key owned by one user.
+func (r *Repository) UpdateAPIKeyForUser(ctx context.Context, userID uint, id uint, apiKey string, update APIKeyUserUpdate) (*APIKeyRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	if userID == 0 {
+		return nil, fmt.Errorf("user id is required")
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if id == 0 && apiKey == "" {
+		return nil, fmt.Errorf("api key id or value is required")
+	}
+
+	record := &APIKeyRecord{}
+	ctx = contextOrBackground(ctx)
+	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		query := tx.WithContext(ctx).Where("user_id = ?", userID)
+		if id > 0 {
+			query = query.Where("id = ?", id)
+		} else {
+			query = query.Where("api_key = ?", apiKey)
+		}
+		if errFirst := query.First(record).Error; errFirst != nil {
+			return errFirst
+		}
+		if update.APIKey != nil {
+			nextKey := strings.TrimSpace(*update.APIKey)
+			if nextKey == "" {
+				return fmt.Errorf("api key is required")
+			}
+			if nextKey != strings.TrimSpace(record.APIKey) {
+				if errAvailable := ensureAPIKeyValueAvailable(ctx, tx, nextKey, record.ID); errAvailable != nil {
+					return errAvailable
+				}
+			}
+			record.APIKey = nextKey
+		}
+		if update.Channels != nil {
+			channelsJSON, errChannels := apiKeyChannelsJSON(*update.Channels)
+			if errChannels != nil {
+				return errChannels
+			}
+			record.Channels = channelsJSON
+		}
+		if update.ModelGroups != nil {
+			modelGroupsJSON, errModelGroups := apiKeyModelGroupsJSON(*update.ModelGroups)
+			if errModelGroups != nil {
+				return errModelGroups
+			}
+			record.ModelGroups = modelGroupsJSON
+		}
+		if errSave := tx.Save(record).Error; errSave != nil {
+			return errSave
+		}
+		return appendEvent(tx, "config", "upsert", configAPIKeysRootKey, time.Now().UTC().UnixNano())
+	})
+	if errTransaction != nil {
+		return nil, errTransaction
+	}
+	return record, nil
+}
+
+func ensureAPIKeyValueAvailable(ctx context.Context, tx *gorm.DB, apiKey string, currentID uint) error {
+	if tx == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return fmt.Errorf("api key is required")
+	}
+	record := APIKeyRecord{}
+	errFirst := tx.WithContext(contextOrBackground(ctx)).
+		Unscoped().
+		Select("id").
+		Where("api_key = ?", apiKey).
+		First(&record).Error
+	switch {
+	case errors.Is(errFirst, gorm.ErrRecordNotFound):
+		return nil
+	case errFirst != nil:
+		return errFirst
+	case record.ID == currentID:
+		return nil
+	default:
+		return ErrAPIKeyExists
+	}
+}
+
+// DeleteAPIKeyForUser deletes one API key owned by one user.
+func (r *Repository) DeleteAPIKeyForUser(ctx context.Context, userID uint, id uint, apiKey string) error {
+	db, errDB := r.database()
+	if errDB != nil {
+		return errDB
+	}
+	if userID == 0 {
+		return fmt.Errorf("user id is required")
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if id == 0 && apiKey == "" {
+		return fmt.Errorf("api key id or value is required")
+	}
+
+	ctx = contextOrBackground(ctx)
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		query := tx.WithContext(ctx).Where("user_id = ?", userID)
+		if id > 0 {
+			query = query.Where("id = ?", id)
+		} else {
+			query = query.Where("api_key = ?", apiKey)
+		}
+		record := &APIKeyRecord{}
+		if errFirst := query.First(record).Error; errFirst != nil {
+			return errFirst
+		}
+		if errDelete := tx.Delete(record).Error; errDelete != nil {
+			return errDelete
+		}
+		return appendEvent(tx, "config", "upsert", configAPIKeysRootKey, time.Now().UTC().UnixNano())
+	})
+}
+
 // AllowedDispatchIDsForAPIKey returns auth and model IDs allowed by API-key bindings.
 func (r *Repository) AllowedDispatchIDsForAPIKey(ctx context.Context, apiKey string) ([]string, []string, error) {
 	db, errDB := r.database()
@@ -148,6 +381,10 @@ func (r *Repository) AllowedDispatchIDsForAPIKey(ctx context.Context, apiKey str
 	if errFirst != nil {
 		return nil, nil, errFirst
 	}
+	errCredits := ensureAPIKeyUserCreditsAvailable(ctx, db, &record)
+	if errCredits != nil {
+		return nil, nil, errCredits
+	}
 
 	authIDs, errAuthIDs := allowedAuthIDsForAPIKeyRecord(ctx, db, &record)
 	if errAuthIDs != nil {
@@ -158,6 +395,31 @@ func (r *Repository) AllowedDispatchIDsForAPIKey(ctx context.Context, apiKey str
 		return nil, nil, errModelIDs
 	}
 	return authIDs, modelIDs, nil
+}
+
+func ensureAPIKeyUserCreditsAvailable(ctx context.Context, db *gorm.DB, record *APIKeyRecord) error {
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	if record == nil {
+		return fmt.Errorf("api key record is nil")
+	}
+	userID := normalizeOptionalUserID(record.UserID)
+	if userID == nil {
+		return nil
+	}
+	user := UserRecord{}
+	errFirst := db.WithContext(contextOrBackground(ctx)).
+		Select("id", "credits").
+		Where("id = ?", *userID).
+		First(&user).Error
+	if errFirst != nil {
+		return errFirst
+	}
+	if user.Credits <= 0 {
+		return fmt.Errorf("%s: %s", homeerrors.TypeUserCreditsInsufficient, homeerrors.MessageUserCreditsInsufficient)
+	}
+	return nil
 }
 
 // AllowedAuthIDsForAPIKey returns auth IDs allowed by the API key channel bindings.

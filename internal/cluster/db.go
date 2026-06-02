@@ -92,7 +92,17 @@ func AutoMigrate(db *gorm.DB) error {
 	if errMigrate := migrateAPIKeyModelGroups(db); errMigrate != nil {
 		return errMigrate
 	}
+	if errMigrate := migrateUserUniqueUsername(db); errMigrate != nil {
+		return errMigrate
+	}
 	return migrateLegacyAPIKeys(db)
+}
+
+func migrateUserUniqueUsername(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	return db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_username_active_unique ON "user" ("username") WHERE "deleted_at" IS NULL`).Error
 }
 
 func migrateCertificateFingerprints(db *gorm.DB) error {

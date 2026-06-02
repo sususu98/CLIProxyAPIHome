@@ -1,0 +1,672 @@
+# CLIProxyAPIHome User API
+
+This document describes the current DB-backed User API exposed by CLIProxyAPIHome. The User API is separate from the Management API and does not use the Management API secret key.
+
+Base URL:
+
+```text
+http://<host>:<port>/user
+```
+
+Home examples usually use port `8327`. The effective listen address comes from runtime config, `cluster.yaml`, or the final `-addr` value.
+
+## Runtime Model
+
+User records, API keys, TOTP settings, and passkey entries are stored in the database-backed cluster repository. The `/user/*` route group is registered only when Home is running with the database-backed runtime route set.
+
+API key changes made through the User API update the same `api_key` table used by Home dispatch and publish a config refresh event.
+
+## Authentication
+
+Public routes:
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/register` | Creates a user and returns a bearer token. |
+| `POST` | `/login` | Password login for users without passkey and without TOTP. |
+| `POST` | `/login/totp` | Password plus TOTP login for users with TOTP enabled. |
+| `POST` | `/login/passkey` | Passkey login. |
+
+All other `/user/*` routes require a bearer token returned by a successful register or login response.
+The bearer token is an RS256 JWT signed with the cluster root CA private key and verified with the cluster root CA public key. Replacing the cluster root CA invalidates previously issued User API tokens.
+Password values are hashed and verified exactly as provided; leading and trailing whitespace is not trimmed.
+
+Supported request headers:
+
+| Header | Value |
+| --- | --- |
+| `Authorization` | `Bearer <USER_TOKEN>` |
+
+Login priority:
+
+| State | Behavior |
+| --- | --- |
+| Passkey enabled with TOTP enabled | Plain password login returns `401 passkey_required`; `/login/passkey` and `/login/totp` are both accepted. |
+| Passkey enabled without TOTP | Plain password login returns `401 passkey_required`; use `/login/passkey`. |
+| TOTP enabled without passkey | Plain password login returns `401 totp_required`; use `/login/totp`. |
+| No passkey and no TOTP | Plain password login returns a bearer token. |
+
+Home also adds these response headers on User API routes:
+
+| Header | Description |
+| --- | --- |
+| `x-cpa-home-version` | Home build version. |
+| `x-cpa-home-commit` | Home build commit. |
+| `x-cpa-home-build-date` | Home build date. |
+
+## Response Conventions
+
+Most successful delete or simple write operations return:
+
+```json
+{ "status": "ok" }
+```
+
+Successful login and register responses return:
+
+```json
+{
+  "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "expires_at": "2026-06-02T10:00:00Z",
+  "user": {
+    "id": 1,
+    "username": "alice",
+    "credits": 0,
+    "totp_enabled": false,
+    "passkey_count": 0,
+    "created_at": "2026-06-02T10:00:00Z",
+    "updated_at": "2026-06-02T10:00:00Z"
+  }
+}
+```
+
+User API handlers usually return both a machine-readable `error` code and a human-readable `message`:
+
+```json
+{ "error": "invalid_credentials", "message": "invalid credentials" }
+```
+
+Common errors:
+
+```json
+{ "error": "bearer_token_required", "message": "bearer token is required" }
+{ "error": "invalid_token", "message": "invalid token" }
+{ "error": "passkey_required", "message": "passkey is required" }
+{ "error": "totp_required", "message": "totp code is required" }
+{ "error": "invalid_body", "message": "username is required" }
+```
+
+## Registered Routes
+
+The table below is extracted from the User API route group registered by `internal/userapi/handler.go`.
+
+| Method | Path |
+| --- | --- |
+| `POST` | `/register` |
+| `POST` | `/login` |
+| `POST` | `/login/totp` |
+| `POST` | `/login/passkey` |
+| `PATCH` | `/password` |
+| `POST` | `/password` |
+| `GET` | `/totp` |
+| `POST` | `/totp` |
+| `POST` | `/totp/show` |
+| `POST` | `/totp/bind` |
+| `GET` | `/api-keys` |
+| `POST` | `/api-keys` |
+| `POST` | `/api-key` |
+| `PATCH` | `/api-keys` |
+| `PATCH` | `/api-key` |
+| `PATCH` | `/api-keys/:id` |
+| `PATCH` | `/api-key/:id` |
+| `DELETE` | `/api-keys` |
+| `DELETE` | `/api-key` |
+| `DELETE` | `/api-keys/:id` |
+| `DELETE` | `/api-key/:id` |
+| `POST` | `/passkeys` |
+| `POST` | `/passkey` |
+| `DELETE` | `/passkeys` |
+| `DELETE` | `/passkey` |
+| `DELETE` | `/passkeys/:id` |
+| `DELETE` | `/passkey/:id` |
+
+## Account
+
+### POST `/register`
+
+Creates a user account, stores a bcrypt password hash, and returns a bearer token.
+
+Example request:
+
+```json
+{
+  "username": "alice",
+  "password": "secret"
+}
+```
+
+Fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `username` | string | yes | Username. Aliases: `user_name`, `user-name`. |
+| `password` | string | yes | Plaintext password used to create the stored password hash. |
+
+Response: login response shape.
+
+Common errors:
+
+```json
+{ "error": "user_exists", "message": "user already exists" }
+{ "error": "invalid_body", "message": "password is required" }
+```
+
+### POST `/login`
+
+Logs in with username and password when the user has no passkey and no TOTP.
+
+Example request:
+
+```json
+{
+  "username": "alice",
+  "password": "secret"
+}
+```
+
+Response: login response shape.
+
+Common errors:
+
+```json
+{ "error": "invalid_credentials", "message": "invalid credentials" }
+{ "error": "passkey_required", "message": "passkey is required" }
+{ "error": "totp_required", "message": "totp code is required" }
+```
+
+### POST `/login/totp`
+
+Logs in with username, password, and TOTP code. This route is accepted when TOTP is enabled, even if the user also has passkeys. For passkey-only users, this route returns `401 passkey_required`.
+
+Example request:
+
+```json
+{
+  "username": "alice",
+  "password": "secret",
+  "totp_code": "123456"
+}
+```
+
+Fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `username` | string | yes | Username. Aliases: `user_name`, `user-name`. |
+| `password` | string | yes | User password. |
+| `totp_code` | string | yes | TOTP code. Aliases: `totp-code`, `totp`, `code`. |
+
+Response: login response shape.
+
+Common errors:
+
+```json
+{ "error": "passkey_required", "message": "passkey is required" }
+{ "error": "totp_not_enabled", "message": "totp is not enabled" }
+{ "error": "invalid_totp", "message": "invalid totp code" }
+```
+
+### POST `/login/passkey`
+
+Logs in with a passkey entry stored in `user.passkey`.
+
+Example request:
+
+```json
+{
+  "username": "alice",
+  "passkey_id": "pk_xxx",
+  "passkey_secret": "one-time-returned-secret"
+}
+```
+
+The route can also compare an opaque JSON `credential` field if the passkey was created with a `credential` payload.
+
+Fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `username` | string | yes | Username. Aliases: `user_name`, `user-name`. |
+| `passkey_id` | string | yes | Passkey ID. Alias: `passkey-id`; `id` is also accepted. |
+| `passkey_secret` | string | conditionally | Secret returned when the passkey was created. Alias: `secret`. |
+| `credential` | object | conditionally | Opaque credential JSON used for exact comparison when no secret hash is stored. |
+
+Response: login response shape.
+
+Common errors:
+
+```json
+{ "error": "invalid_passkey", "message": "invalid passkey" }
+{ "error": "invalid_body", "message": "username and passkey_id are required" }
+```
+
+### POST/PATCH `/password`
+
+Changes the authenticated user's password.
+
+Headers:
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+Example request:
+
+```json
+{
+  "new_password": "new-secret"
+}
+```
+
+Fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `new_password` | string | yes | New plaintext password. Alias: `new-password`. |
+
+Example response:
+
+```json
+{
+  "status": "ok",
+  "user": {
+    "id": 1,
+    "username": "alice",
+    "totp_enabled": false,
+    "passkey_count": 0,
+    "created_at": "2026-06-02T10:00:00Z",
+    "updated_at": "2026-06-02T10:10:00Z"
+  }
+}
+```
+
+## TOTP
+
+### GET `/totp`
+
+Returns TOTP setup data for the authenticated user. If TOTP is already enabled and `regenerate` is not true, the existing secret is returned.
+
+Headers:
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+Query parameters:
+
+| Query | Type | Description |
+| --- | --- | --- |
+| `issuer` | string | Optional issuer for the otpauth URL. |
+| `regenerate` | boolean | Generate a new setup secret instead of returning the current secret. |
+
+Example response:
+
+```json
+{
+  "secret": "BASE32SECRET",
+  "otp_auth_url": "otpauth://totp/CLIProxyAPIHome:alice?...",
+  "issuer": "CLIProxyAPIHome",
+  "period": 30,
+  "digits": 6,
+  "algorithm": "SHA1",
+  "enabled": false
+}
+```
+
+### POST `/totp/show`
+
+POST alias of `GET /totp`. Accepts the same bearer token and optional JSON fields.
+
+Example request:
+
+```json
+{
+  "issuer": "CLIProxyAPIHome",
+  "regenerate": true
+}
+```
+
+Response: same shape as `GET /totp`.
+
+### POST `/totp`
+
+Verifies and stores a TOTP secret for the authenticated user.
+
+Headers:
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+Example request:
+
+```json
+{
+  "secret": "BASE32SECRET",
+  "code": "123456"
+}
+```
+
+Fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `secret` | string | yes | Base32 TOTP secret from `/totp`. |
+| `code` | string | yes | Current TOTP code. Aliases: `totp_code`, `totp-code`, `totp`. |
+| `issuer` | string | no | Issuer stored in TOTP metadata. Defaults to `CLIProxyAPIHome`. |
+
+Response: same shape as `POST/PATCH /password`.
+
+Common errors:
+
+```json
+{ "error": "invalid_totp", "message": "invalid totp code" }
+{ "error": "invalid_body", "message": "secret and code are required" }
+```
+
+### POST `/totp/bind`
+
+Alias of `POST /totp`.
+
+## API Keys
+
+API key routes operate only on API keys bound to the authenticated `user.id`.
+
+### GET `/api-keys`
+
+Lists API keys owned by the authenticated user.
+
+Headers:
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+Example response:
+
+```json
+{
+  "api_keys": [
+    {
+      "id": 1,
+      "api-key": "client-key",
+      "api_key": "client-key",
+      "channels": [1],
+      "model_groups": [2],
+      "created_at": "2026-06-02T10:00:00Z",
+      "updated_at": "2026-06-02T10:00:00Z"
+    }
+  ],
+  "items": [
+    {
+      "id": 1,
+      "api-key": "client-key",
+      "api_key": "client-key",
+      "channels": [1],
+      "model_groups": [2],
+      "created_at": "2026-06-02T10:00:00Z",
+      "updated_at": "2026-06-02T10:00:00Z"
+    }
+  ]
+}
+```
+
+### POST `/api-keys`
+
+Creates an API key owned by the authenticated user. If `api_key` is omitted, Home generates one.
+
+Headers:
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+Example request:
+
+```json
+{
+  "api_key": "client-key",
+  "channels": [1],
+  "model_groups": [2]
+}
+```
+
+Fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `api_key` | string | no | Client API key. Aliases: `api-key`, `key`, `value`. |
+| `channels` | array of integer | no | Channel group IDs. Empty or omitted means non-restrictive. |
+| `model_groups` | array of integer | no | Model group IDs. Alias: `model-groups`; empty or omitted means non-restrictive. |
+
+Example response:
+
+```json
+{
+  "api_key": {
+    "id": 1,
+    "api-key": "client-key",
+    "api_key": "client-key",
+    "channels": [1],
+    "model_groups": [2],
+    "created_at": "2026-06-02T10:00:00Z",
+    "updated_at": "2026-06-02T10:00:00Z"
+  }
+}
+```
+
+### POST `/api-key`
+
+Alias of `POST /api-keys`.
+
+### PATCH `/api-keys`
+
+Updates an API key owned by the authenticated user. The target can be selected by `id` or by API key value.
+
+Example request:
+
+```json
+{
+  "id": 1,
+  "api_key": "new-client-key",
+  "channels": [],
+  "model_groups": []
+}
+```
+
+Fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | integer | conditionally | API key record ID. |
+| `api_key` | string | conditionally | New API key when `id` is provided; target API key when no `id` is provided. Aliases: `api-key`, `key`, `value`. |
+| `old` | string | conditionally | Target API key value. |
+| `new` | string | no | New API key value. |
+| `new_api_key` | string | no | New API key value. Alias: `new-api-key`. |
+| `channels` | array of integer | no | Replacement channel group IDs. |
+| `model_groups` | array of integer | no | Replacement model group IDs. Alias: `model-groups`. |
+
+Response: same shape as `POST /api-keys`.
+
+Common errors:
+
+```json
+{ "error": "not_found", "message": "record not found" }
+{ "error": "invalid_body", "message": "api key id or value is required" }
+{ "error": "api_key_exists", "message": "api key already exists" }
+```
+
+### PATCH `/api-key`
+
+Alias of `PATCH /api-keys`.
+
+### PATCH `/api-keys/:id`
+
+Updates an API key owned by the authenticated user by numeric record ID.
+
+Path parameters:
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | integer | yes | `api_key.id`; must be greater than `0`. |
+
+Response: same shape as `POST /api-keys`.
+
+### PATCH `/api-key/:id`
+
+Alias of `PATCH /api-keys/:id`.
+
+### DELETE `/api-keys`
+
+Deletes an API key owned by the authenticated user. The target can be selected by `id` or by API key value.
+
+Query parameters:
+
+| Query | Type | Description |
+| --- | --- | --- |
+| `id` | integer | API key record ID. |
+| `api_key` | string | API key value. |
+| `api-key` | string | Alias of `api_key`. |
+| `key` | string | Alias of `api_key`. |
+| `value` | string | Alias of `api_key`. |
+
+Example response:
+
+```json
+{ "status": "ok" }
+```
+
+### DELETE `/api-key`
+
+Alias of `DELETE /api-keys`.
+
+### DELETE `/api-keys/:id`
+
+Deletes an API key owned by the authenticated user by numeric record ID.
+
+Path parameters:
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | integer | yes | `api_key.id`; must be greater than `0`. |
+
+Response:
+
+```json
+{ "status": "ok" }
+```
+
+### DELETE `/api-key/:id`
+
+Alias of `DELETE /api-keys/:id`.
+
+## Passkeys
+
+Passkey routes operate on entries stored in `user.passkey`.
+
+### POST `/passkeys`
+
+Creates a passkey entry for the authenticated user. If no `id` is provided, Home generates one. If no `secret` or `credential` is provided, Home generates a one-time secret and returns it only in this response.
+
+Headers:
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+Example request:
+
+```json
+{
+  "name": "Laptop"
+}
+```
+
+Fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | no | Passkey ID. Aliases: `passkey_id`, `passkey-id`. |
+| `name` | string | no | Display name. |
+| `secret` | string | no | Secret to hash and store for passkey login. Alias: `passkey_secret`. |
+| `credential` | object | no | Opaque credential JSON to store and compare during passkey login. |
+
+Example response:
+
+```json
+{
+  "passkey": {
+    "id": "pk_xxx",
+    "name": "Laptop",
+    "created_at": "2026-06-02T10:00:00Z"
+  },
+  "secret": "one-time-returned-secret"
+}
+```
+
+Common errors:
+
+```json
+{ "error": "passkey_exists", "message": "passkey already exists" }
+```
+
+### POST `/passkey`
+
+Alias of `POST /passkeys`.
+
+### DELETE `/passkeys`
+
+Deletes a passkey entry for the authenticated user.
+
+Query parameters:
+
+| Query | Type | Description |
+| --- | --- | --- |
+| `id` | string | Passkey ID. |
+
+Example response:
+
+```json
+{ "status": "ok" }
+```
+
+Common errors:
+
+```json
+{ "error": "not_found", "message": "passkey not found" }
+{ "error": "invalid_body", "message": "passkey id is required" }
+```
+
+### DELETE `/passkey`
+
+Alias of `DELETE /passkeys`.
+
+### DELETE `/passkeys/:id`
+
+Deletes a passkey entry for the authenticated user by ID.
+
+Path parameters:
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | yes | Passkey ID. |
+
+Response:
+
+```json
+{ "status": "ok" }
+```
+
+### DELETE `/passkey/:id`
+
+Alias of `DELETE /passkeys/:id`.

@@ -562,7 +562,8 @@ Example response:
     {
       "id": 1,
       "username": "alice",
-      "password": "stored-password",
+      "password_set": true,
+      "credits": 10.5,
       "mfa": { "enabled": true },
       "passkey": [{ "id": "credential-id" }],
       "created_at": "2026-05-27T10:00:00Z",
@@ -590,7 +591,8 @@ Example response:
   "user": {
     "id": 1,
     "username": "alice",
-    "password": "stored-password",
+    "password_set": true,
+    "credits": 10.5,
     "mfa": { "enabled": true },
     "passkey": [{ "id": "credential-id" }],
     "created_at": "2026-05-27T10:00:00Z",
@@ -609,7 +611,8 @@ Example request:
 ```json
 {
   "username": "alice",
-  "password": "stored-password",
+  "password": "plaintext-password",
+  "credits": 10.5,
   "mfa": { "enabled": true },
   "passkey": [{ "id": "credential-id" }]
 }
@@ -618,7 +621,8 @@ Example request:
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `username` | string | yes | Username. Aliases: `user_name`, `user-name`. |
-| `password` | string | no | Stored as provided and returned by the API. |
+| `password` | string | no | Non-empty plaintext is stored as a bcrypt hash. Existing valid bcrypt hashes are preserved for migration. Responses do not return password material; they return `password_set`. |
+| `credits` | number | no | User credit balance. Defaults to `0`. When a client API key is bound to this user and credits are `<= 0`, RESP `RPOP auth` returns `user_credits_insufficient`. |
 | `mfa` | any valid JSON | no | Stored in `user.mfa`. |
 | `passkey` | any valid JSON | no | Stored in `user.passkey`. |
 
@@ -633,13 +637,14 @@ Example request:
 ```json
 {
   "username": "alice-updated",
-  "password": "new-stored-password",
+  "password": "new-plaintext-password",
+  "credits": 20,
   "mfa": { "enabled": false },
   "passkey": []
 }
 ```
 
-All request fields are optional, but `username`, if present, must not be empty.
+All request fields are optional, but `username`, if present, must not be empty. `credits`, if present, replaces the user's current credit balance.
 
 Response: same shape as `GET /users/:id`.
 

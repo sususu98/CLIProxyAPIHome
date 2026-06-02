@@ -1,9 +1,10 @@
 package errors
 
 const (
-	TypeError                = "error"
-	TypeModelNotFound        = "model_not_found"
-	TypeRequestRetryExceeded = "request_retry_exceeded"
+	TypeError                   = "error"
+	TypeModelNotFound           = "model_not_found"
+	TypeRequestRetryExceeded    = "request_retry_exceeded"
+	TypeUserCreditsInsufficient = "user_credits_insufficient"
 )
 
 const (
@@ -21,6 +22,7 @@ const (
 	MessageMissingRequiredCredentialHeaders = "missing required credential headers"
 	MessageInvalidAPIKey                    = "invalid api key"
 	MessageRequestRetryExceeded             = "request retry limit exceeded"
+	MessageUserCreditsInsufficient          = "insufficient user credits"
 
 	MessageModelDoesNotExistFmt = "model %s does not exist"
 )

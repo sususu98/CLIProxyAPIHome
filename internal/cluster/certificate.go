@@ -108,6 +108,31 @@ func (r *Repository) CreatePendingClientCertificate(ctx context.Context) (string
 	return id, secret, nil
 }
 
+// ClusterCAKeyPair returns the cluster root CA certificate and private key.
+func (r *Repository) ClusterCAKeyPair(ctx context.Context) (*x509.Certificate, *rsa.PrivateKey, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, nil, errDB
+	}
+	ctx = contextOrBackground(ctx)
+	ca, errCA := r.ensureCARecord(ctx, db)
+	if errCA != nil {
+		return nil, nil, errCA
+	}
+	if ca == nil {
+		return nil, nil, fmt.Errorf("cluster certificate ca is missing")
+	}
+	cert, errCert := parseCertificatePEM([]byte(ca.CertificatePEM))
+	if errCert != nil {
+		return nil, nil, errCert
+	}
+	key, errKey := parseRSAPrivateKeyPEM([]byte(ca.PrivateKeyPEM))
+	if errKey != nil {
+		return nil, nil, errKey
+	}
+	return cert, key, nil
+}
+
 // CurrentMasterNode returns the current master node if one is recorded.
 func (r *Repository) CurrentMasterNode(ctx context.Context) (*ClusterNodeRecord, error) {
 	db, errDB := r.database()

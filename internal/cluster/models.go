@@ -134,6 +134,7 @@ type UserRecord struct {
 	ID        uint           `gorm:"column:id;primaryKey;autoIncrement;index:idx_user_active_order,priority:2"`
 	Username  string         `gorm:"column:username;not null;index;index:idx_user_username_active,priority:1"`
 	Password  string         `gorm:"column:password;type:text"`
+	Credits   float64        `gorm:"column:credits;not null;default:0"`
 	MFA       JSONB          `gorm:"column:mfa"`
 	Passkey   JSONB          `gorm:"column:passkey"`
 	CreatedAt time.Time      `gorm:"column:created_at"`

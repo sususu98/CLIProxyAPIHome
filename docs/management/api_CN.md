@@ -562,7 +562,8 @@ User records 存储在 cluster repository 中。
     {
       "id": 1,
       "username": "alice",
-      "password": "stored-password",
+      "password_set": true,
+      "credits": 10.5,
       "mfa": { "enabled": true },
       "passkey": [{ "id": "credential-id" }],
       "created_at": "2026-05-27T10:00:00Z",
@@ -590,7 +591,8 @@ Path 参数：
   "user": {
     "id": 1,
     "username": "alice",
-    "password": "stored-password",
+    "password_set": true,
+    "credits": 10.5,
     "mfa": { "enabled": true },
     "passkey": [{ "id": "credential-id" }],
     "created_at": "2026-05-27T10:00:00Z",
@@ -609,7 +611,8 @@ Path 参数：
 ```json
 {
   "username": "alice",
-  "password": "stored-password",
+  "password": "plaintext-password",
+  "credits": 10.5,
   "mfa": { "enabled": true },
   "passkey": [{ "id": "credential-id" }]
 }
@@ -618,7 +621,8 @@ Path 参数：
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `username` | string | 是 | 用户名；也接受 `user_name`、`user-name`。 |
-| `password` | string | 否 | 按请求值存储并通过 API 回显。 |
+| `password` | string | 否 | 非空明文会以 bcrypt hash 存储。已有合法 bcrypt hash 会原样保留，便于迁移。响应不返回密码材料，只返回 `password_set`。 |
+| `credits` | number | 否 | 用户点数余额；默认为 `0`。当客户端 API key 绑定到该用户且 credits `<= 0` 时，RESP `RPOP auth` 返回 `user_credits_insufficient`。 |
 | `mfa` | any valid JSON | 否 | 存入 `user.mfa`。 |
 | `passkey` | any valid JSON | 否 | 存入 `user.passkey`。 |
 
@@ -633,13 +637,14 @@ Path 参数：
 ```json
 {
   "username": "alice-updated",
-  "password": "new-stored-password",
+  "password": "new-plaintext-password",
+  "credits": 20,
   "mfa": { "enabled": false },
   "passkey": []
 }
 ```
 
-所有字段均可选；如果出现 `username`，则不能为空。
+所有字段均可选；如果出现 `username`，则不能为空。`credits` 如果出现，会替换用户当前点数余额。
 
 输出：与 `GET /users/:id` 相同。
 
