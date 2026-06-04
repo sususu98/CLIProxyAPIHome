@@ -104,14 +104,18 @@ The table below is extracted from the User API route group registered by `intern
 | --- | --- |
 | `POST` | `/register` |
 | `POST` | `/login` |
+| `POST` | `/login/passkey/begin` |
+| `POST` | `/login/passkey/options` |
 | `POST` | `/login/totp` |
 | `POST` | `/login/passkey` |
+| `GET` | `/me` |
 | `PATCH` | `/password` |
 | `POST` | `/password` |
 | `GET` | `/totp` |
 | `POST` | `/totp` |
 | `POST` | `/totp/show` |
 | `POST` | `/totp/bind` |
+| `DELETE` | `/totp` |
 | `GET` | `/api-keys` |
 | `POST` | `/api-keys` |
 | `POST` | `/api-key` |
@@ -123,6 +127,10 @@ The table below is extracted from the User API route group registered by `intern
 | `DELETE` | `/api-key` |
 | `DELETE` | `/api-keys/:id` |
 | `DELETE` | `/api-key/:id` |
+| `POST` | `/passkeys/begin` |
+| `POST` | `/passkey/begin` |
+| `POST` | `/passkeys/options` |
+| `POST` | `/passkey/options` |
 | `POST` | `/passkeys` |
 | `POST` | `/passkey` |
 | `DELETE` | `/passkeys` |
@@ -248,6 +256,40 @@ Common errors:
 ```json
 { "error": "invalid_passkey", "message": "invalid passkey" }
 { "error": "invalid_body", "message": "username and passkey_id are required" }
+```
+
+### GET `/me`
+
+Returns the authenticated user's profile from the bearer token.
+
+Headers:
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+Example response:
+
+```json
+{
+  "status": "ok",
+  "user": {
+    "id": 1,
+    "username": "alice",
+    "credits": 0,
+    "totp_enabled": false,
+    "passkey_count": 1,
+    "created_at": "2026-06-02T10:00:00Z",
+    "updated_at": "2026-06-02T10:10:00Z"
+  }
+}
+```
+
+Common errors:
+
+```json
+{ "error": "bearer_token_required", "message": "bearer token is required" }
+{ "error": "invalid_token", "message": "invalid token" }
 ```
 
 ### POST/PATCH `/password`
@@ -377,6 +419,27 @@ Common errors:
 ### POST `/totp/bind`
 
 Alias of `POST /totp`.
+
+### DELETE `/totp`
+
+Deletes the authenticated user's TOTP configuration.
+
+Headers:
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+Request body: none.
+
+Response: same shape as `POST/PATCH /password`; `user.totp_enabled` is `false` after a successful delete.
+
+Common errors:
+
+```json
+{ "error": "bearer_token_required", "message": "bearer token is required" }
+{ "error": "invalid_token", "message": "invalid token" }
+```
 
 ## API Keys
 

@@ -104,14 +104,18 @@ User API handler 通常同时返回机器可读 `error` 和可读 `message`：
 | --- | --- |
 | `POST` | `/register` |
 | `POST` | `/login` |
+| `POST` | `/login/passkey/begin` |
+| `POST` | `/login/passkey/options` |
 | `POST` | `/login/totp` |
 | `POST` | `/login/passkey` |
+| `GET` | `/me` |
 | `PATCH` | `/password` |
 | `POST` | `/password` |
 | `GET` | `/totp` |
 | `POST` | `/totp` |
 | `POST` | `/totp/show` |
 | `POST` | `/totp/bind` |
+| `DELETE` | `/totp` |
 | `GET` | `/api-keys` |
 | `POST` | `/api-keys` |
 | `POST` | `/api-key` |
@@ -123,6 +127,10 @@ User API handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `DELETE` | `/api-key` |
 | `DELETE` | `/api-keys/:id` |
 | `DELETE` | `/api-key/:id` |
+| `POST` | `/passkeys/begin` |
+| `POST` | `/passkey/begin` |
+| `POST` | `/passkeys/options` |
+| `POST` | `/passkey/options` |
 | `POST` | `/passkeys` |
 | `POST` | `/passkey` |
 | `DELETE` | `/passkeys` |
@@ -248,6 +256,40 @@ User API handler 通常同时返回机器可读 `error` 和可读 `message`：
 ```json
 { "error": "invalid_passkey", "message": "invalid passkey" }
 { "error": "invalid_body", "message": "username and passkey_id are required" }
+```
+
+### GET `/me`
+
+根据 bearer token 返回当前认证用户的信息。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+示例响应：
+
+```json
+{
+  "status": "ok",
+  "user": {
+    "id": 1,
+    "username": "alice",
+    "credits": 0,
+    "totp_enabled": false,
+    "passkey_count": 1,
+    "created_at": "2026-06-02T10:00:00Z",
+    "updated_at": "2026-06-02T10:10:00Z"
+  }
+}
+```
+
+常见错误：
+
+```json
+{ "error": "bearer_token_required", "message": "bearer token is required" }
+{ "error": "invalid_token", "message": "invalid token" }
 ```
 
 ### POST/PATCH `/password`
@@ -377,6 +419,27 @@ Authorization: Bearer user.jwt.token
 ### POST `/totp/bind`
 
 `POST /totp` 的 alias。
+
+### DELETE `/totp`
+
+删除当前认证用户的 TOTP 配置。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+请求体：无。
+
+响应：同 `POST/PATCH /password`；成功删除后 `user.totp_enabled` 为 `false`。
+
+常见错误：
+
+```json
+{ "error": "bearer_token_required", "message": "bearer token is required" }
+{ "error": "invalid_token", "message": "invalid token" }
+```
 
 ## API Keys
 

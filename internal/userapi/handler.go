@@ -100,6 +100,8 @@ func Register(group *gin.RouterGroup, handler *Handler) {
 	group.POST("/login/totp", handler.LoginTOTP)
 	group.POST("/login/passkey", handler.LoginPasskey)
 
+	group.GET("/me", handler.CurrentUser)
+
 	group.POST("/password", handler.ChangePassword)
 	group.PATCH("/password", handler.ChangePassword)
 
@@ -107,6 +109,7 @@ func Register(group *gin.RouterGroup, handler *Handler) {
 	group.POST("/totp/show", handler.ShowTOTP)
 	group.POST("/totp", handler.BindTOTP)
 	group.POST("/totp/bind", handler.BindTOTP)
+	group.DELETE("/totp", handler.DeleteTOTP)
 
 	group.GET("/api-keys", handler.ListAPIKeys)
 	group.POST("/api-keys", handler.CreateAPIKey)
@@ -256,6 +259,17 @@ func (h *Handler) LoginPasskey(c *gin.Context) {
 	h.respondLogin(c, ctx, record)
 }
 
+// CurrentUser returns the authenticated user profile.
+func (h *Handler) CurrentUser(c *gin.Context) {
+	ctx, cancel := requestContext(c)
+	defer cancel()
+	record, ok := h.authenticatedUser(c, ctx, authFields{})
+	if !ok {
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"user": userResponse(record), "status": "ok"})
+}
+
 // ChangePassword updates the authenticated user's password.
 func (h *Handler) ChangePassword(c *gin.Context) {
 	var body passwordRequest
@@ -360,6 +374,23 @@ func (h *Handler) BindTOTP(c *gin.Context) {
 	updated, errUpdate := h.repo.UpdateUser(ctx, record.ID, cluster.UserUpdate{MFA: &mfa})
 	if errUpdate != nil {
 		respondUserError(c, "totp_bind_failed", errUpdate)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"user": userResponse(updated), "status": "ok"})
+}
+
+// DeleteTOTP removes the authenticated user's TOTP configuration.
+func (h *Handler) DeleteTOTP(c *gin.Context) {
+	ctx, cancel := requestContext(c)
+	defer cancel()
+	record, ok := h.authenticatedUser(c, ctx, authFields{})
+	if !ok {
+		return
+	}
+	var mfa cluster.JSONB
+	updated, errUpdate := h.repo.UpdateUser(ctx, record.ID, cluster.UserUpdate{MFA: &mfa})
+	if errUpdate != nil {
+		respondUserError(c, "totp_delete_failed", errUpdate)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"user": userResponse(updated), "status": "ok"})
