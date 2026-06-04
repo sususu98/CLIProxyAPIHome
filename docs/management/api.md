@@ -982,7 +982,10 @@ Example response:
       "proxy-url": "",
       "disabled": false,
       "priority": 10,
-      "headers": { "X-Test": "1" }
+      "headers": { "X-Test": "1" },
+      "models": [
+        { "name": "gemini-upstream", "alias": "gemini-alias" }
+      ]
     }
   ]
 }

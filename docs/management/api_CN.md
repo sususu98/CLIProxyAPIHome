@@ -982,7 +982,10 @@ Home 会从这些 config-like payload 合成 DB auth records。
       "proxy-url": "",
       "disabled": false,
       "priority": 10,
-      "headers": { "X-Test": "1" }
+      "headers": { "X-Test": "1" },
+      "models": [
+        { "name": "gemini-upstream", "alias": "gemini-alias" }
+      ]
     }
   ]
 }

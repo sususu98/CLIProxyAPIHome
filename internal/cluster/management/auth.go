@@ -532,7 +532,102 @@ func apiKeyAuthToMap(auth *coreauth.Auth, key string) map[string]any {
 	if key == "codex-api-key" && strings.EqualFold(attrs["websockets"], "true") {
 		item["websockets"] = true
 	}
+	switch key {
+	case "codex-api-key", "gemini-api-key", "vertex-api-key", "claude-api-key":
+		models := credentialAPIKeyModels(auth)
+		if len(models) > 0 {
+			item["models"] = models
+		}
+	}
 	return item
+}
+
+// credentialAPIKeyModels extracts config-like model aliases from stored model metadata.
+func credentialAPIKeyModels(auth *coreauth.Auth) []map[string]any {
+	pairs := credentialModelPairs(auth)
+	out := make([]map[string]any, 0, len(pairs))
+	for _, pair := range pairs {
+		out = append(out, map[string]any{"name": pair.Name, "alias": pair.Alias})
+	}
+	return out
+}
+
+// credentialModelPairs returns unique model name/alias pairs from auth metadata.
+func credentialModelPairs(auth *coreauth.Auth) []struct{ Name, Alias string } {
+	if auth == nil || auth.Metadata == nil {
+		return nil
+	}
+	raw := auth.Metadata["home_config_models"]
+	models, ok := raw.([]any)
+	if !ok || len(models) == 0 {
+		return nil
+	}
+	out := make([]struct{ Name, Alias string }, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, rawModel := range models {
+		modelMap, okMap := rawModel.(map[string]any)
+		if !okMap {
+			continue
+		}
+		alias := strings.TrimSpace(stringFromAny(modelMap["id"]))
+		if alias == "" {
+			continue
+		}
+		if provider := strings.TrimSpace(strings.ToLower(auth.Provider)); provider == "codex" {
+			if isNonUserCodexBuiltin(modelMap, alias) {
+				continue
+			}
+		}
+		name := strings.TrimSpace(stringFromAny(modelMap["display_name"]))
+		if name == "" {
+			name = strings.TrimSpace(stringFromAny(modelMap["name"]))
+		}
+		if name == "" {
+			name = alias
+		}
+		key := strings.ToLower(alias)
+		if _, okSeen := seen[key]; okSeen {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, struct{ Name, Alias string }{Name: name, Alias: alias})
+	}
+	return out
+}
+
+// isNonUserCodexBuiltin reports whether a non-user Codex built-in should be hidden.
+func isNonUserCodexBuiltin(modelMap map[string]any, alias string) bool {
+	if !strings.EqualFold(alias, "gpt-image-2") {
+		return false
+	}
+	if userDefined, ok := modelMap["user_defined"]; ok {
+		if parsed, okParse := parseBoolAny(userDefined); okParse && !parsed {
+			return true
+		}
+	}
+	return false
+}
+
+// parseBoolAny parses a bool any.
+func parseBoolAny(val any) (bool, bool) {
+	switch typed := val.(type) {
+	case bool:
+		return typed, true
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return false, false
+		}
+		parsed, err := strconv.ParseBool(trimmed)
+		if err != nil {
+			return false, false
+		}
+		return parsed, true
+	case float64:
+		return typed != 0, true
+	default:
+		return false, false
+	}
 }
 
 // firstNonEmptyQuery handles a first non empty query.
