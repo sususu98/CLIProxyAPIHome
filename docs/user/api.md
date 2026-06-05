@@ -279,6 +279,14 @@ Example response:
     "credits": 0,
     "totp_enabled": false,
     "passkey_count": 1,
+    "passkeys": [
+      {
+        "id": "passkey-1",
+        "name": "MacBook Touch ID",
+        "created_at": "2026-06-02T10:05:00Z",
+        "updated_at": "2026-06-02T10:05:00Z"
+      }
+    ],
     "created_at": "2026-06-02T10:00:00Z",
     "updated_at": "2026-06-02T10:10:00Z"
   }

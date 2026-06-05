@@ -267,7 +267,7 @@ func (h *Handler) CurrentUser(c *gin.Context) {
 	if !ok {
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"user": userResponse(record), "status": "ok"})
+	c.JSON(http.StatusOK, gin.H{"user": userResponseWithPasskeys(record), "status": "ok"})
 }
 
 // ChangePassword updates the authenticated user's password.
@@ -748,6 +748,20 @@ func userResponse(record *cluster.UserRecord) gin.H {
 		"created_at":    record.CreatedAt,
 		"updated_at":    record.UpdatedAt,
 	}
+}
+
+func userResponseWithPasskeys(record *cluster.UserRecord) gin.H {
+	out := userResponse(record)
+	if record == nil {
+		return out
+	}
+	passkeys, _ := loadPasskeys(record.Passkey)
+	items := make([]map[string]any, 0, len(passkeys))
+	for _, entry := range passkeys {
+		items = append(items, passkeyPublic(entry))
+	}
+	out["passkeys"] = items
+	return out
 }
 
 func apiKeyRecordsResponse(c *gin.Context, records []cluster.APIKeyRecord) ([]gin.H, bool) {
