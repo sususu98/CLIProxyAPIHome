@@ -275,6 +275,12 @@ func TestDownloadRequestLogByIDForwardsToTargetHomeOverMTLS(t *testing.T) {
 	targetEngine := gin.New()
 	targetHeadersCh := make(chan http.Header, 1)
 	targetEngine.Use(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "*")
+		c.Header("Accept-Ranges", "bytes")
+		c.Header("ETag", `"remote-log-etag"`)
+		c.Header("X-Internal-Node", "target-home")
 		targetHeadersCh <- c.Request.Header.Clone()
 		c.Next()
 	})
@@ -290,6 +296,12 @@ func TestDownloadRequestLogByIDForwardsToTargetHomeOverMTLS(t *testing.T) {
 	currentHandler := NewHandler(repo, nil, "127.0.0.2", 0)
 	currentHandler.SetForwardTLSConfig(currentTLSConfig)
 	currentEngine := gin.New()
+	currentEngine.Use(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "*")
+		c.Next()
+	})
 	currentEngine.GET("/request-log-by-id/:id", currentHandler.DownloadRequestLogByID)
 
 	resp := httptest.NewRecorder()
@@ -297,6 +309,7 @@ func TestDownloadRequestLogByIDForwardsToTargetHomeOverMTLS(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer management-secret")
 	req.Header.Set("Cookie", "management_session=secret")
 	req.Header.Set("X-Management-Key", "secret")
+	req.Header.Set("X-Forwarded-For", "203.0.113.10")
 	req.Header.Set("If-None-Match", `"request-log-etag"`)
 	currentEngine.ServeHTTP(resp, req)
 
@@ -305,6 +318,14 @@ func TestDownloadRequestLogByIDForwardsToTargetHomeOverMTLS(t *testing.T) {
 	}
 	if got := resp.Body.String(); got != content {
 		t.Fatalf("body = %q, want %q", got, content)
+	}
+	assertSingleHeaderValue(t, resp, "Access-Control-Allow-Origin", "*")
+	assertSingleHeaderValue(t, resp, "Access-Control-Allow-Methods", "GET, OPTIONS")
+	assertSingleHeaderValue(t, resp, "Access-Control-Allow-Headers", "*")
+	assertSingleHeaderValue(t, resp, "Accept-Ranges", "bytes")
+	assertSingleHeaderValue(t, resp, "ETag", `"remote-log-etag"`)
+	if got := resp.Header().Get("X-Internal-Node"); got != "" {
+		t.Fatalf("forwarded X-Internal-Node response header = %q, want empty", got)
 	}
 
 	var targetHeaders http.Header
@@ -322,8 +343,69 @@ func TestDownloadRequestLogByIDForwardsToTargetHomeOverMTLS(t *testing.T) {
 	if got := targetHeaders.Get("X-Management-Key"); got != "" {
 		t.Fatalf("forwarded X-Management-Key header = %q, want empty", got)
 	}
+	if got := targetHeaders.Get("X-Forwarded-For"); got != "" {
+		t.Fatalf("forwarded X-Forwarded-For header = %q, want empty", got)
+	}
 	if got := targetHeaders.Get("If-None-Match"); got != `"request-log-etag"` {
 		t.Fatalf("forwarded If-None-Match header = %q, want request-log-etag", got)
+	}
+}
+
+func TestRequestLogForwardHeaderAllowlists(t *testing.T) {
+	t.Parallel()
+
+	requestAllowed := []string{
+		"Range",
+		"If-Range",
+		"If-Match",
+		"If-None-Match",
+		"If-Modified-Since",
+		"If-Unmodified-Since",
+	}
+	if len(requestLogForwardRequestHeaderAllowlist) != len(requestAllowed) {
+		t.Fatalf("request allowlist size = %d, want %d", len(requestLogForwardRequestHeaderAllowlist), len(requestAllowed))
+	}
+	for _, key := range requestAllowed {
+		if !shouldForwardRequestLogRequestHeader(key) {
+			t.Fatalf("request header %s is not allowed", key)
+		}
+	}
+	for _, key := range []string{"Authorization", "Cookie", "X-Forwarded-For", "Cache-Control", "Accept-Encoding"} {
+		if shouldForwardRequestLogRequestHeader(key) {
+			t.Fatalf("request header %s is unexpectedly allowed", key)
+		}
+	}
+
+	responseAllowed := []string{
+		"Content-Disposition",
+		"Content-Type",
+		"Content-Length",
+		"Last-Modified",
+		"ETag",
+		"Accept-Ranges",
+		"Content-Range",
+	}
+	if len(requestLogForwardResponseHeaderAllowlist) != len(responseAllowed) {
+		t.Fatalf("response allowlist size = %d, want %d", len(requestLogForwardResponseHeaderAllowlist), len(responseAllowed))
+	}
+	for _, key := range responseAllowed {
+		if !shouldForwardRequestLogResponseHeader(key) {
+			t.Fatalf("response header %s is not allowed", key)
+		}
+	}
+	for _, key := range []string{"Access-Control-Allow-Origin", "Set-Cookie", "X-Internal-Node", "Content-Encoding", "Cache-Control", "Server"} {
+		if shouldForwardRequestLogResponseHeader(key) {
+			t.Fatalf("response header %s is unexpectedly allowed", key)
+		}
+	}
+}
+
+func assertSingleHeaderValue(t *testing.T, resp *httptest.ResponseRecorder, key string, want string) {
+	t.Helper()
+
+	values := resp.Header().Values(key)
+	if len(values) != 1 || values[0] != want {
+		t.Fatalf("%s values = %#v, want [%q]", key, values, want)
 	}
 }
 

@@ -25,6 +25,25 @@ const (
 	homeLogDirectory   = "logs"
 )
 
+var requestLogForwardRequestHeaderAllowlist = map[string]struct{}{
+	"range":               {},
+	"if-range":            {},
+	"if-match":            {},
+	"if-none-match":       {},
+	"if-modified-since":   {},
+	"if-unmodified-since": {},
+}
+
+var requestLogForwardResponseHeaderAllowlist = map[string]struct{}{
+	"content-disposition": {},
+	"content-type":        {},
+	"content-length":      {},
+	"last-modified":       {},
+	"etag":                {},
+	"accept-ranges":       {},
+	"content-range":       {},
+}
+
 // GetLogs returns app log records stored in the database.
 func (h *Handler) GetLogs(c *gin.Context) {
 	limit, errLimit := appLogLimit(c.Query("limit"))
@@ -242,17 +261,13 @@ func copyRequestLogForwardRequestHeaders(dst http.Header, src http.Header) {
 }
 
 func shouldForwardRequestLogRequestHeader(key string) bool {
-	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "range", "if-range", "if-match", "if-none-match", "if-modified-since", "if-unmodified-since":
-		return true
-	default:
-		return false
-	}
+	_, ok := requestLogForwardRequestHeaderAllowlist[strings.ToLower(strings.TrimSpace(key))]
+	return ok
 }
 
 func copyRequestLogForwardResponseHeaders(dst http.Header, src http.Header) {
 	for key, values := range src {
-		if shouldSkipForwardHeader(key) {
+		if !shouldForwardRequestLogResponseHeader(key) {
 			continue
 		}
 		for _, value := range values {
@@ -261,13 +276,9 @@ func copyRequestLogForwardResponseHeaders(dst http.Header, src http.Header) {
 	}
 }
 
-func shouldSkipForwardHeader(key string) bool {
-	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade", "host":
-		return true
-	default:
-		return false
-	}
+func shouldForwardRequestLogResponseHeader(key string) bool {
+	_, ok := requestLogForwardResponseHeaderAllowlist[strings.ToLower(strings.TrimSpace(key))]
+	return ok
 }
 
 func appLogRecordToMap(record *cluster.AppLogRecord) gin.H {
