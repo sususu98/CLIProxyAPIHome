@@ -124,6 +124,20 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/api-keys` |
 | `PATCH` | `/api-keys` |
 | `PUT` | `/api-keys` |
+| `GET` | `/billing/overview` |
+| `GET` | `/billing/charges` |
+| `GET` | `/billing/balance-records` |
+| `POST` | `/billing/balance-records/recharge` |
+| `POST` | `/billing/balance-records/deduct` |
+| `GET` | `/billing/model-prices` |
+| `POST` | `/billing/model-prices` |
+| `PATCH` | `/billing/model-prices/:id` |
+| `DELETE` | `/billing/model-prices/:id` |
+| `GET` | `/billing/proxy-pools` |
+| `POST` | `/billing/proxy-pools` |
+| `PATCH` | `/billing/proxy-pools/:id` |
+| `DELETE` | `/billing/proxy-pools/:id` |
+| `POST` | `/billing/proxy-pools/:id/test` |
 | `DELETE` | `/auth-files` |
 | `GET` | `/auth-files` |
 | `POST` | `/auth-files` |
@@ -624,7 +638,7 @@ Path 参数：
 | --- | --- | --- | --- |
 | `username` | string | 是 | 用户名；也接受 `user_name`、`user-name`。 |
 | `password` | string | 否 | 非空明文会以 bcrypt hash 存储。已有合法 bcrypt hash 会原样保留，便于迁移。响应不返回密码材料，只返回 `password_set`。 |
-| `credits` | number | 否 | 用户点数余额；默认为 `0`。当客户端 API key 绑定到该用户且 credits `<= 0` 时，RESP `RPOP auth` 返回 `user_credits_insufficient`。 |
+| `credits` | number | 否 | 用户点数余额；默认为 `0`。当客户端 API key 绑定到该用户且 credits `<= 0` 时，RESP `RPOP auth` 返回 `user_credits_insufficient`。对于计费工作流，优先使用 `/billing/balance-records/recharge` 和 `/billing/balance-records/deduct`，以便余额变更拥有分类账记录。 |
 | `mfa` | any valid JSON | 否 | 存入 `user.mfa`。 |
 | `passkey` | any valid JSON | 否 | 存入 `user.passkey`。 |
 
@@ -646,7 +660,7 @@ Path 参数：
 }
 ```
 
-所有字段均可选；如果出现 `username`，则不能为空。`credits` 如果出现，会替换用户当前点数余额。
+所有字段均可选；如果出现 `username`，则不能为空。`credits` 如果出现，会替换用户当前点数余额。对于计费工作流，优先使用 `/billing/balance-records/recharge` 和 `/billing/balance-records/deduct`，以便余额变更拥有分类账记录。
 
 输出：与 `GET /users/:id` 相同。
 
@@ -852,6 +866,353 @@ Query 参数：
 
 ```json
 { "status": "ok" }
+```
+
+## Billing
+
+本节所有路径都相对于 Management API 基础 URL，例如 `/v0/management/billing/overview`。这些不是 `/user` 路由，调用时需要管理密钥。
+
+只有 `/billing/overview`、`/billing/charges` 和 `/billing/balance-records` 会将 `from` 和 `to` 解析为 `YYYY-MM-DD`、RFC3339 或 Unix 秒。只有日期的 `to` 会包含结束 UTC 日期的完整一天。分页参数 `limit` 和 `offset` 仅适用于 `/billing/charges` 和 `/billing/balance-records`；这些路由的 `limit` 默认值为 `50`，最大值为 `200`，负数 `offset` 会规范化为 `0`。`/billing/model-prices` 仅支持 `provider`、`model` 和 `enabled` 查询参数。`/billing/proxy-pools` 当前不解析查询参数。
+
+### GET `/billing/overview`
+
+返回管理员计费摘要。
+
+查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `from` | string | 可选开始时间：`YYYY-MM-DD`、RFC3339 或 Unix 秒。 |
+| `to` | string | 可选结束时间；只有日期时包含完整 UTC 当天。 |
+| `user` | string | 可选用户名、用户文本或用户 ID 过滤；别名：`user_text`、`username`。 |
+| `user_id` | integer | 可选精确用户 ID 过滤；别名：`uid`。 |
+| `provider` | string | 可选 provider 过滤。 |
+| `model` | string | 可选 model 过滤。 |
+
+响应字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `range` | object | 实际使用的 `from` 和 `to` 范围。 |
+| `total_charge_amount` | number | 总扣费金额。 |
+| `total_recharge_amount` | number | 总充值金额。 |
+| `total_deduct_amount` | number | 总手工扣减金额。 |
+| `total_balance` | number | 当前用户总余额。 |
+| `request_count` | integer | 扣费请求数量。 |
+| `input_tokens` | integer | input token 总数。 |
+| `output_tokens` | integer | output token 总数。 |
+| `cache_tokens` | integer | cache token 总数。 |
+| `active_user_count` | integer | 范围内有扣费记录的用户数量。 |
+| `daily_trend[]` | array | 每日扣费金额和请求数量。 |
+| `top_users[]` | array | 用户排行，字段为 `id`、`label`、`amount`、`request_count`。 |
+| `top_models[]` | array | 模型排行，字段为 `id`、`label`、`amount`、`request_count`。 |
+| `top_providers[]` | array | Provider 排行，字段为 `id`、`label`、`amount`、`request_count`。 |
+
+### GET `/billing/charges`
+
+列出扣费记录，并返回管理员上下文。响应会暴露用户 ID、脱敏 API-key 元数据、价格快照、匹配的价格规则、request ID、endpoint，以及 `balance_before`/`balance_after`。计费扣费响应永不暴露原始 API key。
+
+查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `from` | string | 可选开始时间：`YYYY-MM-DD`、RFC3339 或 Unix 秒。 |
+| `to` | string | 可选结束时间；只有日期时包含完整 UTC 当天。 |
+| `user` | string | 可选用户名、用户文本或用户 ID 过滤；别名：`user_text`、`username`。 |
+| `user_id` | integer | 可选精确用户 ID 过滤；别名：`uid`。 |
+| `provider` | string | 可选 provider 过滤。 |
+| `model` | string | 可选 model 过滤。 |
+| `limit` | integer | 可选分页大小；默认 `50`，最大 `200`。 |
+| `offset` | integer | 可选分页偏移；负数会规范化为 `0`。 |
+
+响应结构：
+
+```json
+{
+  "items": [
+    {
+      "id": "charge_xxx",
+      "created_at": "2026-06-10T10:00:00Z",
+      "user_id": 1,
+      "api_key_label": "Alice key",
+      "api_key_masked": "cpa_...abcd",
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "original_model": "gpt-4.1-mini",
+      "actual_model": "gpt-4.1-mini",
+      "input_tokens": 1000,
+      "output_tokens": 500,
+      "cache_tokens": 0,
+      "amount": 1.25,
+      "balance_before": 20,
+      "balance_after": 18.75,
+      "request_id": "req_xxx",
+      "endpoint": "/v1/chat/completions",
+      "matched_price_rule": "price_xxx",
+      "price_snapshot": { "request_price": 0, "input_price_per_million": 1.25 }
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+### GET `/billing/balance-records`
+
+列出管理员充值和扣费分类账记录。
+
+查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `from` | string | 可选开始时间：`YYYY-MM-DD`、RFC3339 或 Unix 秒。 |
+| `to` | string | 可选结束时间；只有日期时包含完整 UTC 当天。 |
+| `user` | string | 可选用户名、用户文本或用户 ID 过滤；别名：`user_text`、`username`。 |
+| `user_id` | integer | 可选精确用户 ID 过滤；别名：`uid`。 |
+| `limit` | integer | 可选分页大小；默认 `50`，最大 `200`。 |
+| `offset` | integer | 可选分页偏移；负数会规范化为 `0`。 |
+
+响应结构：
+
+```json
+{
+  "items": [
+    {
+      "id": "balance_xxx",
+      "user_id": 1,
+      "type": "recharge",
+      "amount": 50,
+      "balance_before": 0,
+      "balance_after": 50,
+      "operator": "admin",
+      "note": "manual recharge",
+      "created_at": "2026-06-10T10:00:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+### POST `/billing/balance-records/recharge`
+
+新增充值分类账记录，并更新用户 `credits`。
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `user_id` | integer | 是 | 目标用户 ID。 |
+| `amount` | number | 是 | 正数充值金额。 |
+| `note` | string | 否 | 可选操作备注。 |
+
+管理密钥操作当前的 `operator` 为 `admin`。
+
+响应：
+
+```json
+{ "status": "ok", "balance_record": { "id": "balance_xxx", "type": "recharge" } }
+```
+
+### POST `/billing/balance-records/deduct`
+
+新增扣减分类账记录，并更新用户 `credits`。
+
+请求体：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `user_id` | integer | 是 | 目标用户 ID。 |
+| `amount` | number | 是 | 正数扣减金额。 |
+| `note` | string | 是 | 扣减原因，必填。 |
+
+管理密钥操作当前的 `operator` 为 `admin`。
+
+响应：
+
+```json
+{ "status": "ok", "balance_record": { "id": "balance_xxx", "type": "deduct" } }
+```
+
+### GET `/billing/model-prices`
+
+列出模型价格规则。
+
+查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `provider` | string | 可选 provider 过滤。 |
+| `model` | string | 可选 model 过滤。 |
+| `enabled` | boolean | 可选 enabled 过滤。 |
+
+模型价格字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | 模型价格记录 ID。 |
+| `provider` | string | Provider 名称。 |
+| `model` | string | Model 名称。 |
+| `input_price_per_million` | number | Input-token 价格。 |
+| `output_price_per_million` | number | Output-token 价格。 |
+| `cache_read_price_per_million` | number | Cache-read token 价格。 |
+| `cache_write_price_per_million` | number | Cache-write token 价格。 |
+| `request_price` | number | 每请求价格。 |
+| `source` | string | 价格来源。 |
+| `enabled` | boolean | 规则是否启用。 |
+| `note` | string | 操作备注。 |
+| `created_at` | string | 创建时间。 |
+| `updated_at` | string | 最近更新时间。 |
+
+### POST `/billing/model-prices`
+
+创建模型价格规则。省略的价格字段默认为 `0`，`enabled` 默认为 `true`。
+
+请求体字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `provider` | string | 是 | Provider 名称。 |
+| `model` | string | 是 | Model 名称。 |
+| `input_price_per_million` | number | 否 | 非负 input-token 价格。 |
+| `output_price_per_million` | number | 否 | 非负 output-token 价格。 |
+| `cache_read_price_per_million` | number | 否 | 非负 cache-read token 价格。 |
+| `cache_write_price_per_million` | number | 否 | 非负 cache-write token 价格。 |
+| `request_price` | number | 否 | 非负每请求价格。 |
+| `source` | string | 否 | 价格来源，例如 `manual`。 |
+| `enabled` | boolean | 否 | 规则是否启用；默认 `true`。 |
+| `note` | string | 否 | 操作备注。 |
+
+响应：
+
+```json
+{ "status": "ok", "model_price": { "id": "price_xxx", "provider": "openai", "model": "gpt-4.1-mini" } }
+```
+
+### PATCH `/billing/model-prices/:id`
+
+局部更新模型价格规则，并保留未指定字段。请求体接受与 `POST /billing/model-prices` 相同的字段。
+
+响应：
+
+```json
+{ "status": "ok", "model_price": { "id": "price_xxx", "enabled": false } }
+```
+
+### DELETE `/billing/model-prices/:id`
+
+软删除模型价格规则。
+
+输入：无 body。
+
+响应：
+
+```json
+{ "status": "ok" }
+```
+
+### GET `/billing/proxy-pools`
+
+列出计费代理池记录。
+
+代理池记录在此版本中只会被存储和测试。它们不会改变运行时代理优先级、认证选择、分发或出站流量路由。唯一支持的 `scope` 是 `global`。
+
+响应：
+
+```json
+{
+  "items": [
+    {
+      "id": "proxy_xxx",
+      "name": "Primary proxy",
+      "proxy_url": "http://127.0.0.1:18080",
+      "enabled": true,
+      "scope": "global",
+      "priority": 10,
+      "last_tested_at": "2026-06-10T10:00:00Z",
+      "last_test_result": "passed",
+      "note": "manual entry",
+      "updated_at": "2026-06-10T10:00:00Z"
+    }
+  ]
+}
+```
+
+### POST `/billing/proxy-pools`
+
+创建计费代理池记录。省略 `enabled` 时默认 `true`。`scope` 仅支持 `global`。
+
+请求体字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `name` | string | 是 | 展示名称。 |
+| `proxy_url` | string | 是 | 需要存储和测试的代理 URL。 |
+| `enabled` | boolean | 否 | 记录是否启用；默认 `true`。 |
+| `scope` | string | 否 | 仅支持 `global`。 |
+| `priority` | integer | 否 | 存储的优先级值；本版本不影响运行时路由。 |
+| `note` | string | 否 | 操作备注。 |
+
+响应：
+
+```json
+{ "status": "ok", "proxy_pool": { "id": "proxy_xxx", "scope": "global", "enabled": true } }
+```
+
+### PATCH `/billing/proxy-pools/:id`
+
+局部更新计费代理池记录，并保留未指定字段。
+
+请求体：`POST /billing/proxy-pools` 字段的任意子集。
+
+响应：
+
+```json
+{ "status": "ok", "proxy_pool": { "id": "proxy_xxx", "enabled": false } }
+```
+
+缺失记录返回：
+
+```json
+{ "error": "proxy_pool_not_found", "message": "record not found" }
+```
+
+### DELETE `/billing/proxy-pools/:id`
+
+删除计费代理池记录。
+
+输入：无 body。
+
+响应：
+
+```json
+{ "status": "ok" }
+```
+
+缺失记录返回 `proxy_pool_not_found`。
+
+### POST `/billing/proxy-pools/:id/test`
+
+测试已存储的代理池记录。当条目存在且测试完成时，接口返回 `200`，`result` 为 `"passed"` 或 `"failed"`，并更新该记录的 `last_tested_at` 和 `last_test_result`。
+
+输入：无 body。
+
+响应：
+
+```json
+{
+  "status": "ok",
+  "result": "passed",
+  "message": "proxy test returned HTTP 204"
+}
+```
+
+缺失记录返回：
+
+```json
+{ "error": "proxy_pool_not_found", "message": "record not found" }
 ```
 
 ## Provider API Key Routes

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+	"gorm.io/gorm"
 )
 
 const defaultUsageServiceTier = "default"
@@ -117,17 +118,25 @@ func usageServiceTierFromPayload(payload string) string {
 
 // AppendUsage appends an usage.
 func (r *Repository) AppendUsage(ctx context.Context, payload string, homeIP string) (*UsageRecord, error) {
+	record, errRecord := UsageRecordFromPayload(payload, homeIP)
+	if errRecord != nil {
+		return nil, errRecord
+	}
+
 	db, errDB := r.database()
 	if errDB != nil {
 		return nil, errDB
 	}
 
-	record, errRecord := UsageRecordFromPayload(payload, homeIP)
-	if errRecord != nil {
-		return nil, errRecord
-	}
-	if errCreate := db.WithContext(contextOrBackground(ctx)).Create(record).Error; errCreate != nil {
-		return nil, errCreate
+	ctx = contextOrBackground(ctx)
+	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errCreate := tx.WithContext(ctx).Create(record).Error; errCreate != nil {
+			return errCreate
+		}
+		return r.createBillingChargeForUsageTx(ctx, tx, record, payload)
+	})
+	if errTransaction != nil {
+		return nil, errTransaction
 	}
 	return record, nil
 }

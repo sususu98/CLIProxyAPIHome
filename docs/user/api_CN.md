@@ -116,6 +116,8 @@ User API handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `POST` | `/totp/show` |
 | `POST` | `/totp/bind` |
 | `DELETE` | `/totp` |
+| `GET` | `/billing/overview` |
+| `GET` | `/billing/charges` |
 | `GET` | `/api-keys` |
 | `POST` | `/api-keys` |
 | `POST` | `/api-key` |
@@ -447,6 +449,127 @@ Authorization: Bearer user.jwt.token
 ```json
 { "error": "bearer_token_required", "message": "bearer token is required" }
 { "error": "invalid_token", "message": "invalid token" }
+```
+
+## Billing
+
+用户计费路由位于 `/user` 基础路径下，因此完整路径是 `/user/billing/overview` 和 `/user/billing/charges`。两个路由都需要 `/user/register` 或 `/user/login` 返回的现有 Bearer token，响应只包含当前认证 Bearer 用户的数据。
+
+用户计费响应不包含管理员备注、全局汇总、模型价格管理数据、代理池数据、原始 API keys、脱敏 API keys、价格快照、匹配的价格规则、endpoint、`balance_before` 或其他用户的数据。
+
+用户计费的 `from` 和 `to` 查询参数只接受 `YYYY-MM-DD`。只有日期的 `to` 会包含结束 UTC 日期的完整一天。
+
+### GET `/billing/overview`
+
+返回当前认证用户的计费概览。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `from` | string | 可选开始日期，格式为 `YYYY-MM-DD`。 |
+| `to` | string | 可选结束日期，格式为 `YYYY-MM-DD`；包含完整 UTC 当天。 |
+
+响应示例：
+
+```json
+{
+  "overview": {
+    "current_balance": 18.75,
+    "today_spend": 1.25,
+    "month_spend": 1.25,
+    "top_models": [
+      {
+        "id": "openai/gpt-4.1-mini",
+        "label": "gpt-4.1-mini",
+        "amount": 1.25,
+        "request_count": 1
+      }
+    ]
+  }
+}
+```
+
+概览字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `current_balance` | number | 当前认证用户余额。 |
+| `today_spend` | number | 当前计费概览查询返回的消费值。 |
+| `month_spend` | number | 当前计费概览查询返回的消费值。 |
+| `top_models[]` | array | 模型消费条目，字段为 `id`、`label`、`amount`、`request_count`。 |
+
+### GET `/billing/charges`
+
+列出当前认证用户的扣费记录。
+
+请求头：
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+查询参数：
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `from` | string | 可选开始日期，格式为 `YYYY-MM-DD`。 |
+| `to` | string | 可选结束日期，格式为 `YYYY-MM-DD`；包含完整 UTC 当天。 |
+| `limit` | integer | 可选分页大小；默认 `50`，最大 `200`。非法的非正数或非整数会返回 `400`。 |
+| `offset` | integer | 可选分页偏移；默认 `0`。负数或非整数会返回 `400`。 |
+
+响应结构：
+
+```json
+{
+  "items": [
+    {
+      "id": "charge_xxx",
+      "created_at": "2026-06-10T10:00:00Z",
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "input_tokens": 1000,
+      "output_tokens": 500,
+      "amount": 1.25,
+      "balance_after": 18.75,
+      "request_id": "req_xxx"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+扣费条目字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | 扣费记录 ID。 |
+| `created_at` | string | 扣费创建时间。 |
+| `provider` | string | Provider 名称。 |
+| `model` | string | Model 名称。 |
+| `input_tokens` | integer | 输入 tokens。 |
+| `output_tokens` | integer | 输出 tokens。 |
+| `amount` | number | 扣费金额。 |
+| `balance_after` | number | 当前认证用户扣费后的余额。 |
+| `request_id` | string | 与扣费关联的 request ID。 |
+
+常见错误：
+
+```json
+{ "error": "bearer_token_required", "message": "bearer token is required" }
+{ "error": "invalid_token", "message": "invalid token" }
+{ "error": "invalid_from", "message": "from must be YYYY-MM-DD" }
+{ "error": "invalid_to", "message": "to must be YYYY-MM-DD" }
+{ "error": "invalid_limit", "message": "limit must be a positive integer" }
+{ "error": "invalid_offset", "message": "offset must be a non-negative integer" }
 ```
 
 ## API Keys

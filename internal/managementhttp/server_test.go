@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	clustermanagement "github.com/router-for-me/CLIProxyAPIHome/internal/cluster/management"
 )
 
 func TestCORSMiddlewareMatchesCPAHeaders(t *testing.T) {
@@ -70,6 +71,28 @@ func TestClusterMTLSMiddlewareAllowsVerifiedPeer(t *testing.T) {
 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", resp.Code, http.StatusOK)
+	}
+}
+
+func TestClusterManagementBillingWriteRoutesRegistered(t *testing.T) {
+	reg := newRouteRegistry()
+	handler := clustermanagement.NewHandler(nil, nil, "", 0)
+	registerClusterManagementRoutes(reg, handler)
+
+	for _, route := range []RouteKey{
+		{Method: http.MethodGet, Path: "/billing/overview"},
+		{Method: http.MethodGet, Path: "/billing/charges"},
+		{Method: http.MethodGet, Path: "/billing/balance-records"},
+		{Method: http.MethodGet, Path: "/billing/model-prices"},
+		{Method: http.MethodPost, Path: "/billing/balance-records/recharge"},
+		{Method: http.MethodPost, Path: "/billing/balance-records/deduct"},
+		{Method: http.MethodPost, Path: "/billing/model-prices"},
+		{Method: http.MethodPatch, Path: "/billing/model-prices/:id"},
+		{Method: http.MethodDelete, Path: "/billing/model-prices/:id"},
+	} {
+		if reg.routes[route] == nil {
+			t.Fatalf("route %s %s was not registered", route.Method, route.Path)
+		}
 	}
 }
 

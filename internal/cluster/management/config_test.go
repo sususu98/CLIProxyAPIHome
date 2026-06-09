@@ -109,6 +109,7 @@ claude-api-key:
         alias: "claude-alias"
 codex-api-key:
   - api-key: codex-key
+    base-url: "https://codex.example"
     models:
       - name: "codex-upstream"
         alias: "codex-alias"

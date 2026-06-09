@@ -116,6 +116,8 @@ The table below is extracted from the User API route group registered by `intern
 | `POST` | `/totp/show` |
 | `POST` | `/totp/bind` |
 | `DELETE` | `/totp` |
+| `GET` | `/billing/overview` |
+| `GET` | `/billing/charges` |
 | `GET` | `/api-keys` |
 | `POST` | `/api-keys` |
 | `POST` | `/api-key` |
@@ -447,6 +449,127 @@ Common errors:
 ```json
 { "error": "bearer_token_required", "message": "bearer token is required" }
 { "error": "invalid_token", "message": "invalid token" }
+```
+
+## Billing
+
+User billing routes are under the `/user` base path, so the full paths are `/user/billing/overview` and `/user/billing/charges`. Both routes require the existing bearer token returned by `/user/register` or `/user/login`, and responses are scoped to the authenticated bearer user only.
+
+User billing responses do not include admin notes, global totals, model price management data, proxy-pool data, raw API keys, masked API keys, price snapshots, matched price rules, endpoint, `balance_before`, or other users' data.
+
+User billing `from` and `to` query parameters only accept `YYYY-MM-DD`. A date-only `to` includes the whole ending UTC day.
+
+### GET `/billing/overview`
+
+Returns the authenticated user's billing overview.
+
+Headers:
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+Query parameters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `from` | string | Optional start date in `YYYY-MM-DD` format. |
+| `to` | string | Optional end date in `YYYY-MM-DD` format. Includes the full UTC day. |
+
+Example response:
+
+```json
+{
+  "overview": {
+    "current_balance": 18.75,
+    "today_spend": 1.25,
+    "month_spend": 1.25,
+    "top_models": [
+      {
+        "id": "openai/gpt-4.1-mini",
+        "label": "gpt-4.1-mini",
+        "amount": 1.25,
+        "request_count": 1
+      }
+    ]
+  }
+}
+```
+
+Overview fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `current_balance` | number | Current authenticated user balance. |
+| `today_spend` | number | Spend value returned by the current billing overview query. |
+| `month_spend` | number | Spend value returned by the current billing overview query. |
+| `top_models[]` | array | Model spend entries with `id`, `label`, `amount`, and `request_count`. |
+
+### GET `/billing/charges`
+
+Lists the authenticated user's billing charges.
+
+Headers:
+
+```http
+Authorization: Bearer user.jwt.token
+```
+
+Query parameters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `from` | string | Optional start date in `YYYY-MM-DD` format. |
+| `to` | string | Optional end date in `YYYY-MM-DD` format. Includes the full UTC day. |
+| `limit` | integer | Optional page size. Default `50`, max `200`. Invalid non-positive or non-integer values return `400`. |
+| `offset` | integer | Optional page offset. Default `0`. Negative or non-integer values return `400`. |
+
+Response shape:
+
+```json
+{
+  "items": [
+    {
+      "id": "charge_xxx",
+      "created_at": "2026-06-10T10:00:00Z",
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "input_tokens": 1000,
+      "output_tokens": 500,
+      "amount": 1.25,
+      "balance_after": 18.75,
+      "request_id": "req_xxx"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+Charge item fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | string | Charge record ID. |
+| `created_at` | string | Charge creation time. |
+| `provider` | string | Provider name. |
+| `model` | string | Model name. |
+| `input_tokens` | integer | Input tokens. |
+| `output_tokens` | integer | Output tokens. |
+| `amount` | number | Charged amount. |
+| `balance_after` | number | Authenticated user's balance after the charge. |
+| `request_id` | string | Request ID associated with the charge. |
+
+Common errors:
+
+```json
+{ "error": "bearer_token_required", "message": "bearer token is required" }
+{ "error": "invalid_token", "message": "invalid token" }
+{ "error": "invalid_from", "message": "from must be YYYY-MM-DD" }
+{ "error": "invalid_to", "message": "to must be YYYY-MM-DD" }
+{ "error": "invalid_limit", "message": "limit must be a positive integer" }
+{ "error": "invalid_offset", "message": "offset must be a non-negative integer" }
 ```
 
 ## API Keys

@@ -124,6 +124,20 @@ The table below is extracted from the final Home route registry built by `intern
 | `GET` | `/api-keys` |
 | `PATCH` | `/api-keys` |
 | `PUT` | `/api-keys` |
+| `GET` | `/billing/overview` |
+| `GET` | `/billing/charges` |
+| `GET` | `/billing/balance-records` |
+| `POST` | `/billing/balance-records/recharge` |
+| `POST` | `/billing/balance-records/deduct` |
+| `GET` | `/billing/model-prices` |
+| `POST` | `/billing/model-prices` |
+| `PATCH` | `/billing/model-prices/:id` |
+| `DELETE` | `/billing/model-prices/:id` |
+| `GET` | `/billing/proxy-pools` |
+| `POST` | `/billing/proxy-pools` |
+| `PATCH` | `/billing/proxy-pools/:id` |
+| `DELETE` | `/billing/proxy-pools/:id` |
+| `POST` | `/billing/proxy-pools/:id/test` |
 | `DELETE` | `/auth-files` |
 | `GET` | `/auth-files` |
 | `POST` | `/auth-files` |
@@ -624,7 +638,7 @@ Example request:
 | --- | --- | --- | --- |
 | `username` | string | yes | Username. Aliases: `user_name`, `user-name`. |
 | `password` | string | no | Non-empty plaintext is stored as a bcrypt hash. Existing valid bcrypt hashes are preserved for migration. Responses do not return password material; they return `password_set`. |
-| `credits` | number | no | User credit balance. Defaults to `0`. When a client API key is bound to this user and credits are `<= 0`, RESP `RPOP auth` returns `user_credits_insufficient`. |
+| `credits` | number | no | User credit balance. Defaults to `0`. When a client API key is bound to this user and credits are `<= 0`, RESP `RPOP auth` returns `user_credits_insufficient`. For billing workflows, prefer `/billing/balance-records/recharge` and `/billing/balance-records/deduct` so balance changes have ledger records. |
 | `mfa` | any valid JSON | no | Stored in `user.mfa`. |
 | `passkey` | any valid JSON | no | Stored in `user.passkey`. |
 
@@ -646,7 +660,7 @@ Example request:
 }
 ```
 
-All request fields are optional, but `username`, if present, must not be empty. `credits`, if present, replaces the user's current credit balance.
+All request fields are optional, but `username`, if present, must not be empty. `credits`, if present, replaces the user's current credit balance. For billing workflows, prefer `/billing/balance-records/recharge` and `/billing/balance-records/deduct` so balance changes have ledger records.
 
 Response: same shape as `GET /users/:id`.
 
@@ -852,6 +866,353 @@ Example response:
 
 ```json
 { "status": "ok" }
+```
+
+## Billing
+
+All paths in this section are relative to the Management API base URL, for example `/v0/management/billing/overview`. They are not `/user` routes and require the management key.
+
+Only `/billing/overview`, `/billing/charges`, and `/billing/balance-records` parse `from` and `to` as `YYYY-MM-DD`, RFC3339, or Unix seconds. A date-only `to` value includes the whole ending UTC day. Pagination with `limit` and `offset` applies only to `/billing/charges` and `/billing/balance-records`; those routes use `limit` default `50`, max `200`, and normalize negative `offset` values to `0`. `/billing/model-prices` supports only `provider`, `model`, and `enabled` query parameters. `/billing/proxy-pools` currently does not parse query parameters.
+
+### GET `/billing/overview`
+
+Returns an administrator billing summary.
+
+Query parameters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `from` | string | Optional start time: `YYYY-MM-DD`, RFC3339, or Unix seconds. |
+| `to` | string | Optional end time. Date-only values include the full UTC day. |
+| `user` | string | Optional username, user text, or user ID filter. Aliases: `user_text`, `username`. |
+| `user_id` | integer | Optional exact user ID filter. Alias: `uid`. |
+| `provider` | string | Optional provider filter. |
+| `model` | string | Optional model filter. |
+
+Response fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `range` | object | Applied `from` and `to` range. |
+| `total_charge_amount` | number | Total charged amount. |
+| `total_recharge_amount` | number | Total recharge amount. |
+| `total_deduct_amount` | number | Total manual deduction amount. |
+| `total_balance` | number | Current total user balance. |
+| `request_count` | integer | Number of charged requests. |
+| `input_tokens` | integer | Total input tokens. |
+| `output_tokens` | integer | Total output tokens. |
+| `cache_tokens` | integer | Total cache tokens. |
+| `active_user_count` | integer | Number of users with charges in the range. |
+| `daily_trend[]` | array | Daily charge amount and request count. |
+| `top_users[]` | array | Top users with `id`, `label`, `amount`, and `request_count`. |
+| `top_models[]` | array | Top models with `id`, `label`, `amount`, and `request_count`. |
+| `top_providers[]` | array | Top providers with `id`, `label`, `amount`, and `request_count`. |
+
+### GET `/billing/charges`
+
+Lists billing charge records with administrator context. Responses expose user ID, masked API-key metadata, price snapshot, matched price rule, request ID, endpoint, and `balance_before`/`balance_after`. Billing charge responses never expose raw API keys.
+
+Query parameters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `from` | string | Optional start time: `YYYY-MM-DD`, RFC3339, or Unix seconds. |
+| `to` | string | Optional end time. Date-only values include the full UTC day. |
+| `user` | string | Optional username, user text, or user ID filter. Aliases: `user_text`, `username`. |
+| `user_id` | integer | Optional exact user ID filter. Alias: `uid`. |
+| `provider` | string | Optional provider filter. |
+| `model` | string | Optional model filter. |
+| `limit` | integer | Optional page size. Default `50`, max `200`. |
+| `offset` | integer | Optional page offset. Negative values normalize to `0`. |
+
+Response shape:
+
+```json
+{
+  "items": [
+    {
+      "id": "charge_xxx",
+      "created_at": "2026-06-10T10:00:00Z",
+      "user_id": 1,
+      "api_key_label": "Alice key",
+      "api_key_masked": "cpa_...abcd",
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "original_model": "gpt-4.1-mini",
+      "actual_model": "gpt-4.1-mini",
+      "input_tokens": 1000,
+      "output_tokens": 500,
+      "cache_tokens": 0,
+      "amount": 1.25,
+      "balance_before": 20,
+      "balance_after": 18.75,
+      "request_id": "req_xxx",
+      "endpoint": "/v1/chat/completions",
+      "matched_price_rule": "price_xxx",
+      "price_snapshot": { "request_price": 0, "input_price_per_million": 1.25 }
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+### GET `/billing/balance-records`
+
+Lists administrator recharge and deduction ledger records.
+
+Query parameters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `from` | string | Optional start time: `YYYY-MM-DD`, RFC3339, or Unix seconds. |
+| `to` | string | Optional end time. Date-only values include the full UTC day. |
+| `user` | string | Optional username, user text, or user ID filter. Aliases: `user_text`, `username`. |
+| `user_id` | integer | Optional exact user ID filter. Alias: `uid`. |
+| `limit` | integer | Optional page size. Default `50`, max `200`. |
+| `offset` | integer | Optional page offset. Negative values normalize to `0`. |
+
+Response shape:
+
+```json
+{
+  "items": [
+    {
+      "id": "balance_xxx",
+      "user_id": 1,
+      "type": "recharge",
+      "amount": 50,
+      "balance_before": 0,
+      "balance_after": 50,
+      "operator": "admin",
+      "note": "manual recharge",
+      "created_at": "2026-06-10T10:00:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+### POST `/billing/balance-records/recharge`
+
+Adds a recharge ledger record and updates the user's `credits`.
+
+Request body:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `user_id` | integer | yes | Target user ID. |
+| `amount` | number | yes | Positive recharge amount. |
+| `note` | string | no | Optional operator note. |
+
+The current operator for management-key operations is `admin`.
+
+Response:
+
+```json
+{ "status": "ok", "balance_record": { "id": "balance_xxx", "type": "recharge" } }
+```
+
+### POST `/billing/balance-records/deduct`
+
+Adds a deduction ledger record and updates the user's `credits`.
+
+Request body:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `user_id` | integer | yes | Target user ID. |
+| `amount` | number | yes | Positive deduction amount. |
+| `note` | string | yes | Required reason for the deduction. |
+
+The current operator for management-key operations is `admin`.
+
+Response:
+
+```json
+{ "status": "ok", "balance_record": { "id": "balance_xxx", "type": "deduct" } }
+```
+
+### GET `/billing/model-prices`
+
+Lists model price rules.
+
+Query parameters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `provider` | string | Optional provider filter. |
+| `model` | string | Optional model filter. |
+| `enabled` | boolean | Optional enabled filter. |
+
+Model price fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | string | Model price record ID. |
+| `provider` | string | Provider name. |
+| `model` | string | Model name. |
+| `input_price_per_million` | number | Input-token price. |
+| `output_price_per_million` | number | Output-token price. |
+| `cache_read_price_per_million` | number | Cache-read token price. |
+| `cache_write_price_per_million` | number | Cache-write token price. |
+| `request_price` | number | Per-request price. |
+| `source` | string | Price source. |
+| `enabled` | boolean | Whether the rule is active. |
+| `note` | string | Operator note. |
+| `created_at` | string | Creation time. |
+| `updated_at` | string | Last update time. |
+
+### POST `/billing/model-prices`
+
+Creates a model price rule. Omitted price values default to `0`, and `enabled` defaults to `true`.
+
+Request body fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `provider` | string | yes | Provider name. |
+| `model` | string | yes | Model name. |
+| `input_price_per_million` | number | no | Non-negative input-token price. |
+| `output_price_per_million` | number | no | Non-negative output-token price. |
+| `cache_read_price_per_million` | number | no | Non-negative cache-read token price. |
+| `cache_write_price_per_million` | number | no | Non-negative cache-write token price. |
+| `request_price` | number | no | Non-negative per-request price. |
+| `source` | string | no | Price source such as `manual`. |
+| `enabled` | boolean | no | Whether the rule is active. Defaults to `true`. |
+| `note` | string | no | Operator note. |
+
+Response:
+
+```json
+{ "status": "ok", "model_price": { "id": "price_xxx", "provider": "openai", "model": "gpt-4.1-mini" } }
+```
+
+### PATCH `/billing/model-prices/:id`
+
+Partially updates a model price rule and preserves unspecified fields. The request body accepts the same fields as `POST /billing/model-prices`.
+
+Response:
+
+```json
+{ "status": "ok", "model_price": { "id": "price_xxx", "enabled": false } }
+```
+
+### DELETE `/billing/model-prices/:id`
+
+Soft-deletes a model price rule.
+
+Input: no body.
+
+Response:
+
+```json
+{ "status": "ok" }
+```
+
+### GET `/billing/proxy-pools`
+
+Lists billing proxy pool records.
+
+Proxy pool records are stored and tested only in this release. They do not change runtime proxy priority, auth selection, dispatch, or outbound traffic routing. The only supported `scope` is `global`.
+
+Response:
+
+```json
+{
+  "items": [
+    {
+      "id": "proxy_xxx",
+      "name": "Primary proxy",
+      "proxy_url": "http://127.0.0.1:18080",
+      "enabled": true,
+      "scope": "global",
+      "priority": 10,
+      "last_tested_at": "2026-06-10T10:00:00Z",
+      "last_test_result": "passed",
+      "note": "manual entry",
+      "updated_at": "2026-06-10T10:00:00Z"
+    }
+  ]
+}
+```
+
+### POST `/billing/proxy-pools`
+
+Creates a billing proxy pool record. `enabled` defaults to `true` when omitted. `scope` is only `global`.
+
+Request body fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | yes | Display name. |
+| `proxy_url` | string | yes | Proxy URL to store and test. |
+| `enabled` | boolean | no | Whether the record is enabled. Defaults to `true`. |
+| `scope` | string | no | Only `global` is supported. |
+| `priority` | integer | no | Stored priority value. It does not affect runtime routing in this release. |
+| `note` | string | no | Operator note. |
+
+Response:
+
+```json
+{ "status": "ok", "proxy_pool": { "id": "proxy_xxx", "scope": "global", "enabled": true } }
+```
+
+### PATCH `/billing/proxy-pools/:id`
+
+Partially updates a billing proxy pool record and preserves unspecified fields.
+
+Request body: any subset of the `POST /billing/proxy-pools` fields.
+
+Response:
+
+```json
+{ "status": "ok", "proxy_pool": { "id": "proxy_xxx", "enabled": false } }
+```
+
+Missing records return:
+
+```json
+{ "error": "proxy_pool_not_found", "message": "record not found" }
+```
+
+### DELETE `/billing/proxy-pools/:id`
+
+Deletes a billing proxy pool record.
+
+Input: no body.
+
+Response:
+
+```json
+{ "status": "ok" }
+```
+
+Missing records return `proxy_pool_not_found`.
+
+### POST `/billing/proxy-pools/:id/test`
+
+Tests a stored proxy pool record. When the item exists and the test completes, the endpoint returns `200` with `result: "passed"` or `result: "failed"` and updates `last_tested_at` and `last_test_result` on the record.
+
+Input: no body.
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "result": "passed",
+  "message": "proxy test returned HTTP 204"
+}
+```
+
+Missing records return:
+
+```json
+{ "error": "proxy_pool_not_found", "message": "record not found" }
 ```
 
 ## Provider API Key Routes
