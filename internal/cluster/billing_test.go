@@ -1,15 +1,19 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func TestBillingAutoMigrateCreatesTables(t *testing.T) {
@@ -589,6 +593,43 @@ func TestAppendUsageWithoutModelPriceCreatesZeroCharge(t *testing.T) {
 	}
 	if updated.Credits != 10 {
 		t.Fatalf("credits = %v, want 10", updated.Credits)
+	}
+}
+
+func TestAppendUsageWithoutModelPriceDoesNotLogRecordNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	var logs bytes.Buffer
+	repo = NewRepository(db.Session(&gorm.Session{
+		Logger: logger.New(log.New(&logs, "", 0), logger.Config{LogLevel: logger.Info}),
+	}))
+
+	username := "alice@example.com"
+	credits := 10.0
+	user, errCreateUser := repo.CreateUser(ctx, UserUpdate{Username: &username, Credits: &credits})
+	if errCreateUser != nil {
+		t.Fatalf("CreateUser() error = %v", errCreateUser)
+	}
+	clientKey := "client-key"
+	if _, errCreateKey := repo.CreateAPIKeyForUser(ctx, user.ID, APIKeyUserUpdate{APIKey: &clientKey}); errCreateKey != nil {
+		t.Fatalf("CreateAPIKeyForUser() error = %v", errCreateKey)
+	}
+
+	logs.Reset()
+	payload := `{"timestamp":"2026-06-10T01:02:03Z","provider":"openai","model":"gpt-4.1-mini","api_key":"client-key","request_id":"req-no-price-log","tokens":{"input_tokens":100,"output_tokens":200,"total_tokens":300}}`
+	if _, errUsage := repo.AppendUsage(ctx, payload, "192.0.2.10"); errUsage != nil {
+		t.Fatalf("AppendUsage() error = %v", errUsage)
+	}
+	if strings.Contains(strings.ToLower(logs.String()), "record not found") {
+		t.Fatalf("AppendUsage() logged record not found for missing model price: %s", logs.String())
 	}
 }
 
