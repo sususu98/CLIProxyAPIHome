@@ -133,11 +133,11 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `POST` | `/billing/model-prices` |
 | `PATCH` | `/billing/model-prices/:id` |
 | `DELETE` | `/billing/model-prices/:id` |
-| `GET` | `/billing/proxy-pools` |
-| `POST` | `/billing/proxy-pools` |
-| `PATCH` | `/billing/proxy-pools/:id` |
-| `DELETE` | `/billing/proxy-pools/:id` |
-| `POST` | `/billing/proxy-pools/:id/test` |
+| `GET` | `/proxy/proxy-pools` |
+| `POST` | `/proxy/proxy-pools` |
+| `PATCH` | `/proxy/proxy-pools/:id` |
+| `DELETE` | `/proxy/proxy-pools/:id` |
+| `POST` | `/proxy/proxy-pools/:id/test` |
 | `DELETE` | `/auth-files` |
 | `GET` | `/auth-files` |
 | `POST` | `/auth-files` |
@@ -870,9 +870,9 @@ Query 参数：
 
 ## Billing
 
-本节所有路径都相对于 Management API 基础 URL，例如 `/v0/management/billing/overview`。这些不是 `/user` 路由，调用时需要管理密钥。
+本节所有路径都相对于 Management API 基础 URL，例如 `/v0/management/billing/overview` 或 `/v0/management/proxy/proxy-pools`。这些不是 `/user` 路由，调用时需要管理密钥。
 
-只有 `/billing/overview`、`/billing/charges` 和 `/billing/balance-records` 会将 `from` 和 `to` 解析为 `YYYY-MM-DD`、RFC3339 或 Unix 秒。只有日期的 `to` 会包含结束 UTC 日期的完整一天。分页参数 `limit` 和 `offset` 仅适用于 `/billing/charges` 和 `/billing/balance-records`；这些路由的 `limit` 默认值为 `50`，最大值为 `200`，负数 `offset` 会规范化为 `0`。`/billing/model-prices` 仅支持 `provider`、`model` 和 `enabled` 查询参数。`/billing/proxy-pools` 当前不解析查询参数。
+只有 `/billing/overview`、`/billing/charges` 和 `/billing/balance-records` 会将 `from` 和 `to` 解析为 `YYYY-MM-DD`、RFC3339 或 Unix 秒。只有日期的 `to` 会包含结束 UTC 日期的完整一天。分页参数 `limit` 和 `offset` 仅适用于 `/billing/charges` 和 `/billing/balance-records`；这些路由的 `limit` 默认值为 `50`，最大值为 `200`，负数 `offset` 会规范化为 `0`。`/billing/model-prices` 仅支持 `provider`、`model` 和 `enabled` 查询参数。`/proxy/proxy-pools` 当前不解析查询参数。
 
 ### GET `/billing/overview`
 
@@ -1113,9 +1113,9 @@ Query 参数：
 { "status": "ok" }
 ```
 
-### GET `/billing/proxy-pools`
+### GET `/proxy/proxy-pools`
 
-列出计费代理池记录。
+列出代理池记录。
 
 代理池记录在此版本中只会被存储和测试。它们不会改变运行时代理优先级、认证选择、分发或出站流量路由。唯一支持的 `scope` 是 `global`。
 
@@ -1140,9 +1140,9 @@ Query 参数：
 }
 ```
 
-### POST `/billing/proxy-pools`
+### POST `/proxy/proxy-pools`
 
-创建计费代理池记录。省略 `enabled` 时默认 `true`。`scope` 仅支持 `global`。
+创建代理池记录。省略 `enabled` 时默认 `true`。`scope` 仅支持 `global`。
 
 请求体字段：
 
@@ -1161,11 +1161,11 @@ Query 参数：
 { "status": "ok", "proxy_pool": { "id": "proxy_xxx", "scope": "global", "enabled": true } }
 ```
 
-### PATCH `/billing/proxy-pools/:id`
+### PATCH `/proxy/proxy-pools/:id`
 
-局部更新计费代理池记录，并保留未指定字段。
+局部更新代理池记录，并保留未指定字段。
 
-请求体：`POST /billing/proxy-pools` 字段的任意子集。
+请求体：`POST /proxy/proxy-pools` 字段的任意子集。
 
 响应：
 
@@ -1179,9 +1179,9 @@ Query 参数：
 { "error": "proxy_pool_not_found", "message": "record not found" }
 ```
 
-### DELETE `/billing/proxy-pools/:id`
+### DELETE `/proxy/proxy-pools/:id`
 
-删除计费代理池记录。
+删除代理池记录。
 
 输入：无 body。
 
@@ -1193,7 +1193,7 @@ Query 参数：
 
 缺失记录返回 `proxy_pool_not_found`。
 
-### POST `/billing/proxy-pools/:id/test`
+### POST `/proxy/proxy-pools/:id/test`
 
 测试已存储的代理池记录。当条目存在且测试完成时，接口返回 `200`，`result` 为 `"passed"` 或 `"failed"`，并更新该记录的 `last_tested_at` 和 `last_test_result`。
 

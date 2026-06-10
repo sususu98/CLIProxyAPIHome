@@ -21,7 +21,7 @@ func TestProxyPoolCreateListUpdateDeleteHandlers(t *testing.T) {
 
 	createResp := httptest.NewRecorder()
 	createCtx, _ := gin.CreateTestContext(createResp)
-	createCtx.Request = httptest.NewRequest(http.MethodPost, "/billing/proxy-pools", bytes.NewReader([]byte(`{"name":"Primary proxy","proxy_url":"http://127.0.0.1:18080","enabled":true,"priority":20,"note":"initial"}`)))
+	createCtx.Request = httptest.NewRequest(http.MethodPost, "/proxy/proxy-pools", bytes.NewReader([]byte(`{"name":"Primary proxy","proxy_url":"http://127.0.0.1:18080","enabled":true,"priority":20,"note":"initial"}`)))
 	createCtx.Request.Header.Set("Content-Type", "application/json")
 
 	handler.CreateProxyPoolItem(createCtx)
@@ -48,7 +48,7 @@ func TestProxyPoolCreateListUpdateDeleteHandlers(t *testing.T) {
 	updateResp := httptest.NewRecorder()
 	updateCtx, _ := gin.CreateTestContext(updateResp)
 	updateCtx.Params = gin.Params{{Key: "id", Value: id}}
-	updateCtx.Request = httptest.NewRequest(http.MethodPatch, "/billing/proxy-pools/"+id, bytes.NewReader([]byte(`{"name":"Primary proxy updated","proxy_url":"https://127.0.0.1:18081","enabled":false,"scope":"global","priority":5,"note":"updated"}`)))
+	updateCtx.Request = httptest.NewRequest(http.MethodPatch, "/proxy/proxy-pools/"+id, bytes.NewReader([]byte(`{"name":"Primary proxy updated","proxy_url":"https://127.0.0.1:18081","enabled":false,"scope":"global","priority":5,"note":"updated"}`)))
 	updateCtx.Request.Header.Set("Content-Type", "application/json")
 
 	handler.UpdateProxyPoolItem(updateCtx)
@@ -59,7 +59,7 @@ func TestProxyPoolCreateListUpdateDeleteHandlers(t *testing.T) {
 
 	listResp := httptest.NewRecorder()
 	listCtx, _ := gin.CreateTestContext(listResp)
-	listCtx.Request = httptest.NewRequest(http.MethodGet, "/billing/proxy-pools", nil)
+	listCtx.Request = httptest.NewRequest(http.MethodGet, "/proxy/proxy-pools", nil)
 
 	handler.ListProxyPoolItems(listCtx)
 
@@ -88,7 +88,7 @@ func TestProxyPoolCreateListUpdateDeleteHandlers(t *testing.T) {
 	deleteResp := httptest.NewRecorder()
 	deleteCtx, _ := gin.CreateTestContext(deleteResp)
 	deleteCtx.Params = gin.Params{{Key: "id", Value: id}}
-	deleteCtx.Request = httptest.NewRequest(http.MethodDelete, "/billing/proxy-pools/"+id, nil)
+	deleteCtx.Request = httptest.NewRequest(http.MethodDelete, "/proxy/proxy-pools/"+id, nil)
 
 	handler.DeleteProxyPoolItem(deleteCtx)
 
@@ -112,7 +112,7 @@ func TestProxyPoolCreateOmittedEnabledDefaultsTrue(t *testing.T) {
 
 	resp := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(resp)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/billing/proxy-pools", bytes.NewReader([]byte(`{"name":"Default enabled proxy","proxy_url":"http://127.0.0.1:18080","priority":10}`)))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/proxy/proxy-pools", bytes.NewReader([]byte(`{"name":"Default enabled proxy","proxy_url":"http://127.0.0.1:18080","priority":10}`)))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	handler.CreateProxyPoolItem(ctx)
@@ -165,7 +165,7 @@ func TestProxyPoolPatchEnabledPreservesExistingFields(t *testing.T) {
 	resp := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(resp)
 	ctx.Params = gin.Params{{Key: "id", Value: record.ID}}
-	ctx.Request = httptest.NewRequest(http.MethodPatch, "/billing/proxy-pools/"+record.ID, bytes.NewReader([]byte(`{"enabled":false}`)))
+	ctx.Request = httptest.NewRequest(http.MethodPatch, "/proxy/proxy-pools/"+record.ID, bytes.NewReader([]byte(`{"enabled":false}`)))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	handler.UpdateProxyPoolItem(ctx)
@@ -217,7 +217,7 @@ func TestProxyPoolInvalidCreateBodyAndScopeReturnBadRequest(t *testing.T) {
 
 			resp := httptest.NewRecorder()
 			ctx, _ := gin.CreateTestContext(resp)
-			ctx.Request = httptest.NewRequest(http.MethodPost, "/billing/proxy-pools", bytes.NewReader([]byte(tt.body)))
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/proxy/proxy-pools", bytes.NewReader([]byte(tt.body)))
 			ctx.Request.Header.Set("Content-Type", "application/json")
 
 			handler.CreateProxyPoolItem(ctx)
@@ -238,7 +238,7 @@ func TestProxyPoolTestMissingItemReturnsNotFound(t *testing.T) {
 	resp := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(resp)
 	ctx.Params = gin.Params{{Key: "id", Value: "proxy_missing"}}
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/billing/proxy-pools/proxy_missing/test", nil)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/proxy/proxy-pools/proxy_missing/test", nil)
 
 	handler.TestProxyPoolItem(ctx)
 
@@ -277,7 +277,7 @@ func TestProxyPoolTestFailingProxyPersistsFailedResult(t *testing.T) {
 	resp := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(resp)
 	ctx.Params = gin.Params{{Key: "id", Value: record.ID}}
-	ctx.Request = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/billing/proxy-pools/%s/test", record.ID), nil)
+	ctx.Request = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/proxy/proxy-pools/%s/test", record.ID), nil)
 
 	handler.TestProxyPoolItem(ctx)
 

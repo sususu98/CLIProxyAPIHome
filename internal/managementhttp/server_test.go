@@ -96,6 +96,36 @@ func TestClusterManagementBillingWriteRoutesRegistered(t *testing.T) {
 	}
 }
 
+func TestClusterManagementProxyPoolRoutesRegistered(t *testing.T) {
+	reg := newRouteRegistry()
+	handler := clustermanagement.NewHandler(nil, nil, "", 0)
+	registerClusterManagementRoutes(reg, handler)
+
+	for _, route := range []RouteKey{
+		{Method: http.MethodGet, Path: "/proxy/proxy-pools"},
+		{Method: http.MethodPost, Path: "/proxy/proxy-pools"},
+		{Method: http.MethodPatch, Path: "/proxy/proxy-pools/:id"},
+		{Method: http.MethodDelete, Path: "/proxy/proxy-pools/:id"},
+		{Method: http.MethodPost, Path: "/proxy/proxy-pools/:id/test"},
+	} {
+		if reg.routes[route] == nil {
+			t.Fatalf("route %s %s was not registered", route.Method, route.Path)
+		}
+	}
+
+	for _, route := range []RouteKey{
+		{Method: http.MethodGet, Path: "/billing/proxy-pools"},
+		{Method: http.MethodPost, Path: "/billing/proxy-pools"},
+		{Method: http.MethodPatch, Path: "/billing/proxy-pools/:id"},
+		{Method: http.MethodDelete, Path: "/billing/proxy-pools/:id"},
+		{Method: http.MethodPost, Path: "/billing/proxy-pools/:id/test"},
+	} {
+		if reg.routes[route] != nil {
+			t.Fatalf("route %s %s should not be registered", route.Method, route.Path)
+		}
+	}
+}
+
 func assertCORSHeaders(t *testing.T, resp *httptest.ResponseRecorder) {
 	t.Helper()
 

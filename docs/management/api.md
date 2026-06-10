@@ -133,11 +133,11 @@ The table below is extracted from the final Home route registry built by `intern
 | `POST` | `/billing/model-prices` |
 | `PATCH` | `/billing/model-prices/:id` |
 | `DELETE` | `/billing/model-prices/:id` |
-| `GET` | `/billing/proxy-pools` |
-| `POST` | `/billing/proxy-pools` |
-| `PATCH` | `/billing/proxy-pools/:id` |
-| `DELETE` | `/billing/proxy-pools/:id` |
-| `POST` | `/billing/proxy-pools/:id/test` |
+| `GET` | `/proxy/proxy-pools` |
+| `POST` | `/proxy/proxy-pools` |
+| `PATCH` | `/proxy/proxy-pools/:id` |
+| `DELETE` | `/proxy/proxy-pools/:id` |
+| `POST` | `/proxy/proxy-pools/:id/test` |
 | `DELETE` | `/auth-files` |
 | `GET` | `/auth-files` |
 | `POST` | `/auth-files` |
@@ -870,9 +870,9 @@ Example response:
 
 ## Billing
 
-All paths in this section are relative to the Management API base URL, for example `/v0/management/billing/overview`. They are not `/user` routes and require the management key.
+All paths in this section are relative to the Management API base URL, for example `/v0/management/billing/overview` or `/v0/management/proxy/proxy-pools`. They are not `/user` routes and require the management key.
 
-Only `/billing/overview`, `/billing/charges`, and `/billing/balance-records` parse `from` and `to` as `YYYY-MM-DD`, RFC3339, or Unix seconds. A date-only `to` value includes the whole ending UTC day. Pagination with `limit` and `offset` applies only to `/billing/charges` and `/billing/balance-records`; those routes use `limit` default `50`, max `200`, and normalize negative `offset` values to `0`. `/billing/model-prices` supports only `provider`, `model`, and `enabled` query parameters. `/billing/proxy-pools` currently does not parse query parameters.
+Only `/billing/overview`, `/billing/charges`, and `/billing/balance-records` parse `from` and `to` as `YYYY-MM-DD`, RFC3339, or Unix seconds. A date-only `to` value includes the whole ending UTC day. Pagination with `limit` and `offset` applies only to `/billing/charges` and `/billing/balance-records`; those routes use `limit` default `50`, max `200`, and normalize negative `offset` values to `0`. `/billing/model-prices` supports only `provider`, `model`, and `enabled` query parameters. `/proxy/proxy-pools` currently does not parse query parameters.
 
 ### GET `/billing/overview`
 
@@ -1113,9 +1113,9 @@ Response:
 { "status": "ok" }
 ```
 
-### GET `/billing/proxy-pools`
+### GET `/proxy/proxy-pools`
 
-Lists billing proxy pool records.
+Lists proxy pool records.
 
 Proxy pool records are stored and tested only in this release. They do not change runtime proxy priority, auth selection, dispatch, or outbound traffic routing. The only supported `scope` is `global`.
 
@@ -1140,9 +1140,9 @@ Response:
 }
 ```
 
-### POST `/billing/proxy-pools`
+### POST `/proxy/proxy-pools`
 
-Creates a billing proxy pool record. `enabled` defaults to `true` when omitted. `scope` is only `global`.
+Creates a proxy pool record. `enabled` defaults to `true` when omitted. `scope` is only `global`.
 
 Request body fields:
 
@@ -1161,11 +1161,11 @@ Response:
 { "status": "ok", "proxy_pool": { "id": "proxy_xxx", "scope": "global", "enabled": true } }
 ```
 
-### PATCH `/billing/proxy-pools/:id`
+### PATCH `/proxy/proxy-pools/:id`
 
-Partially updates a billing proxy pool record and preserves unspecified fields.
+Partially updates a proxy pool record and preserves unspecified fields.
 
-Request body: any subset of the `POST /billing/proxy-pools` fields.
+Request body: any subset of the `POST /proxy/proxy-pools` fields.
 
 Response:
 
@@ -1179,9 +1179,9 @@ Missing records return:
 { "error": "proxy_pool_not_found", "message": "record not found" }
 ```
 
-### DELETE `/billing/proxy-pools/:id`
+### DELETE `/proxy/proxy-pools/:id`
 
-Deletes a billing proxy pool record.
+Deletes a proxy pool record.
 
 Input: no body.
 
@@ -1193,7 +1193,7 @@ Response:
 
 Missing records return `proxy_pool_not_found`.
 
-### POST `/billing/proxy-pools/:id/test`
+### POST `/proxy/proxy-pools/:id/test`
 
 Tests a stored proxy pool record. When the item exists and the test completes, the endpoint returns `200` with `result: "passed"` or `result: "failed"` and updates `last_tested_at` and `last_test_result` on the record.
 
