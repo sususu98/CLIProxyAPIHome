@@ -192,3 +192,92 @@ func stringSliceContains(values []string, target string) bool {
 	}
 	return false
 }
+
+func TestPutConfigYAMLForcesDownstreamHomeModeFields(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	handler := NewHandler(repo, nil, "127.0.0.1", 0)
+	engine := gin.New()
+	engine.PUT("/config.yaml", handler.PutConfigYAML)
+	engine.GET("/config", handler.GetConfig)
+	engine.GET("/config.yaml", handler.GetConfigYAML)
+
+	payload := `port: 8327
+usage-statistics-enabled: false
+disable-cooling: false
+enable-gemini-cli-endpoint: true
+ws-auth: true
+remote-management:
+  allow-remote: true
+  disable-control-panel: false
+api-keys:
+  - user-key
+`
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/config.yaml", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/yaml")
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+
+	getResp := httptest.NewRecorder()
+	getReq := httptest.NewRequest(http.MethodGet, "/config", nil)
+	engine.ServeHTTP(getResp, getReq)
+	if getResp.Code != http.StatusOK {
+		t.Fatalf("get status = %d, body = %s", getResp.Code, getResp.Body.String())
+	}
+
+	var cfg map[string]any
+	if errDecode := json.Unmarshal(getResp.Body.Bytes(), &cfg); errDecode != nil {
+		t.Fatalf("decode config: %v", errDecode)
+	}
+	if cfg["usage-statistics-enabled"] != true {
+		t.Fatalf("usage-statistics-enabled = %v, want true", cfg["usage-statistics-enabled"])
+	}
+	if cfg["disable-cooling"] != true {
+		t.Fatalf("disable-cooling = %v, want true", cfg["disable-cooling"])
+	}
+	if cfg["ws-auth"] != false {
+		t.Fatalf("ws-auth = %v, want false", cfg["ws-auth"])
+	}
+	if cfg["enable-gemini-cli-endpoint"] != false {
+		t.Fatalf("enable-gemini-cli-endpoint = %v, want false", cfg["enable-gemini-cli-endpoint"])
+	}
+	if keys, ok := cfg["api-keys"]; ok && keys != nil {
+		t.Fatalf("api-keys = %v, want nil or omitted from runtime config", keys)
+	}
+	yamlResp := httptest.NewRecorder()
+	yamlReq := httptest.NewRequest(http.MethodGet, "/config.yaml", nil)
+	engine.ServeHTTP(yamlResp, yamlReq)
+	if yamlResp.Code != http.StatusOK {
+		t.Fatalf("yaml status = %d, body = %s", yamlResp.Code, yamlResp.Body.String())
+	}
+	if !strings.Contains(yamlResp.Body.String(), "allow-remote: false") {
+		t.Fatalf("config yaml = %s, want allow-remote forced false", yamlResp.Body.String())
+	}
+	if !strings.Contains(yamlResp.Body.String(), "disable-control-panel: true") {
+		t.Fatalf("config yaml = %s, want disable-control-panel forced true", yamlResp.Body.String())
+	}
+}
+
+func TestPutUsageStatisticsEnabledRejectsDisable(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	handler := NewHandler(cluster.NewRepository(db), nil, "127.0.0.1", 0)
+	engine := gin.New()
+	engine.PUT("/usage-statistics-enabled", handler.PutUsageStatisticsEnabled)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/usage-statistics-enabled", strings.NewReader(`{"value": false}`))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+}

@@ -162,7 +162,18 @@ func (h *Handler) GetUsageStatisticsEnabled(c *gin.Context) {
 
 // PutUsageStatisticsEnabled replaces an usage statistics enabled.
 func (h *Handler) PutUsageStatisticsEnabled(c *gin.Context) {
-	h.updateBoolConfigField(c, "usage-statistics-enabled", func(cfg *appconfig.Config, value bool) { cfg.UsageStatisticsEnabled = value })
+	var body struct {
+		Value *bool `json:"value"`
+	}
+	if errBindJSON := c.ShouldBindJSON(&body); errBindJSON != nil || body.Value == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	if !*body.Value {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "usage statistics must remain enabled in home mode"})
+		return
+	}
+	h.updateBoolConfigField(c, "usage-statistics-enabled", func(cfg *appconfig.Config, value bool) { cfg.UsageStatisticsEnabled = true })
 }
 
 // GetLoggingToFile returns a logging to file.

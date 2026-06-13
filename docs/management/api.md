@@ -2651,9 +2651,9 @@ These fields are accepted by Home YAML config. `PUT /config.yaml` accepts non-cr
 | `logging-to-file` | boolean | Writes app logs to files instead of stdout. |
 | `logs-max-total-size-mb` | integer | Total log file size limit in MB; `0` disables cleanup. |
 | `error-logs-max-files` | integer | Retained request error log file count. |
-| `usage-statistics-enabled` | boolean | Enables in-memory usage aggregation. |
+| `usage-statistics-enabled` | boolean | Enables in-memory usage aggregation. Home forces this to `true` for downstream CPA nodes and rejects disabling it through Management API updates. |
 | `redis-usage-queue-retention-seconds` | integer | Usage queue retention window. Default `60`, max `3600`. |
-| `disable-cooling` | boolean | Globally disables quota cooldown scheduling. |
+| `disable-cooling` | boolean | Globally disables quota cooldown scheduling. Home forces this to `true` for downstream CPA nodes. |
 | `auth-auto-refresh-workers` | integer | Overrides auth auto-refresh worker count. |
 | `request-retry` | integer | Failed request retry count. |
 | `max-retry-credentials` | integer | Max credentials to try per failed request; `<=0` means all available. |

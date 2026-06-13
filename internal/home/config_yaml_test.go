@@ -59,6 +59,10 @@ oauth-excluded-models:
 
 	assertContains("host:")
 	assertContains("port:")
+	assertContains("usage-statistics-enabled: true")
+	assertContains("disable-cooling: true")
+	assertContains("ws-auth: false")
+	assertContains("enable-gemini-cli-endpoint: false")
 
 	assertNotContains("tls:")
 	assertNotContains("remote-management:")

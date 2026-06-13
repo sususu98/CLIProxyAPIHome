@@ -2651,9 +2651,9 @@ DELETE query：
 | `logging-to-file` | boolean | 将 app logs 写入文件而非 stdout。 |
 | `logs-max-total-size-mb` | integer | 日志文件总大小上限；`0` 禁用清理。 |
 | `error-logs-max-files` | integer | request error log 文件保留数量。 |
-| `usage-statistics-enabled` | boolean | 启用内存 usage aggregation。 |
+| `usage-statistics-enabled` | boolean | 启用内存 usage aggregation。Home 会向下游 CPA 强制为 `true`，并拒绝通过 Management API 关闭。 |
 | `redis-usage-queue-retention-seconds` | integer | Usage queue 保留窗口；默认 `60`，最大 `3600`。 |
-| `disable-cooling` | boolean | 全局禁用 quota cooldown scheduling。 |
+| `disable-cooling` | boolean | 全局禁用 quota cooldown scheduling。Home 会向下游 CPA 强制为 `true`。 |
 | `auth-auto-refresh-workers` | integer | 覆盖 auth auto-refresh worker 数量。 |
 | `request-retry` | integer | 失败请求重试次数。 |
 | `max-retry-credentials` | integer | 一个失败请求最多尝试的凭证数量；`<=0` 表示所有可用凭证。 |

@@ -53,6 +53,7 @@ func (h *Handler) GetConfigYAML(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "auth_load_failed", errCredential)
 		return
 	}
+	appconfig.ApplyDownstreamHomeModeRoot(root)
 	data, errMarshal := yaml.Marshal(root)
 	if errMarshal != nil {
 		respondError(c, http.StatusInternalServerError, "config_marshal_failed", errMarshal)
@@ -78,6 +79,7 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		return
 	}
 	root := configRootWithoutCredentials(fullRoot)
+	appconfig.ApplyDownstreamHomeModeRoot(root)
 	if _, errConfig := configFromRoot(root); errConfig != nil {
 		respondError(c, http.StatusUnprocessableEntity, "invalid_config", errConfig)
 		return

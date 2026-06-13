@@ -9,6 +9,8 @@ import (
 	"sync"
 
 	"gopkg.in/yaml.v3"
+
+	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
 )
 
 // ConfigPath handles a config path.
@@ -123,15 +125,15 @@ func sanitizeConfigYAMLForDownstream(payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("home runtime: config is empty")
 	}
 
-	var root yaml.Node
-	if errUnmarshal := yaml.Unmarshal(payload, &root); errUnmarshal != nil {
+	var yamlRoot yaml.Node
+	if errUnmarshal := yaml.Unmarshal(payload, &yamlRoot); errUnmarshal != nil {
 		return nil, fmt.Errorf("home runtime: unmarshal config: %w", errUnmarshal)
 	}
-	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 || root.Content[0] == nil {
+	if yamlRoot.Kind != yaml.DocumentNode || len(yamlRoot.Content) == 0 || yamlRoot.Content[0] == nil {
 		return nil, fmt.Errorf("home runtime: invalid config yaml document")
 	}
 
-	doc := root.Content[0]
+	doc := yamlRoot.Content[0]
 	removeConfigKeysForDownstream(doc, []string{
 		"remote-management",
 		"api-keys",
@@ -145,12 +147,12 @@ func sanitizeConfigYAMLForDownstream(payload []byte) ([]byte, error) {
 		"oauth-model-alias",
 		"oauth-excluded-models",
 	})
-	stripYAMLComments(&root)
+	stripYAMLComments(&yamlRoot)
 
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
-	if errEncode := enc.Encode(&root); errEncode != nil {
+	if errEncode := enc.Encode(&yamlRoot); errEncode != nil {
 		_ = enc.Close()
 		return nil, fmt.Errorf("home runtime: marshal config: %w", errEncode)
 	}
@@ -162,7 +164,22 @@ func sanitizeConfigYAMLForDownstream(payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("home runtime: config is empty")
 	}
 	out = append(out, '\n')
-	return out, nil
+
+	var root map[string]any
+	if errUnmarshalRoot := yaml.Unmarshal(out, &root); errUnmarshalRoot != nil {
+		return nil, fmt.Errorf("home runtime: unmarshal downstream config root: %w", errUnmarshalRoot)
+	}
+	appconfig.ApplyDownstreamHomeModeYAMLScalars(root)
+	forced, errMarshalRoot := yaml.Marshal(root)
+	if errMarshalRoot != nil {
+		return nil, fmt.Errorf("home runtime: marshal downstream config root: %w", errMarshalRoot)
+	}
+	forced = bytes.TrimSpace(forced)
+	if len(forced) == 0 {
+		return nil, fmt.Errorf("home runtime: config is empty")
+	}
+	forced = append(forced, '\n')
+	return forced, nil
 }
 
 // removeConfigKeysForDownstream removes a config keys for downstream.

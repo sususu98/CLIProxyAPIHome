@@ -87,6 +87,7 @@ func RuntimeConfigFromRoot(root map[string]any) (*appconfig.Config, []byte, erro
 	if cfg.RemoteManagement.PanelGitHubRepository == "" {
 		cfg.RemoteManagement.PanelGitHubRepository = appconfig.DefaultPanelGitHubRepository
 	}
+	appconfig.ForceDownstreamHomeModeConfig(cfg)
 	return cfg, data, nil
 }
 

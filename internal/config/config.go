@@ -77,6 +77,9 @@ type Config struct {
 	// DisableCooling disables quota cooldown scheduling when true.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
 
+	// WebsocketAuth enables or disables authentication for the WebSocket API.
+	WebsocketAuth bool `yaml:"ws-auth" json:"ws-auth"`
+
 	// AuthAutoRefreshWorkers overrides the size of the core auth auto-refresh worker pool.
 	// When <= 0, the default worker count is used.
 	AuthAutoRefreshWorkers int `yaml:"auth-auto-refresh-workers" json:"auth-auto-refresh-workers"`
@@ -716,6 +719,8 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	// Validate raw payload rules and drop invalid entries.
 	cfg.SanitizePayloadRules()
+
+	ForceDownstreamHomeModeConfig(&cfg)
 
 	// Return the populated configuration struct.
 	return &cfg, nil
