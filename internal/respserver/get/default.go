@@ -96,7 +96,9 @@ func looksLikeJSONObject(value string) bool {
 	return len(value) >= 2 && value[0] == '{' && value[len(value)-1] == '}'
 }
 
-// buildAuthErrorJSON renders an access error as the standard {error:{type,message}} envelope.
+// buildAuthErrorJSON renders an access error as the standard {error:{type,message}} envelope,
+// preserving the structured access error code (e.g. no_credentials, invalid_credential) so the
+// downstream proxy can map it to the correct HTTP status.
 func buildAuthErrorJSON(authErr *access.AuthError) string {
 	errorType := string(access.AuthErrorCodeInternal)
 	message := "authentication error"

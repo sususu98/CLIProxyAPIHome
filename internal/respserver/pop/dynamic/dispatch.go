@@ -162,15 +162,7 @@ func dispatchRequest(ctx context.Context, env dispatch.Env, args []string) (*hom
 	}
 	authRes, authErr := env.Runtime.Authenticate(ctx, headers)
 	if authErr != nil {
-		if access.IsAuthErrorCode(authErr, access.AuthErrorCodeNoCredentials) {
-			reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageMissingRequiredCredentialHeaders)))
-			return nil, "", &reply
-		}
-		if access.IsAuthErrorCode(authErr, access.AuthErrorCodeInvalidCredential) {
-			reply := dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageInvalidAPIKey)))
-			return nil, "", &reply
-		}
-		reply := dispatch.BulkString([]byte(buildErrorJSON(authErr.Error())))
+		reply := dispatch.BulkString([]byte(buildAuthErrorJSON(authErr)))
 		return nil, "", &reply
 	}
 
@@ -347,5 +339,25 @@ func buildErrorJSON(message string) string {
 	out := "{}"
 	out, _ = sjson.Set(out, "error.type", errorType)
 	out, _ = sjson.Set(out, "error.message", errorMessage)
+	return out
+}
+
+// buildAuthErrorJSON renders an access error as the standard {error:{type,message}} envelope,
+// preserving the structured access error code (e.g. no_credentials, invalid_credential) so the
+// downstream proxy can map it to the correct HTTP status.
+func buildAuthErrorJSON(authErr *access.AuthError) string {
+	errorType := string(access.AuthErrorCodeInternal)
+	message := "authentication error"
+	if authErr != nil {
+		if code := strings.TrimSpace(string(authErr.Code)); code != "" {
+			errorType = code
+		}
+		if msg := strings.TrimSpace(authErr.Message); msg != "" {
+			message = msg
+		}
+	}
+	out := "{}"
+	out, _ = sjson.Set(out, "error.type", errorType)
+	out, _ = sjson.Set(out, "error.message", message)
 	return out
 }
