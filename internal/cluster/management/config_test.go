@@ -193,7 +193,7 @@ func stringSliceContains(values []string, target string) bool {
 	return false
 }
 
-func TestPutConfigYAMLForcesDownstreamHomeModeFields(t *testing.T) {
+func TestPutConfigYAMLForcesHomeModeScalarsAndPreservesRemoteManagement(t *testing.T) {
 	db, cleanup := openManagementLogTestDB(t)
 	defer cleanup()
 
@@ -247,8 +247,12 @@ api-keys:
 	if cfg["enable-gemini-cli-endpoint"] != false {
 		t.Fatalf("enable-gemini-cli-endpoint = %v, want false", cfg["enable-gemini-cli-endpoint"])
 	}
-	if keys, ok := cfg["api-keys"]; ok && keys != nil {
-		t.Fatalf("api-keys = %v, want nil or omitted from runtime config", keys)
+	entries, errEntries := repo.ListAPIKeyEntries(context.Background())
+	if errEntries != nil {
+		t.Fatalf("ListAPIKeyEntries() error = %v", errEntries)
+	}
+	if len(entries) != 1 || entries[0].APIKey != "user-key" {
+		t.Fatalf("api key entries = %+v, want user-key preserved", entries)
 	}
 	yamlResp := httptest.NewRecorder()
 	yamlReq := httptest.NewRequest(http.MethodGet, "/config.yaml", nil)
@@ -256,11 +260,11 @@ api-keys:
 	if yamlResp.Code != http.StatusOK {
 		t.Fatalf("yaml status = %d, body = %s", yamlResp.Code, yamlResp.Body.String())
 	}
-	if !strings.Contains(yamlResp.Body.String(), "allow-remote: false") {
-		t.Fatalf("config yaml = %s, want allow-remote forced false", yamlResp.Body.String())
+	if !strings.Contains(yamlResp.Body.String(), "allow-remote: true") {
+		t.Fatalf("config yaml = %s, want allow-remote preserved true", yamlResp.Body.String())
 	}
-	if !strings.Contains(yamlResp.Body.String(), "disable-control-panel: true") {
-		t.Fatalf("config yaml = %s, want disable-control-panel forced true", yamlResp.Body.String())
+	if !strings.Contains(yamlResp.Body.String(), "disable-control-panel: false") {
+		t.Fatalf("config yaml = %s, want disable-control-panel preserved false", yamlResp.Body.String())
 	}
 }
 
