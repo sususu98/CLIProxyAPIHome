@@ -24,6 +24,16 @@ func handleDefault(ctx context.Context, env dispatch.Env, args []string) dispatc
 	}
 
 	jsonArg := strings.TrimSpace(args[1])
+	if !looksLikeJSONObject(jsonArg) {
+		value, found, errGet := env.Runtime.KVGet(ctx, args[1])
+		if errGet != nil {
+			return dispatch.Err(errGet.Error())
+		}
+		if !found {
+			return dispatch.BulkString(nil)
+		}
+		return dispatch.BulkString(value)
+	}
 	if jsonArg == "" || !gjson.Valid(jsonArg) {
 		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageInvalidRequestJSON)))
 	}
@@ -45,6 +55,11 @@ func handleDefault(ctx context.Context, env dispatch.Env, args []string) dispatc
 		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageAuthNotFound)))
 	}
 	return dispatch.BulkString(payload)
+}
+
+func looksLikeJSONObject(value string) bool {
+	value = strings.TrimSpace(value)
+	return len(value) >= 2 && value[0] == '{' && value[len(value)-1] == '}'
 }
 
 // buildErrorJSON builds an error json.

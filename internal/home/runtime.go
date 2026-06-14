@@ -68,6 +68,23 @@ type appLogStore interface {
 	StoreAppLogPayload(ctx context.Context, clientIP string, payload string) error
 }
 
+type KVGetResult struct {
+	Value []byte
+	Found bool
+}
+
+type kvStore interface {
+	KVGet(ctx context.Context, key string) ([]byte, bool, error)
+	KVSet(ctx context.Context, key string, value []byte, ttl time.Duration, mode string) (bool, error)
+	KVDel(ctx context.Context, keys []string) (int64, error)
+	KVExpire(ctx context.Context, key string, ttl time.Duration) (bool, error)
+	KVTTL(ctx context.Context, key string) (int64, error)
+	KVIncrBy(ctx context.Context, key string, delta int64) (int64, error)
+	KVMGet(ctx context.Context, keys []string) ([]KVGetResult, error)
+	KVMSet(ctx context.Context, pairs map[string][]byte) error
+	KVPurgeExpired(ctx context.Context, now time.Time, limit int) (int64, error)
+}
+
 type channelScopedAuthStore interface {
 	AllowedAuthIDsForAPIKey(ctx context.Context, apiKey string) ([]string, error)
 }
@@ -175,6 +192,7 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	r.startClusterUsageWriter(runCtx)
+	r.startKVCleanupLoop(runCtx)
 
 	if !r.clusterAutoRefreshGated() && strings.TrimSpace(r.authDir) != "" {
 		if errEnsureAuthDir := os.MkdirAll(r.authDir, 0o755); errEnsureAuthDir != nil {
@@ -343,6 +361,122 @@ func (r *Runtime) PersistAppLogPayload(ctx context.Context, clientIP string, pay
 		return false, fmt.Errorf("app log store is unavailable")
 	}
 	return true, store.StoreAppLogPayload(ctx, clientIP, payload)
+}
+
+// KVGet returns an active KV value from the cluster store.
+func (r *Runtime) KVGet(ctx context.Context, key string) ([]byte, bool, error) {
+	store, errStore := r.kvStore()
+	if errStore != nil {
+		return nil, false, errStore
+	}
+	return store.KVGet(ctx, key)
+}
+
+// KVSet writes a KV value to the cluster store.
+func (r *Runtime) KVSet(ctx context.Context, key string, value []byte, ttl time.Duration, mode string) (bool, error) {
+	store, errStore := r.kvStore()
+	if errStore != nil {
+		return false, errStore
+	}
+	return store.KVSet(ctx, key, value, ttl, mode)
+}
+
+// KVDel deletes active KV values from the cluster store.
+func (r *Runtime) KVDel(ctx context.Context, keys []string) (int64, error) {
+	store, errStore := r.kvStore()
+	if errStore != nil {
+		return 0, errStore
+	}
+	return store.KVDel(ctx, keys)
+}
+
+// KVExpire updates a KV value TTL in the cluster store.
+func (r *Runtime) KVExpire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	store, errStore := r.kvStore()
+	if errStore != nil {
+		return false, errStore
+	}
+	return store.KVExpire(ctx, key, ttl)
+}
+
+// KVTTL returns a Redis-compatible KV TTL from the cluster store.
+func (r *Runtime) KVTTL(ctx context.Context, key string) (int64, error) {
+	store, errStore := r.kvStore()
+	if errStore != nil {
+		return 0, errStore
+	}
+	return store.KVTTL(ctx, key)
+}
+
+// KVIncrBy increments a KV integer in the cluster store.
+func (r *Runtime) KVIncrBy(ctx context.Context, key string, delta int64) (int64, error) {
+	store, errStore := r.kvStore()
+	if errStore != nil {
+		return 0, errStore
+	}
+	return store.KVIncrBy(ctx, key, delta)
+}
+
+// KVMGet returns KV values in request order from the cluster store.
+func (r *Runtime) KVMGet(ctx context.Context, keys []string) ([]KVGetResult, error) {
+	store, errStore := r.kvStore()
+	if errStore != nil {
+		return nil, errStore
+	}
+	return store.KVMGet(ctx, keys)
+}
+
+// KVMSet atomically writes KV values to the cluster store.
+func (r *Runtime) KVMSet(ctx context.Context, pairs map[string][]byte) error {
+	store, errStore := r.kvStore()
+	if errStore != nil {
+		return errStore
+	}
+	return store.KVMSet(ctx, pairs)
+}
+
+func (r *Runtime) kvStore() (kvStore, error) {
+	if r == nil || r.clusterAdapter == nil || !r.clusterAdapter.Enabled() {
+		return nil, fmt.Errorf("kv store unavailable")
+	}
+	store, ok := r.clusterAdapter.(kvStore)
+	if !ok || store == nil {
+		return nil, fmt.Errorf("kv store unavailable")
+	}
+	return store, nil
+}
+
+func (r *Runtime) startKVCleanupLoop(ctx context.Context) {
+	store, errStore := r.kvStore()
+	if errStore != nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go r.runKVCleanupLoop(ctx, store)
+}
+
+func (r *Runtime) runKVCleanupLoop(ctx context.Context, store kvStore) {
+	if store == nil {
+		return
+	}
+	purge := func() {
+		if _, errPurge := store.KVPurgeExpired(ctx, time.Now().UTC(), 1000); errPurge != nil {
+			log.Errorf("kv store purge error: %v", errPurge)
+		}
+	}
+	purge()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			purge()
+		}
+	}
 }
 
 // BuildRefreshPayload builds a build refresh payload.

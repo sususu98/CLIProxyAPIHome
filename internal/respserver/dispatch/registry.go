@@ -274,6 +274,10 @@ func (r *Registry) Execute(ctx context.Context, env Env, args []string) Reply {
 		return Err("unsupported type")
 	}
 
+	if directDefault := r.directDefaultHandlers[command]; directDefault != nil {
+		return directDefault(ctx, env, args)
+	}
+
 	return RedisError(fmt.Sprintf("ERR unknown command '%s'", strings.ToLower(command)))
 }
 

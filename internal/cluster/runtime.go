@@ -7,8 +7,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"gorm.io/gorm"
 )
 
@@ -102,6 +104,86 @@ func (a *RuntimeAdapter) StoreAppLogPayload(ctx context.Context, clientIP string
 	}
 	_, errAppend := a.repo.AppendAppLog(ctx, clientIP, a.homeIP, payload)
 	return errAppend
+}
+
+// KVGet returns an active KV value.
+func (a *RuntimeAdapter) KVGet(ctx context.Context, key string) ([]byte, bool, error) {
+	if !a.Enabled() {
+		return nil, false, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.KVGet(ctx, key)
+}
+
+// KVSet writes a KV value.
+func (a *RuntimeAdapter) KVSet(ctx context.Context, key string, value []byte, ttl time.Duration, mode string) (bool, error) {
+	if !a.Enabled() {
+		return false, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.KVSet(ctx, key, value, ttl, KVSetMode(strings.ToLower(strings.TrimSpace(mode))))
+}
+
+// KVDel deletes active KV values.
+func (a *RuntimeAdapter) KVDel(ctx context.Context, keys []string) (int64, error) {
+	if !a.Enabled() {
+		return 0, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.KVDel(ctx, keys)
+}
+
+// KVExpire updates a KV TTL.
+func (a *RuntimeAdapter) KVExpire(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	if !a.Enabled() {
+		return false, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.KVExpire(ctx, key, ttl)
+}
+
+// KVTTL returns a Redis-compatible KV TTL.
+func (a *RuntimeAdapter) KVTTL(ctx context.Context, key string) (int64, error) {
+	if !a.Enabled() {
+		return 0, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.KVTTL(ctx, key)
+}
+
+// KVIncrBy increments a KV integer.
+func (a *RuntimeAdapter) KVIncrBy(ctx context.Context, key string, delta int64) (int64, error) {
+	if !a.Enabled() {
+		return 0, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.KVIncrBy(ctx, key, delta)
+}
+
+// KVMGet returns KV values in request order.
+func (a *RuntimeAdapter) KVMGet(ctx context.Context, keys []string) ([]home.KVGetResult, error) {
+	if !a.Enabled() {
+		return nil, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	results, errMGet := a.repo.KVMGet(ctx, keys)
+	if errMGet != nil {
+		return nil, errMGet
+	}
+	out := make([]home.KVGetResult, 0, len(results))
+	for _, result := range results {
+		out = append(out, home.KVGetResult{Value: result.Value, Found: result.Found})
+	}
+	return out, nil
+}
+
+// KVMSet atomically writes KV values.
+func (a *RuntimeAdapter) KVMSet(ctx context.Context, pairs map[string][]byte) error {
+	if !a.Enabled() {
+		return fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.KVMSet(ctx, pairs)
+}
+
+// KVPurgeExpired deletes expired KV rows.
+func (a *RuntimeAdapter) KVPurgeExpired(ctx context.Context, now time.Time, limit int) (int64, error) {
+	if !a.Enabled() {
+		return 0, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.KVPurgeExpired(ctx, now, limit)
 }
 
 // AllowedAuthIDsForAPIKey returns auth IDs allowed by API-key channel bindings.

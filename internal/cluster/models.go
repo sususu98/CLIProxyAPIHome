@@ -130,6 +130,20 @@ func (ConfigRecord) TableName() string {
 	return "config"
 }
 
+type KVRecord struct {
+	Key       string     `gorm:"column:key;primaryKey"`
+	Value     []byte     `gorm:"column:value;not null"`
+	Version   int64      `gorm:"column:version;not null;default:1"`
+	ExpiresAt *time.Time `gorm:"column:expires_at;index"`
+	CreatedAt time.Time  `gorm:"column:created_at"`
+	UpdatedAt time.Time  `gorm:"column:updated_at"`
+}
+
+// TableName returns the database table name.
+func (KVRecord) TableName() string {
+	return "kv_store"
+}
+
 type UserRecord struct {
 	ID        uint           `gorm:"column:id;primaryKey;autoIncrement;index:idx_user_active_order,priority:2"`
 	Username  string         `gorm:"column:username;not null;index;index:idx_user_username_active,priority:1"`
