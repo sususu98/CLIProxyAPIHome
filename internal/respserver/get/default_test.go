@@ -2,6 +2,7 @@ package get
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -88,5 +89,45 @@ func TestHandleDefaultGETJSONErrorsRemainJSON(t *testing.T) {
 	invalid := handleDefault(context.Background(), dispatch.Env{Runtime: rt}, []string{"GET", `{bad}`})
 	if invalid.Kind != dispatch.ReplyKindBulkString || !strings.Contains(strings.ToLower(gjson.GetBytes(invalid.BulkString, "error.message").String()), "invalid") {
 		t.Fatalf("handleDefault(invalid) = %#v, want invalid request JSON error", invalid)
+	}
+}
+
+func TestHandleDefaultModelsRejectsBadCredentials(t *testing.T) {
+	// The models branch must route through AuthenticateHTTPRequest, so requests
+	// without a valid credential surface an auth error instead of model data.
+	rt := newGetTestRuntime(t)
+
+	cases := []struct {
+		name      string
+		payload   string
+		wantError string
+	}{
+		{"missing", `{"type":"models"}`, "no_credentials"},
+		{"invalid", `{"type":"models","headers":{"x-api-key":"missing-client-key"}}`, "invalid_credential"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reply := handleDefault(context.Background(), dispatch.Env{Runtime: rt}, []string{"GET", tc.payload})
+			if reply.Kind != dispatch.ReplyKindBulkString {
+				t.Fatalf("reply kind = %v, want bulk string", reply.Kind)
+			}
+
+			var got struct {
+				Error *struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if errUnmarshal := json.Unmarshal(reply.BulkString, &got); errUnmarshal != nil {
+				t.Fatalf("unmarshal response: %v; body=%s", errUnmarshal, string(reply.BulkString))
+			}
+			if got.Error == nil {
+				t.Fatalf("error = nil, want %q; body=%s", tc.wantError, string(reply.BulkString))
+			}
+			if got.Error.Type != tc.wantError {
+				t.Fatalf("error.type = %q, want %q; body=%s", got.Error.Type, tc.wantError, string(reply.BulkString))
+			}
+		})
 	}
 }

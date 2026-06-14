@@ -2,13 +2,18 @@ package get
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPIHome/internal/access"
 	homeerrors "github.com/router-for-me/CLIProxyAPIHome/internal/errors"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
+
+var errRuntimeNotReady = errors.New("runtime not ready")
 
 // handleDefault handles a default.
 func handleDefault(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
@@ -38,10 +43,39 @@ func handleDefault(ctx context.Context, env dispatch.Env, args []string) dispatc
 		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageInvalidRequestJSON)))
 	}
 	typeValue := strings.ToLower(strings.TrimSpace(gjson.Get(jsonArg, "type").String()))
-	if typeValue != "refresh" {
+
+	switch typeValue {
+	case "models":
+		return handleDefaultModels(ctx, env, jsonArg)
+	case "refresh":
+		return handleDefaultRefresh(ctx, env, jsonArg)
+	default:
 		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageUnsupportedType)))
 	}
+}
 
+// handleDefaultModels authenticates the downstream client and returns the models payload.
+func handleDefaultModels(ctx context.Context, env dispatch.Env, jsonArg string) dispatch.Reply {
+	req, errReq := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/", nil)
+	if errReq != nil {
+		return dispatch.BulkString([]byte(buildErrorJSON(errReq.Error())))
+	}
+	req.Header = parseHeaders(jsonArg)
+	req.URL.RawQuery = parseQuery(jsonArg).Encode()
+
+	if _, authErr := env.Runtime.AuthenticateHTTPRequest(ctx, req); authErr != nil {
+		return dispatch.BulkString([]byte(buildAuthErrorJSON(authErr)))
+	}
+
+	payload, errBuild := buildModelsJSON(env)
+	if errBuild != nil {
+		return dispatch.BulkString([]byte(buildErrorJSON(errBuild.Error())))
+	}
+	return dispatch.BulkString([]byte(payload))
+}
+
+// handleDefaultRefresh handles a refresh.
+func handleDefaultRefresh(ctx context.Context, env dispatch.Env, jsonArg string) dispatch.Reply {
 	authIndex := strings.TrimSpace(gjson.Get(jsonArg, "auth_index").String())
 	if authIndex == "" {
 		return dispatch.BulkString([]byte(buildErrorJSON(homeerrors.MessageMissingAuthIndex)))
@@ -62,7 +96,25 @@ func looksLikeJSONObject(value string) bool {
 	return len(value) >= 2 && value[0] == '{' && value[len(value)-1] == '}'
 }
 
-// buildErrorJSON builds an error json.
+// buildAuthErrorJSON renders an access error as the standard {error:{type,message}} envelope.
+func buildAuthErrorJSON(authErr *access.AuthError) string {
+	errorType := string(access.AuthErrorCodeInternal)
+	message := "authentication error"
+	if authErr != nil {
+		if code := strings.TrimSpace(string(authErr.Code)); code != "" {
+			errorType = code
+		}
+		if msg := strings.TrimSpace(authErr.Message); msg != "" {
+			message = msg
+		}
+	}
+	out := "{}"
+	out, _ = sjson.Set(out, "error.type", errorType)
+	out, _ = sjson.Set(out, "error.message", message)
+	return out
+}
+
+// buildErrorJSON builds a error json.
 func buildErrorJSON(message string) string {
 	errorType, errorMessage := homeerrors.SplitRedisErrorMessage(message)
 	out := "{}"

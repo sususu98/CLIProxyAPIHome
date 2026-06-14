@@ -24,6 +24,20 @@ func handleModels(ctx context.Context, env dispatch.Env, args []string) dispatch
 		return dispatch.Err("runtime not ready")
 	}
 
+	payload, errBuild := buildModelsJSON(env)
+	if errBuild != nil {
+		return dispatch.Err(errBuild.Error())
+	}
+	return dispatch.BulkString([]byte(payload))
+}
+
+// buildModelsJSON assembles the models payload grouped by provider bucket.
+// Authentication is the caller's responsibility.
+func buildModelsJSON(env dispatch.Env) (string, error) {
+	if env.Runtime == nil || env.Runtime.CoreManager() == nil {
+		return "", errRuntimeNotReady
+	}
+
 	resolveGroupKey := func(auth *coreauth.Auth) string {
 		if auth == nil {
 			return ""
@@ -118,5 +132,5 @@ func handleModels(ctx context.Context, env dispatch.Env, args []string) dispatch
 		})
 		out, _ = sjson.Set(out, key, models)
 	}
-	return dispatch.BulkString([]byte(out))
+	return out, nil
 }
