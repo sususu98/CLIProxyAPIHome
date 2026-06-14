@@ -56,70 +56,33 @@ func (p *provider) Identifier() string {
 
 // Authenticate validates request credentials and returns the access result.
 func (p *provider) Authenticate(_ context.Context, r *http.Request) (*access.Result, *access.AuthError) {
-	// Normalize auth state before updating runtime indexes.
 	if p == nil {
 		return nil, access.NewNotHandledError()
 	}
 	if len(p.keys) == 0 {
 		return nil, access.NewNotHandledError()
 	}
-	authHeader := r.Header.Get("Authorization")
-	authHeaderGoogle := r.Header.Get("X-Goog-Api-Key")
-	authHeaderAnthropic := r.Header.Get("X-Api-Key")
-	queryKey := ""
-	queryAuthToken := ""
-	if r.URL != nil {
-		queryKey = r.URL.Query().Get("key")
-		queryAuthToken = r.URL.Query().Get("auth_token")
-	}
-	if authHeader == "" && authHeaderGoogle == "" && authHeaderAnthropic == "" && queryKey == "" && queryAuthToken == "" {
+	candidates, ok := access.CredentialCandidatesFromRequest(r)
+	if !ok {
 		return nil, access.NewNoCredentialsError()
 	}
 
-	apiKey := extractBearerToken(authHeader)
-
-	candidates := []struct {
-		value  string
-		source string
-	}{
-		{apiKey, "authorization"},
-		{authHeaderGoogle, "x-goog-api-key"},
-		{authHeaderAnthropic, "x-api-key"},
-		{queryKey, "query-key"},
-		{queryAuthToken, "query-auth-token"},
-	}
-
 	for _, candidate := range candidates {
-		if candidate.value == "" {
+		if candidate.Value == "" {
 			continue
 		}
-		if _, ok := p.keys[candidate.value]; ok {
+		if _, ok := p.keys[candidate.Value]; ok {
 			return &access.Result{
 				Provider:  p.Identifier(),
-				Principal: candidate.value,
+				Principal: candidate.Value,
 				Metadata: map[string]string{
-					"source": candidate.source,
+					"source": candidate.Source,
 				},
 			}, nil
 		}
 	}
 
 	return nil, access.NewInvalidCredentialError()
-}
-
-// extractBearerToken extracts a bearer token.
-func extractBearerToken(header string) string {
-	if header == "" {
-		return ""
-	}
-	parts := strings.SplitN(header, " ", 2)
-	if len(parts) != 2 {
-		return header
-	}
-	if strings.ToLower(parts[0]) != "bearer" {
-		return header
-	}
-	return strings.TrimSpace(parts[1])
 }
 
 // normalizeKeys normalizes a keys.

@@ -128,6 +128,14 @@ func (a *RuntimeAdapter) AllowedModelIDsForAPIKey(ctx context.Context, apiKey st
 	return a.repo.AllowedModelIDsForAPIKey(ctx, apiKey)
 }
 
+// ValidateAPIKey reports whether an API key is active in the cluster database.
+func (a *RuntimeAdapter) ValidateAPIKey(ctx context.Context, apiKey string) (bool, error) {
+	if !a.Enabled() {
+		return false, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.ValidateAPIKey(ctx, apiKey)
+}
+
 // List returns the available entries.
 func (a *RuntimeAdapter) List(ctx context.Context) ([]*coreauth.Auth, error) {
 	if !a.Enabled() {

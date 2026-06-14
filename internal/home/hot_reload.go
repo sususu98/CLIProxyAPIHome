@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/router-for-me/CLIProxyAPIHome/internal/access"
 	configaccess "github.com/router-for-me/CLIProxyAPIHome/internal/access/config_access"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
@@ -97,9 +96,7 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 	}
 
 	configaccess.Register(&cfg.SDKConfig)
-	if r.accessManager != nil {
-		r.accessManager.SetProviders(access.RegisteredProviders())
-	}
+	r.refreshAccessProviders()
 
 	if !r.clusterAutoRefreshGated() && strings.TrimSpace(cfg.AuthDir) != "" {
 		if errEnsure := os.MkdirAll(cfg.AuthDir, 0o755); errEnsure != nil {

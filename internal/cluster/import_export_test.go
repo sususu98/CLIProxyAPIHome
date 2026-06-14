@@ -216,6 +216,7 @@ func TestExportLocalState_DefaultWritesConfigToCurrentDirAndAuthToHome(t *testin
 		t.Fatal(errMkdirAll)
 	}
 	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
 	t.Chdir(workDir)
 
 	db := openImportTestSQLite(t)

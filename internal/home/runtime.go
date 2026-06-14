@@ -108,15 +108,16 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 
 	accessManager := access.NewManager()
 	configaccess.Register(&cfg.SDKConfig)
-	accessManager.SetProviders(access.RegisteredProviders())
 
-	return &Runtime{
+	runtime := &Runtime{
 		cfg:           cfg,
 		authDir:       cfg.AuthDir,
 		accessManager: accessManager,
 		coreManager:   coreManager,
 		originalStore: store,
-	}, nil
+	}
+	runtime.refreshAccessProviders()
+	return runtime, nil
 }
 
 // SetClusterAdapter sets a cluster adapter.
@@ -125,6 +126,7 @@ func (r *Runtime) SetClusterAdapter(adapter ClusterAdapter) {
 		return
 	}
 	r.clusterAdapter = adapter
+	r.refreshAccessProviders()
 	if r.coreManager != nil {
 		if adapter != nil && adapter.Enabled() {
 			r.coreManager.SetFullAuthResolver(adapter)
@@ -376,6 +378,11 @@ func BuildRefreshPayload(updated *coreauth.Auth) ([]byte, error) {
 // Authenticate validates request credentials and returns the access result.
 func (r *Runtime) Authenticate(ctx context.Context, headers http.Header) (*access.Result, *access.AuthError) {
 	return r.authenticateRequest(ctx, headers)
+}
+
+// AuthenticateHTTPRequest validates request credentials from a complete HTTP request.
+func (r *Runtime) AuthenticateHTTPRequest(ctx context.Context, req *http.Request) (*access.Result, *access.AuthError) {
+	return r.authenticateHTTPRequest(ctx, req)
 }
 
 // ReloadAuths handles a reload auths.
@@ -703,10 +710,32 @@ func (r *Runtime) applyAuthFile(ctx context.Context, fullPath string, data []byt
 	}
 }
 
+func (r *Runtime) refreshAccessProviders() {
+	if r == nil || r.accessManager == nil {
+		return
+	}
+	providers := access.RegisteredProviders()
+	if provider := r.clusterAccessProvider(); provider != nil {
+		providers = append(providers, provider)
+	}
+	r.accessManager.SetProviders(providers)
+}
+
+func (r *Runtime) clusterAccessProvider() access.Provider {
+	if r == nil || r.clusterAdapter == nil || !r.clusterAdapter.Enabled() {
+		return nil
+	}
+	validator, ok := r.clusterAdapter.(apiKeyValidator)
+	if !ok || validator == nil {
+		return nil
+	}
+	return newClusterAPIKeyAccessProvider(validator)
+}
+
 // authenticateRequest handles an authenticate request.
 func (r *Runtime) authenticateRequest(ctx context.Context, headers http.Header) (*access.Result, *access.AuthError) {
 	if r == nil || r.accessManager == nil {
-		return nil, nil
+		return nil, access.NewNoCredentialsError()
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -720,5 +749,18 @@ func (r *Runtime) authenticateRequest(ctx context.Context, headers http.Header) 
 		req.Header = headers.Clone()
 	}
 
+	return r.authenticateHTTPRequest(ctx, req)
+}
+
+func (r *Runtime) authenticateHTTPRequest(ctx context.Context, req *http.Request) (*access.Result, *access.AuthError) {
+	if r == nil || r.accessManager == nil {
+		return nil, access.NewNoCredentialsError()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if req == nil {
+		return nil, access.NewNoCredentialsError()
+	}
 	return r.accessManager.Authenticate(ctx, req)
 }

@@ -80,6 +80,15 @@ func NewNotHandledError() *AuthError {
 	return newAuthError(AuthErrorCodeNotHandled, "authentication provider did not handle request", 0, nil)
 }
 
+// NewInternalAuthError creates an internal authentication error.
+func NewInternalAuthError(message string, cause error) *AuthError {
+	normalizedMessage := strings.TrimSpace(message)
+	if normalizedMessage == "" {
+		normalizedMessage = "Authentication service error"
+	}
+	return newAuthError(AuthErrorCodeInternal, normalizedMessage, http.StatusInternalServerError, cause)
+}
+
 // IsAuthErrorCode reports whether is auth error code.
 func IsAuthErrorCode(authErr *AuthError, code AuthErrorCode) bool {
 	if authErr == nil {

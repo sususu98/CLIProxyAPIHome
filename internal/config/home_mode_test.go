@@ -2,7 +2,7 @@ package config
 
 import "testing"
 
-func TestForceDownstreamHomeModeConfig(t *testing.T) {
+func TestForceDownstreamHomeModeConfigPreservesRemoteManagement(t *testing.T) {
 	cfg := &Config{}
 	cfg.APIKeys = []string{"local-key"}
 	cfg.UsageStatisticsEnabled = false
@@ -29,15 +29,15 @@ func TestForceDownstreamHomeModeConfig(t *testing.T) {
 	if cfg.EnableGeminiCLIEndpoint {
 		t.Fatal("EnableGeminiCLIEndpoint = true, want false")
 	}
-	if cfg.RemoteManagement.AllowRemote {
-		t.Fatal("RemoteManagement.AllowRemote = true, want false")
+	if !cfg.RemoteManagement.AllowRemote {
+		t.Fatal("RemoteManagement.AllowRemote = false, want preserved true")
 	}
-	if !cfg.RemoteManagement.DisableControlPanel {
-		t.Fatal("RemoteManagement.DisableControlPanel = false, want true")
+	if cfg.RemoteManagement.DisableControlPanel {
+		t.Fatal("RemoteManagement.DisableControlPanel = true, want preserved false")
 	}
 }
 
-func TestApplyDownstreamHomeModeRoot(t *testing.T) {
+func TestApplyDownstreamHomeModeScalarsPreservesRemoteManagement(t *testing.T) {
 	root := map[string]any{
 		"api-keys":                   []any{"local-key"},
 		"usage-statistics-enabled":   false,
@@ -49,10 +49,11 @@ func TestApplyDownstreamHomeModeRoot(t *testing.T) {
 		},
 	}
 
-	ApplyDownstreamHomeModeRoot(root)
+	ApplyDownstreamHomeModeScalars(root)
 
-	if _, ok := root["api-keys"]; ok {
-		t.Fatal("api-keys should be removed from downstream config root")
+	keys, ok := root["api-keys"].([]any)
+	if !ok || len(keys) != 1 || keys[0] != "local-key" {
+		t.Fatalf("api-keys = %v, want preserved local-key", root["api-keys"])
 	}
 	if root["usage-statistics-enabled"] != true {
 		t.Fatalf("usage-statistics-enabled = %v, want true", root["usage-statistics-enabled"])
@@ -70,23 +71,19 @@ func TestApplyDownstreamHomeModeRoot(t *testing.T) {
 	if !ok {
 		t.Fatalf("remote-management = %#v, want map", root["remote-management"])
 	}
-	if remoteManagement["allow-remote"] != false {
-		t.Fatalf("allow-remote = %v, want false", remoteManagement["allow-remote"])
+	if remoteManagement["allow-remote"] != true {
+		t.Fatalf("allow-remote = %v, want preserved true", remoteManagement["allow-remote"])
 	}
-	if remoteManagement["disable-control-panel"] != true {
-		t.Fatalf("disable-control-panel = %v, want true", remoteManagement["disable-control-panel"])
+	if remoteManagement["disable-control-panel"] != false {
+		t.Fatalf("disable-control-panel = %v, want preserved false", remoteManagement["disable-control-panel"])
 	}
 }
 
-func TestApplyDownstreamHomeModeYAMLScalars(t *testing.T) {
+func TestApplyDownstreamHomeModeScalarsDoesNotInjectRemoteManagement(t *testing.T) {
 	root := map[string]any{
-		"api-keys":                 []any{"local-key"},
 		"usage-statistics-enabled": false,
 	}
-	ApplyDownstreamHomeModeYAMLScalars(root)
-	if _, ok := root["api-keys"]; ok {
-		t.Fatal("api-keys should be removed from downstream yaml root")
-	}
+	ApplyDownstreamHomeModeScalars(root)
 	if root["usage-statistics-enabled"] != true {
 		t.Fatalf("usage-statistics-enabled = %v, want true", root["usage-statistics-enabled"])
 	}
