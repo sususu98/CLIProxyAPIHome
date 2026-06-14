@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/access"
@@ -15,7 +16,8 @@ import (
 )
 
 const (
-	typeAuth = "auth"
+	typeAuth         = "auth"
+	typeAuthValidate = "auth-validate"
 )
 
 // Register wires package handlers into the provided registry.
@@ -24,7 +26,62 @@ func Register(reg *dispatch.Registry) {
 		return
 	}
 	_ = reg.RegisterDynamic("RPOP", typeAuth, handleAuth)
+	_ = reg.RegisterDynamic("RPOP", typeAuthValidate, handleAuthValidate)
 	_ = reg.SetDynamicDefault("RPOP", handleAuth)
+}
+
+type authValidateResponse struct {
+	Authenticated bool               `json:"authenticated"`
+	Provider      string             `json:"provider,omitempty"`
+	Principal     string             `json:"principal,omitempty"`
+	Metadata      map[string]string  `json:"metadata,omitempty"`
+	Error         *authValidateError `json:"error,omitempty"`
+}
+
+type authValidateError struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// handleAuthValidate validates a downstream API key without dispatching auth.
+func handleAuthValidate(ctx context.Context, env dispatch.Env, args []string) dispatch.Reply {
+	if env.Runtime == nil {
+		return authValidateErrorReply("auth_unavailable", homeerrors.MessageRuntimeNotReady)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	jsonArg, ok := dispatch.ExtractJSONArgument(args, 1)
+	if !ok {
+		return authValidateErrorReply("invalid_request", homeerrors.MessageWrongNumberOfArgumentsRPOP)
+	}
+	jsonArg = strings.TrimSpace(jsonArg)
+	if jsonArg == "" || !gjson.Valid(jsonArg) {
+		return authValidateErrorReply("invalid_request", homeerrors.MessageInvalidRequestJSON)
+	}
+
+	req, errReq := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/", nil)
+	if errReq != nil {
+		return authValidateErrorReply(string(access.AuthErrorCodeInternal), errReq.Error())
+	}
+	req.Header = parseHeaders(jsonArg)
+	req.URL.RawQuery = parseQuery(jsonArg).Encode()
+
+	authRes, authErr := env.Runtime.AuthenticateHTTPRequest(ctx, req)
+	if authErr != nil {
+		return authValidateErrorReply(string(authErr.Code), authErr.Message)
+	}
+	if authRes == nil {
+		return authValidateErrorReply(string(access.AuthErrorCodeInvalidCredential), "Invalid API key")
+	}
+
+	return authValidateJSONReply(authValidateResponse{
+		Authenticated: true,
+		Provider:      strings.TrimSpace(authRes.Provider),
+		Principal:     strings.TrimSpace(authRes.Principal),
+		Metadata:      cloneMetadata(authRes.Metadata),
+	})
 }
 
 // handleAuth handles an auth.
@@ -201,6 +258,87 @@ func parseHeaders(jsonArg string) http.Header {
 		return true
 	})
 	return headers
+}
+
+func parseQuery(jsonArg string) url.Values {
+	queryObj := gjson.Get(jsonArg, "query")
+	query := url.Values{}
+	if !queryObj.Exists() || !queryObj.IsObject() {
+		return query
+	}
+
+	queryObj.ForEach(func(k, v gjson.Result) bool {
+		key := strings.TrimSpace(k.String())
+		if key == "" {
+			return true
+		}
+		if v.Type == gjson.String {
+			query.Add(key, v.String())
+			return true
+		}
+		if v.IsArray() {
+			v.ForEach(func(_, entry gjson.Result) bool {
+				if entry.Type == gjson.String {
+					query.Add(key, entry.String())
+					return true
+				}
+				if entry.Type != gjson.Null {
+					query.Add(key, entry.String())
+				}
+				return true
+			})
+			return true
+		}
+		if v.Type != gjson.Null {
+			query.Add(key, v.String())
+		}
+		return true
+	})
+	return query
+}
+
+func cloneMetadata(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = strings.TrimSpace(value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func authValidateErrorReply(errorType string, message string) dispatch.Reply {
+	errorType = strings.TrimSpace(errorType)
+	if errorType == "" {
+		errorType = string(access.AuthErrorCodeInternal)
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "authentication error"
+	}
+	return authValidateJSONReply(authValidateResponse{
+		Authenticated: false,
+		Error: &authValidateError{
+			Type:    errorType,
+			Message: message,
+		},
+	})
+}
+
+func authValidateJSONReply(resp authValidateResponse) dispatch.Reply {
+	raw, errMarshal := json.Marshal(resp)
+	if errMarshal != nil {
+		return dispatch.BulkString([]byte(buildErrorJSON(errMarshal.Error())))
+	}
+	return dispatch.BulkString(raw)
 }
 
 // buildErrorJSON builds an error json.

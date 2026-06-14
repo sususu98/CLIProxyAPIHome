@@ -365,6 +365,32 @@ func (r *Repository) DeleteAPIKeyForUser(ctx context.Context, userID uint, id ui
 	})
 }
 
+// ValidateAPIKey reports whether an API key exists as an active record.
+func (r *Repository) ValidateAPIKey(ctx context.Context, apiKey string) (bool, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return false, errDB
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return false, nil
+	}
+
+	var record APIKeyRecord
+	errFirst := db.WithContext(contextOrBackground(ctx)).
+		Select("id").
+		Where("api_key = ?", apiKey).
+		First(&record).Error
+	switch {
+	case errors.Is(errFirst, gorm.ErrRecordNotFound):
+		return false, nil
+	case errFirst != nil:
+		return false, errFirst
+	default:
+		return true, nil
+	}
+}
+
 // AllowedDispatchIDsForAPIKey returns auth and model IDs allowed by API-key bindings.
 func (r *Repository) AllowedDispatchIDsForAPIKey(ctx context.Context, apiKey string) ([]string, []string, error) {
 	db, errDB := r.database()
