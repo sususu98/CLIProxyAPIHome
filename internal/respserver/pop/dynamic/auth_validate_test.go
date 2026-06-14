@@ -220,3 +220,52 @@ func newAuthValidateRuntimeWithoutKeys(t *testing.T, ctx context.Context) *home.
 	rt.SetClusterAdapter(cluster.NewRuntimeAdapter(cluster.NewRepository(db), "192.0.2.10"))
 	return rt
 }
+
+func TestHandleAuthRejectsBadCredentials(t *testing.T) {
+	// dispatchRequest must preserve the structured access error code so the downstream
+	// proxy can map no_credentials / invalid_credential to 401 instead of a generic 502.
+	ctx := context.Background()
+	rt := newAuthValidateRuntime(t, ctx, "valid-client-key", "deleted-client-key")
+
+	cases := []struct {
+		name      string
+		payload   string
+		wantError string
+	}{
+		{
+			name:      "missing credential",
+			payload:   `{"type":"auth","model":"glm-5.2"}`,
+			wantError: "no_credentials",
+		},
+		{
+			name:      "invalid credential",
+			payload:   `{"type":"auth","model":"glm-5.2","headers":{"x-api-key":"missing-client-key"}}`,
+			wantError: "invalid_credential",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reply := handleAuth(ctx, dispatch.Env{Runtime: rt}, []string{"RPOP", tc.payload})
+			if reply.Kind != dispatch.ReplyKindBulkString {
+				t.Fatalf("reply kind = %v, want bulk string", reply.Kind)
+			}
+
+			var got struct {
+				Error *struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if errUnmarshal := json.Unmarshal(reply.BulkString, &got); errUnmarshal != nil {
+				t.Fatalf("unmarshal response: %v; body=%s", errUnmarshal, string(reply.BulkString))
+			}
+			if got.Error == nil {
+				t.Fatalf("error = nil, want %q; body=%s", tc.wantError, string(reply.BulkString))
+			}
+			if got.Error.Type != tc.wantError {
+				t.Fatalf("error.type = %q, want %q; body=%s", got.Error.Type, tc.wantError, string(reply.BulkString))
+			}
+		})
+	}
+}
