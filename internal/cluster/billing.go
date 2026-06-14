@@ -1019,17 +1019,19 @@ func billingPriceSnapshotForUsage(ctx context.Context, tx *gorm.DB, usage *Usage
 	provider := strings.ToLower(strings.TrimSpace(usage.Provider))
 	model := strings.TrimSpace(usage.Model)
 	price := &BillingModelPriceRecord{}
-	errFirst := tx.WithContext(contextOrBackground(ctx)).
+	result := tx.WithContext(contextOrBackground(ctx)).
 		Where("provider = ? AND model = ? AND enabled = ?", provider, model, true).
-		First(price).Error
-	if errors.Is(errFirst, gorm.ErrRecordNotFound) {
+		Order("id ASC").
+		Limit(1).
+		Find(price)
+	if result.Error != nil {
+		return nil, BillingPriceSnapshot{}, result.Error
+	}
+	if result.RowsAffected == 0 {
 		return nil, BillingPriceSnapshot{
 			Provider: provider,
 			Model:    model,
 		}, nil
-	}
-	if errFirst != nil {
-		return nil, BillingPriceSnapshot{}, errFirst
 	}
 	return price, BillingPriceSnapshot{
 		Provider:                  price.Provider,
