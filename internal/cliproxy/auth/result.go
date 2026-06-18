@@ -165,7 +165,6 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			}
 		}
 
-		_ = m.persist(ctx, auth)
 		authSnapshot = auth.Clone()
 	}
 	m.mu.Unlock()
@@ -176,6 +175,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	if authSnapshot != nil && authRefreshDisabled(authSnapshot) {
 		m.queueRefreshReschedule(authSnapshot.ID)
 	}
+	m.enqueueResultPersist(ctx, authSnapshot)
 	if resultAuthID == "" {
 		return
 	}

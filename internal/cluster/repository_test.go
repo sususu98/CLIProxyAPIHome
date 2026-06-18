@@ -99,6 +99,44 @@ func TestOpenSQLite_AutoMigrateAndConfigRoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpenSQLite_ConfiguresLocalConcurrency(t *testing.T) {
+	t.Parallel()
+
+	db, errOpenSQLite := OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "home.db"))
+	if errOpenSQLite != nil {
+		t.Fatalf("OpenSQLite failed: %v", errOpenSQLite)
+	}
+	sqlDB, errDB := db.DB()
+	if errDB != nil {
+		t.Fatalf("get sql db: %v", errDB)
+	}
+	defer func() {
+		if errClose := sqlDB.Close(); errClose != nil {
+			t.Errorf("close sql db: %v", errClose)
+		}
+	}()
+
+	if got := sqlDB.Stats().MaxOpenConnections; got != 1 {
+		t.Fatalf("MaxOpenConnections = %d, want 1", got)
+	}
+
+	var journalMode string
+	if errRaw := db.Raw("PRAGMA journal_mode").Scan(&journalMode).Error; errRaw != nil {
+		t.Fatalf("read journal_mode: %v", errRaw)
+	}
+	if got := strings.ToLower(strings.TrimSpace(journalMode)); got != "wal" {
+		t.Fatalf("journal_mode = %q, want wal", journalMode)
+	}
+
+	var busyTimeout int
+	if errRaw := db.Raw("PRAGMA busy_timeout").Scan(&busyTimeout).Error; errRaw != nil {
+		t.Fatalf("read busy_timeout: %v", errRaw)
+	}
+	if busyTimeout < 5000 {
+		t.Fatalf("busy_timeout = %d, want at least 5000", busyTimeout)
+	}
+}
+
 func TestJSONBGormDBDataTypeForMigrators(t *testing.T) {
 	t.Parallel()
 

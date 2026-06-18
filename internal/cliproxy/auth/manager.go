@@ -64,6 +64,11 @@ type Manager struct {
 
 	refreshCancel context.CancelFunc
 	refreshLoop   *authAutoRefreshLoop
+
+	resultPersistOnce    sync.Once
+	resultPersistMu      sync.Mutex
+	resultPersistWake    chan struct{}
+	resultPersistPending map[string]*Auth
 }
 
 // NewManager creates a new manager.
@@ -72,10 +77,12 @@ func NewManager(store Store, selector Selector, _ any) *Manager {
 		selector = &RoundRobinSelector{}
 	}
 	mgr := &Manager{
-		store:     store,
-		selector:  selector,
-		auths:     make(map[string]*Auth),
-		indexAuth: make(map[string]*Auth),
+		store:                store,
+		selector:             selector,
+		auths:                make(map[string]*Auth),
+		indexAuth:            make(map[string]*Auth),
+		resultPersistWake:    make(chan struct{}, 1),
+		resultPersistPending: make(map[string]*Auth),
 	}
 	mgr.scheduler = newAuthScheduler(selector)
 	mgr.runtimeConfig.Store(&internalconfig.Config{})
@@ -332,6 +339,79 @@ func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 	}
 	_, errSave := m.store.Save(ctx, auth)
 	return errSave
+}
+
+// enqueueResultPersist queues runtime result state for background persistence.
+func (m *Manager) enqueueResultPersist(ctx context.Context, auth *Auth) {
+	if m == nil || m.store == nil || auth == nil {
+		return
+	}
+	if shouldSkipPersist(ctx) {
+		return
+	}
+	authID := strings.TrimSpace(auth.ID)
+	if authID == "" {
+		return
+	}
+
+	m.resultPersistOnce.Do(func() {
+		m.resultPersistMu.Lock()
+		if m.resultPersistWake == nil {
+			m.resultPersistWake = make(chan struct{}, 1)
+		}
+		if m.resultPersistPending == nil {
+			m.resultPersistPending = make(map[string]*Auth)
+		}
+		m.resultPersistMu.Unlock()
+		go m.runResultPersistWorker()
+	})
+
+	m.resultPersistMu.Lock()
+	if m.resultPersistPending == nil {
+		m.resultPersistPending = make(map[string]*Auth)
+	}
+	m.resultPersistPending[authID] = auth.Clone()
+	wake := m.resultPersistWake
+	m.resultPersistMu.Unlock()
+
+	if wake == nil {
+		return
+	}
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
+// runResultPersistWorker persists queued result state snapshots.
+func (m *Manager) runResultPersistWorker() {
+	if m == nil {
+		return
+	}
+	for range m.resultPersistWake {
+		m.flushResultPersistQueue()
+	}
+}
+
+// flushResultPersistQueue drains queued result state snapshots.
+func (m *Manager) flushResultPersistQueue() {
+	if m == nil {
+		return
+	}
+	for {
+		m.resultPersistMu.Lock()
+		if len(m.resultPersistPending) == 0 {
+			m.resultPersistMu.Unlock()
+			return
+		}
+		pending := m.resultPersistPending
+		m.resultPersistPending = make(map[string]*Auth, len(pending))
+		m.resultPersistMu.Unlock()
+
+		for _, auth := range pending {
+			_ = m.persist(context.Background(), auth)
+		}
+	}
 }
 
 // List returns the available entries.
