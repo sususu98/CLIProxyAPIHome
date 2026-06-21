@@ -84,10 +84,12 @@ func NewManager(store Store, selector Selector, _ any) *Manager {
 		resultPersistWake:    make(chan struct{}, 1),
 		resultPersistPending: make(map[string]*Auth),
 	}
-	mgr.scheduler = newAuthScheduler(selector)
 	mgr.runtimeConfig.Store(&internalconfig.Config{})
 	// atomic.Value requires non-nil initial value.
 	mgr.oauthModelAlias.Store(&oauthModelAliasTable{})
+	mgr.scheduler = newAuthScheduler(selector, func(auth *Auth, routeModel string) string {
+		return mgr.resolveDispatchModel(auth, routeModel).Model
+	})
 	return mgr
 }
 
@@ -141,6 +143,9 @@ func (m *Manager) SetConfig(cfg *internalconfig.Config) {
 		cfg = &internalconfig.Config{}
 	}
 	m.runtimeConfig.Store(cfg)
+	if m.scheduler != nil {
+		m.scheduler.resetModelShards()
+	}
 }
 
 // SetSelector sets a selector.
@@ -519,6 +524,60 @@ func selectionArgForSelector(selector Selector, routeModel string) string {
 	return routeModel
 }
 
+type dispatchCandidate struct {
+	auth          *Auth
+	providerKey   string
+	upstreamModel string
+	upstreamKey   string
+}
+
+func (m *Manager) buildDispatchCandidate(auth *Auth, providerKey, routeModel string, now time.Time) (dispatchCandidate, bool, blockReason, time.Time) {
+	authForResolution := auth
+	if auth != nil && strings.TrimSpace(auth.Provider) == "" {
+		normalizedProvider := strings.ToLower(strings.TrimSpace(providerKey))
+		if normalizedProvider != "" && normalizedProvider != "mixed" {
+			authCopy := *auth
+			authCopy.Provider = normalizedProvider
+			authForResolution = &authCopy
+		}
+	}
+	resolved := m.resolveDispatchModel(authForResolution, routeModel)
+	if strings.TrimSpace(resolved.Model) == "" {
+		return dispatchCandidate{}, false, blockReasonOther, time.Time{}
+	}
+	blocked, reason, next := isAuthBlockedForModel(auth, resolved.Key, now)
+	if !blocked && resolved.Key != canonicalModelKey(routeModel) {
+		blocked, reason, next = isAuthBlockedForModel(auth, routeModel, now)
+	}
+	if blocked {
+		return dispatchCandidate{}, false, reason, next
+	}
+	return dispatchCandidate{
+		auth:          auth,
+		providerKey:   providerKey,
+		upstreamModel: resolved.Model,
+		upstreamKey:   resolved.Key,
+	}, true, blockReasonNone, time.Time{}
+}
+
+func dispatchUnavailableError(routeModel, provider string, total int, cooldownCount int, earliest time.Time, now time.Time) error {
+	if total == 0 {
+		return &Error{Code: "auth_not_found", Message: "no auth available"}
+	}
+	if cooldownCount == total && !earliest.IsZero() {
+		providerForError := provider
+		if providerForError == "mixed" {
+			providerForError = ""
+		}
+		resetIn := earliest.Sub(now)
+		if resetIn < 0 {
+			resetIn = 0
+		}
+		return newModelCooldownError(routeModel, providerForError, resetIn)
+	}
+	return &Error{Code: "auth_unavailable", Message: "no auth available"}
+}
+
 // useSchedulerFastPath reports whether use scheduler fast path.
 func (m *Manager) useSchedulerFastPath() bool {
 	if m == nil || m.scheduler == nil {
@@ -572,17 +631,21 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 				continue
 			}
 
-			models := m.executionModelCandidates(fullAuth, routeModel)
-			if len(models) == 0 {
+			fullProviderKey := strings.ToLower(strings.TrimSpace(fullAuth.Provider))
+			if fullProviderKey == "" {
+				fullProviderKey = providerKey
+			}
+			fullCandidate, okCandidate, _, _ := m.buildDispatchCandidate(fullAuth, fullProviderKey, routeModel, time.Now())
+			if !okCandidate {
 				continue
 			}
-			upstream := strings.TrimSpace(models[0])
+			upstream := strings.TrimSpace(fullCandidate.upstreamModel)
 			if upstream == "" {
 				upstream = routeModel
 			}
 			return &DispatchDecision{
 				Auth:          fullAuth.Clone(),
-				Provider:      providerKey,
+				Provider:      fullProviderKey,
 				UpstreamModel: upstream,
 				PooledModels:  false,
 			}, nil
@@ -601,9 +664,14 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 
 	tried := make(map[string]struct{})
 	for {
+		now := time.Now()
 		m.mu.RLock()
 		selector := m.selector
-		candidates := make([]*Auth, 0, len(m.auths))
+		dispatchCandidates := make([]dispatchCandidate, 0, len(m.auths))
+		availableAuths := make([]*Auth, 0, len(m.auths))
+		totalCandidates := 0
+		cooldownCount := 0
+		var earliest time.Time
 		for _, candidate := range m.auths {
 			if candidate == nil || candidate.Disabled {
 				continue
@@ -624,20 +692,44 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 			if routeKey != "" && (registryRef == nil || !registryRef.ClientSupportsModel(candidate.ID, routeKey)) {
 				continue
 			}
-			candidates = append(candidates, candidate)
+			totalCandidates++
+			dispatchCandidate, okCandidate, reason, next := m.buildDispatchCandidate(candidate, providerKey, routeModel, now)
+			if !okCandidate {
+				if reason == blockReasonCooldown {
+					cooldownCount++
+					if !next.IsZero() && (earliest.IsZero() || next.Before(earliest)) {
+						earliest = next
+					}
+				}
+				continue
+			}
+			dispatchCandidates = append(dispatchCandidates, dispatchCandidate)
+			availableAuths = append(availableAuths, candidate)
 		}
 		m.mu.RUnlock()
 
-		if len(candidates) == 0 {
-			return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+		if len(availableAuths) == 0 {
+			return nil, dispatchUnavailableError(routeModel, providerForSelector, totalCandidates, cooldownCount, earliest, now)
 		}
 
-		auth, errPick := selector.Pick(ctx, providerForSelector, selectionArgForSelector(selector, routeModel), opts, candidates)
+		auth, errPick := selector.Pick(ctx, providerForSelector, selectionArgForSelector(selector, routeModel), opts, availableAuths)
 		if errPick != nil {
 			return nil, errPick
 		}
 		if auth == nil {
 			return nil, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
+		}
+		var selectedCandidate dispatchCandidate
+		foundCandidate := false
+		for _, candidate := range dispatchCandidates {
+			if candidate.auth != nil && candidate.auth.ID == auth.ID {
+				selectedCandidate = candidate
+				foundCandidate = true
+				break
+			}
+		}
+		if !foundCandidate {
+			return nil, &Error{Code: "auth_unavailable", Message: "selector returned auth outside candidates"}
 		}
 		tried[auth.ID] = struct{}{}
 
@@ -649,17 +741,20 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 			continue
 		}
 
-		models := m.executionModelCandidates(fullAuth, routeModel)
-		if len(models) == 0 {
-			continue
-		}
-		upstream := strings.TrimSpace(models[0])
-		if upstream == "" {
-			upstream = routeModel
-		}
 		providerKey := strings.ToLower(strings.TrimSpace(fullAuth.Provider))
 		if providerKey == "" {
+			providerKey = selectedCandidate.providerKey
+		}
+		if providerKey == "" {
 			providerKey = providerForSelector
+		}
+		fullCandidate, okCandidate, _, _ := m.buildDispatchCandidate(fullAuth, providerKey, routeModel, time.Now())
+		if !okCandidate {
+			continue
+		}
+		upstream := strings.TrimSpace(fullCandidate.upstreamModel)
+		if upstream == "" {
+			upstream = routeModel
 		}
 		return &DispatchDecision{
 			Auth:          fullAuth.Clone(),
@@ -736,19 +831,11 @@ func (m *Manager) resolveFullRefreshAuth(ctx context.Context, auth *Auth) (*Auth
 
 // executionModelCandidates handles an execution model candidates.
 func (m *Manager) executionModelCandidates(auth *Auth, routeModel string) []string {
-	requestedModel := rewriteModelForAuth(routeModel, auth)
-	requestedModel = m.applyOAuthModelAlias(auth, requestedModel)
-	resolved := m.applyAPIKeyModelAlias(auth, requestedModel)
-	if strings.TrimSpace(resolved) == "" {
-		resolved = requestedModel
-	}
-	if strings.TrimSpace(resolved) == "" {
-		resolved = strings.TrimSpace(routeModel)
-	}
-	if strings.TrimSpace(resolved) == "" {
+	resolved := m.resolveDispatchModel(auth, routeModel)
+	if strings.TrimSpace(resolved.Model) == "" {
 		return nil
 	}
-	return []string{resolved}
+	return []string{resolved.Model}
 }
 
 // shouldRefresh reports whether should refresh.

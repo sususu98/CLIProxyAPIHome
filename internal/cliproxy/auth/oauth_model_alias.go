@@ -69,6 +69,9 @@ func (m *Manager) SetOAuthModelAlias(aliases map[string][]internalconfig.OAuthMo
 		table = &oauthModelAliasTable{}
 	}
 	m.oauthModelAlias.Store(table)
+	if m.scheduler != nil {
+		m.scheduler.resetModelShards()
+	}
 }
 
 // applyOAuthModelAlias resolves the upstream model from OAuth model alias.

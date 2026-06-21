@@ -42,7 +42,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	clearModelQuota := false
 	setModelQuota := false
 	var authSnapshot *Auth
-	resultModel := strings.TrimSpace(result.Model)
+	resultModel := canonicalModelKey(result.Model)
 	resultAuthID := ""
 
 	m.mu.Lock()

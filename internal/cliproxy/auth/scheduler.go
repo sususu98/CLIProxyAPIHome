@@ -13,6 +13,8 @@ import (
 // schedulerStrategy identifies which built-in routing semantics the scheduler should apply.
 type schedulerStrategy int
 
+type schedulerModelResolver func(auth *Auth, routeModel string) string
+
 const (
 	schedulerStrategyCustom schedulerStrategy = iota
 	schedulerStrategyRoundRobin
@@ -33,6 +35,7 @@ const (
 type authScheduler struct {
 	mu            sync.Mutex
 	strategy      schedulerStrategy
+	modelResolver schedulerModelResolver
 	providers     map[string]*providerScheduler
 	authProviders map[string]string
 	mixedCursors  map[string]int
@@ -40,9 +43,10 @@ type authScheduler struct {
 
 // providerScheduler stores auth metadata and model shards for a single provider.
 type providerScheduler struct {
-	providerKey string
-	auths       map[string]*scheduledAuthMeta
-	modelShards map[string]*modelScheduler
+	providerKey   string
+	modelResolver schedulerModelResolver
+	auths         map[string]*scheduledAuthMeta
+	modelShards   map[string]*modelScheduler
 }
 
 // scheduledAuthMeta stores the immutable scheduling fields derived from an auth snapshot.
@@ -58,6 +62,7 @@ type scheduledAuthMeta struct {
 // modelScheduler tracks ready and blocked auths for one provider/model combination.
 type modelScheduler struct {
 	modelKey        string
+	modelResolver   schedulerModelResolver
 	entries         map[string]*scheduledAuth
 	priorityOrder   []int
 	readyByPriority map[int]*readyBucket
@@ -167,9 +172,10 @@ func normalizeCursor(cursor, size int) int {
 }
 
 // newAuthScheduler constructs an empty scheduler configured for the supplied selector strategy.
-func newAuthScheduler(selector Selector) *authScheduler {
+func newAuthScheduler(selector Selector, resolver schedulerModelResolver) *authScheduler {
 	return &authScheduler{
 		strategy:      selectorStrategy(selector),
+		modelResolver: resolver,
 		providers:     make(map[string]*providerScheduler),
 		authProviders: make(map[string]string),
 		mixedCursors:  make(map[string]int),
@@ -196,6 +202,23 @@ func (s *authScheduler) setSelector(selector Selector) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.strategy = selectorStrategy(selector)
+	clear(s.mixedCursors)
+}
+
+// resetModelShards clears derived model shards after model resolver inputs change.
+func (s *authScheduler) resetModelShards() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, providerState := range s.providers {
+		if providerState == nil {
+			continue
+		}
+		providerState.modelResolver = s.modelResolver
+		providerState.modelShards = make(map[string]*modelScheduler)
+	}
 	clear(s.mixedCursors)
 }
 
@@ -483,9 +506,10 @@ func (s *authScheduler) ensureProviderLocked(providerKey string) *providerSchedu
 	providerState := s.providers[providerKey]
 	if providerState == nil {
 		providerState = &providerScheduler{
-			providerKey: providerKey,
-			auths:       make(map[string]*scheduledAuthMeta),
-			modelShards: make(map[string]*modelScheduler),
+			providerKey:   providerKey,
+			modelResolver: s.modelResolver,
+			auths:         make(map[string]*scheduledAuthMeta),
+			modelShards:   make(map[string]*modelScheduler),
 		}
 		s.providers[providerKey] = providerState
 	}
@@ -577,6 +601,7 @@ func (p *providerScheduler) ensureModelLocked(modelKey string, now time.Time) *m
 	}
 	shard := &modelScheduler{
 		modelKey:        modelKey,
+		modelResolver:   p.modelResolver,
 		entries:         make(map[string]*scheduledAuth),
 		readyByPriority: make(map[int]*readyBucket),
 	}
@@ -588,6 +613,20 @@ func (p *providerScheduler) ensureModelLocked(modelKey string, now time.Time) *m
 	}
 	p.modelShards[modelKey] = shard
 	return shard
+}
+
+// runtimeModelKeyForAuth resolves the auth-specific model key used by runtime state.
+func (m *modelScheduler) runtimeModelKeyForAuth(auth *Auth) string {
+	if m == nil {
+		return ""
+	}
+	if m.modelResolver != nil {
+		resolved := strings.TrimSpace(m.modelResolver(auth, m.modelKey))
+		if key := canonicalModelKey(resolved); key != "" {
+			return key
+		}
+	}
+	return canonicalModelKey(m.modelKey)
 }
 
 // supportsModel reports whether the auth metadata currently supports modelKey.
@@ -628,7 +667,11 @@ func (m *modelScheduler) upsertEntryLocked(meta *scheduledAuthMeta, now time.Tim
 	entry.meta = meta
 	entry.auth = meta.auth
 	entry.nextRetryAt = time.Time{}
-	blocked, reason, next := isAuthBlockedForModel(meta.auth, m.modelKey, now)
+	runtimeModelKey := m.runtimeModelKeyForAuth(meta.auth)
+	blocked, reason, next := isAuthBlockedForModel(meta.auth, runtimeModelKey, now)
+	if !blocked && runtimeModelKey != canonicalModelKey(m.modelKey) {
+		blocked, reason, next = isAuthBlockedForModel(meta.auth, m.modelKey, now)
+	}
 	switch {
 	case !blocked:
 		entry.state = scheduledStateReady
@@ -674,7 +717,11 @@ func (m *modelScheduler) promoteExpiredLocked(now time.Time) {
 		if entry.nextRetryAt.IsZero() || entry.nextRetryAt.After(now) {
 			continue
 		}
-		blocked, reason, next := isAuthBlockedForModel(entry.auth, m.modelKey, now)
+		runtimeModelKey := m.runtimeModelKeyForAuth(entry.auth)
+		blocked, reason, next := isAuthBlockedForModel(entry.auth, runtimeModelKey, now)
+		if !blocked && runtimeModelKey != canonicalModelKey(m.modelKey) {
+			blocked, reason, next = isAuthBlockedForModel(entry.auth, m.modelKey, now)
+		}
 		switch {
 		case !blocked:
 			entry.state = scheduledStateReady

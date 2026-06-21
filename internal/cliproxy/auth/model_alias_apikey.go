@@ -9,6 +9,11 @@ import (
 
 const homeConfigModelsMetadataKey = "home_config_models"
 
+type dispatchModelResolution struct {
+	Model string
+	Key   string
+}
+
 // rewriteModelForAuth returns a rewrite model for auth.
 func rewriteModelForAuth(model string, auth *Auth) string {
 	if auth == nil || model == "" {
@@ -70,6 +75,27 @@ func (m *Manager) applyAPIKeyModelAlias(auth *Auth, requestedModel string) strin
 		return upstreamModel
 	}
 	return requestedModel
+}
+
+// resolveDispatchModel resolves the auth-specific upstream model used for execution and runtime state.
+func (m *Manager) resolveDispatchModel(auth *Auth, routeModel string) dispatchModelResolution {
+	requestedModel := rewriteModelForAuth(routeModel, auth)
+	requestedModel = m.applyOAuthModelAlias(auth, requestedModel)
+	resolved := m.applyAPIKeyModelAlias(auth, requestedModel)
+	if strings.TrimSpace(resolved) == "" {
+		resolved = requestedModel
+	}
+	if strings.TrimSpace(resolved) == "" {
+		resolved = strings.TrimSpace(routeModel)
+	}
+	resolved = strings.TrimSpace(resolved)
+	if resolved == "" {
+		return dispatchModelResolution{}
+	}
+	return dispatchModelResolution{
+		Model: resolved,
+		Key:   canonicalModelKey(resolved),
+	}
 }
 
 type metadataModelAliasEntry struct {
