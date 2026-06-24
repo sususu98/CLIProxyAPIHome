@@ -66,7 +66,7 @@ store:
 	if errSync := rt.syncPluginStoreManifests(context.Background(), cfg); errSync != nil {
 		t.Fatalf("syncPluginStoreManifests() error = %v", errSync)
 	}
-	target := filepath.Join(root, platform.GOOS, platform.GOARCH, "sample"+pluginExtension(platform.GOOS))
+	target := filepath.Join(root, platform.GOOS, platform.GOARCH, "sample-v0.2.0"+pluginExtension(platform.GOOS))
 	got, errRead := os.ReadFile(target)
 	if errRead != nil {
 		t.Fatalf("read target: %v", errRead)
@@ -86,7 +86,7 @@ func TestSyncPluginStoreManifestsSkipsCPADistributedArtifact(t *testing.T) {
 		t.Fatalf("syncPluginStoreManifests() error = %v", errSync)
 	}
 	platform := CurrentPluginPlatform()
-	target := filepath.Join(root, platform.GOOS, platform.GOARCH, "sample"+pluginExtension(platform.GOOS))
+	target := filepath.Join(root, platform.GOOS, platform.GOARCH, "sample-v0.2.0"+pluginExtension(platform.GOOS))
 	if _, errStat := os.Stat(target); !os.IsNotExist(errStat) {
 		t.Fatalf("target stat error = %v, want not exist", errStat)
 	}
@@ -99,7 +99,7 @@ func TestSyncPluginStoreManifestsSkipsIdenticalArtifact(t *testing.T) {
 	if errMkdir := os.MkdirAll(targetDir, 0o755); errMkdir != nil {
 		t.Fatalf("MkdirAll() error = %v", errMkdir)
 	}
-	target := filepath.Join(targetDir, "sample"+pluginExtension(platform.GOOS))
+	target := filepath.Join(targetDir, "sample-v0.2.0"+pluginExtension(platform.GOOS))
 	if errWrite := os.WriteFile(target, []byte("library-data"), 0o644); errWrite != nil {
 		t.Fatalf("WriteFile() error = %v", errWrite)
 	}
@@ -193,7 +193,7 @@ func TestSyncPluginStoreManifestsResyncsChangedLocalArtifact(t *testing.T) {
 	if errSync := rt.syncPluginStoreManifests(context.Background(), cfg); errSync != nil {
 		t.Fatalf("first syncPluginStoreManifests() error = %v", errSync)
 	}
-	target := filepath.Join(root, platform.GOOS, platform.GOARCH, "sample"+pluginExtension(platform.GOOS))
+	target := filepath.Join(root, platform.GOOS, platform.GOARCH, "sample-v0.2.0"+pluginExtension(platform.GOOS))
 	if errWrite := os.WriteFile(target, []byte("tampered-data"), 0o644); errWrite != nil {
 		t.Fatalf("WriteFile() error = %v", errWrite)
 	}
@@ -238,9 +238,15 @@ func TestDeleteRemovedPluginArtifactsRemovesCurrentPlatformFile(t *testing.T) {
 	if errMkdir := os.MkdirAll(targetDir, 0o755); errMkdir != nil {
 		t.Fatalf("MkdirAll() error = %v", errMkdir)
 	}
-	target := filepath.Join(targetDir, "sample"+pluginExtension(platform.GOOS))
-	if errWrite := os.WriteFile(target, []byte("library-data"), 0o644); errWrite != nil {
-		t.Fatalf("WriteFile() error = %v", errWrite)
+	targets := []string{
+		filepath.Join(targetDir, "sample"+pluginExtension(platform.GOOS)),
+		filepath.Join(targetDir, "sample-v0.1.0"+pluginExtension(platform.GOOS)),
+		filepath.Join(targetDir, "sample-v0.2.0"+pluginExtension(platform.GOOS)),
+	}
+	for _, target := range targets {
+		if errWrite := os.WriteFile(target, []byte("library-data"), 0o644); errWrite != nil {
+			t.Fatalf("WriteFile() error = %v", errWrite)
+		}
 	}
 
 	rt := &Runtime{}
@@ -252,12 +258,70 @@ func TestDeleteRemovedPluginArtifactsRemovesCurrentPlatformFile(t *testing.T) {
 		},
 	})
 
-	if _, errStat := os.Stat(target); !os.IsNotExist(errStat) {
-		t.Fatalf("target stat error = %v, want not exist", errStat)
+	for _, target := range targets {
+		if _, errStat := os.Stat(target); !os.IsNotExist(errStat) {
+			t.Fatalf("target %s stat error = %v, want not exist", target, errStat)
+		}
 	}
 }
 
 func TestDeleteRemovedPluginArtifactsRemovesHomeArtifactWhenLoadInHomeDisabled(t *testing.T) {
+	root := t.TempDir()
+	platform := CurrentPluginPlatform()
+	targetDir := filepath.Join(root, platform.GOOS, platform.GOARCH)
+	if errMkdir := os.MkdirAll(targetDir, 0o755); errMkdir != nil {
+		t.Fatalf("MkdirAll() error = %v", errMkdir)
+	}
+	targets := []string{
+		filepath.Join(targetDir, "sample"+pluginExtension(platform.GOOS)),
+		filepath.Join(targetDir, "sample-v0.2.0"+pluginExtension(platform.GOOS)),
+	}
+	for _, target := range targets {
+		if errWrite := os.WriteFile(target, []byte("library-data"), 0o644); errWrite != nil {
+			t.Fatalf("WriteFile() error = %v", errWrite)
+		}
+	}
+
+	rt := &Runtime{}
+	rt.deleteRemovedPluginArtifacts(context.Background(), homeLoadedPluginSyncTestConfig(t, root), homePluginSyncTestConfig(t, root))
+
+	for _, target := range targets {
+		if _, errStat := os.Stat(target); !os.IsNotExist(errStat) {
+			t.Fatalf("target %s stat error = %v, want not exist", target, errStat)
+		}
+	}
+}
+
+func TestCurrentPluginFilePathPrefersHighestVersionedFile(t *testing.T) {
+	root := t.TempDir()
+	platform := CurrentPluginPlatform()
+	targetDir := filepath.Join(root, platform.GOOS, platform.GOARCH)
+	if errMkdir := os.MkdirAll(targetDir, 0o755); errMkdir != nil {
+		t.Fatalf("MkdirAll() error = %v", errMkdir)
+	}
+	extension := pluginExtension(platform.GOOS)
+	paths := []string{
+		filepath.Join(targetDir, "sample"+extension),
+		filepath.Join(targetDir, "sample-v0.1.0"+extension),
+		filepath.Join(targetDir, "sample-v0.2.0"+extension),
+	}
+	for _, path := range paths {
+		if errWrite := os.WriteFile(path, []byte("library-data"), 0o644); errWrite != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, errWrite)
+		}
+	}
+
+	got, errPath := currentPluginFilePath(root, "sample")
+	if errPath != nil {
+		t.Fatalf("currentPluginFilePath() error = %v", errPath)
+	}
+	want := filepath.Join(targetDir, "sample-v0.2.0"+extension)
+	if got != want {
+		t.Fatalf("currentPluginFilePath() = %q, want %q", got, want)
+	}
+}
+
+func TestCurrentPluginFilePathFallsBackToUnversionedFile(t *testing.T) {
 	root := t.TempDir()
 	platform := CurrentPluginPlatform()
 	targetDir := filepath.Join(root, platform.GOOS, platform.GOARCH)
@@ -269,11 +333,12 @@ func TestDeleteRemovedPluginArtifactsRemovesHomeArtifactWhenLoadInHomeDisabled(t
 		t.Fatalf("WriteFile() error = %v", errWrite)
 	}
 
-	rt := &Runtime{}
-	rt.deleteRemovedPluginArtifacts(context.Background(), homeLoadedPluginSyncTestConfig(t, root), homePluginSyncTestConfig(t, root))
-
-	if _, errStat := os.Stat(target); !os.IsNotExist(errStat) {
-		t.Fatalf("target stat error = %v, want not exist", errStat)
+	got, errPath := currentPluginFilePath(root, "sample")
+	if errPath != nil {
+		t.Fatalf("currentPluginFilePath() error = %v", errPath)
+	}
+	if got != target {
+		t.Fatalf("currentPluginFilePath() = %q, want %q", got, target)
 	}
 }
 

@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	goruntime "runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
@@ -51,6 +53,14 @@ type pluginFileDigest struct {
 	Hash string
 	Size int64
 }
+
+type pluginFileInfo struct {
+	ID      string
+	Path    string
+	Version string
+}
+
+var pluginFileVersionPattern = regexp.MustCompile(`^[0-9][0-9A-Za-z.+-]*$`)
 
 type pluginArtifactRuntime interface {
 	PluginBusy(id string) bool
@@ -170,23 +180,27 @@ func (r *Runtime) deletePluginArtifact(root string, id string) (string, bool, er
 	if !validPluginFileID(id) {
 		return "", false, fmt.Errorf("invalid plugin id %q", id)
 	}
-	path, errPath := currentPluginFilePath(root, id)
+	paths, errPath := pluginFilePaths(root, id)
 	if errPath != nil {
 		return "", false, errPath
 	}
-	if path == "" {
+	if len(paths) == 0 {
 		return "", false, nil
 	}
 	if errPrepare := preparePluginArtifactMutation(r.pluginRuntimeForArtifacts(), id); errPrepare != nil {
-		return path, false, errPrepare
+		return paths[0], false, errPrepare
 	}
-	if errRemove := os.Remove(path); errRemove != nil {
-		if errors.Is(errRemove, os.ErrNotExist) {
-			return path, false, nil
+	deleted := false
+	for _, path := range paths {
+		if errRemove := os.Remove(path); errRemove != nil {
+			if errors.Is(errRemove, os.ErrNotExist) {
+				continue
+			}
+			return paths[0], deleted, errRemove
 		}
-		return path, false, errRemove
+		deleted = true
 	}
-	return path, true, nil
+	return paths[0], deleted, nil
 }
 
 func (r *Runtime) pluginRuntimeForArtifacts() pluginArtifactRuntime {
@@ -390,12 +404,25 @@ func currentPluginFilePath(root string, id string) (string, error) {
 }
 
 func pluginFilePaths(root string, id string) ([]string, error) {
+	files, errFiles := pluginFileInfos(root, id)
+	if errFiles != nil {
+		return nil, errFiles
+	}
+	out := make([]string, 0, len(files))
+	for _, file := range files {
+		out = append(out, file.Path)
+	}
+	return out, nil
+}
+
+func pluginFileInfos(root string, id string) ([]pluginFileInfo, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
 		root = "plugins"
 	}
+	id = strings.TrimSpace(id)
 	extension := pluginExtension(goruntime.GOOS)
-	out := make([]string, 0)
+	candidates := make([]pluginFileInfo, 0)
 	for _, dir := range pluginCandidateDirs(root, goruntime.GOOS, goruntime.GOARCH, currentPluginCPUVariant()) {
 		entries, errReadDir := os.ReadDir(dir)
 		if errReadDir != nil {
@@ -415,11 +442,32 @@ func pluginFilePaths(root string, id string) ([]string, error) {
 		}
 		sort.Strings(files)
 		for _, filePath := range files {
-			fileID := pluginIDFromPath(filePath)
-			if fileID == id {
-				out = append(out, filePath)
+			file, okFile := pluginFileInfoFromPath(filePath, extension)
+			if !okFile || file.ID != id {
+				continue
 			}
+			candidates = append(candidates, file)
 		}
+	}
+	if len(candidates) <= 1 {
+		return candidates, nil
+	}
+	bestIndex := 0
+	for index := 1; index < len(candidates); index++ {
+		if pluginFilePreferred(candidates[index], candidates[bestIndex]) {
+			bestIndex = index
+		}
+	}
+	if bestIndex == 0 {
+		return candidates, nil
+	}
+	out := make([]pluginFileInfo, 0, len(candidates))
+	out = append(out, candidates[bestIndex])
+	for index, candidate := range candidates {
+		if index == bestIndex {
+			continue
+		}
+		out = append(out, candidate)
 	}
 	return out, nil
 }
@@ -435,6 +483,10 @@ func pluginCandidateDirs(root string, goos string, goarch string, variant string
 }
 
 func pluginIDFromPath(path string) string {
+	file, okFile := pluginFileInfoFromPath(path, "")
+	if okFile {
+		return file.ID
+	}
 	base := filepath.Base(path)
 	lowerBase := strings.ToLower(base)
 	for _, extension := range []string{".so", ".dylib", ".dll"} {
@@ -443,6 +495,90 @@ func pluginIDFromPath(path string) string {
 		}
 	}
 	return base
+}
+
+func pluginFileInfoFromPath(filePath string, requiredExtension string) (pluginFileInfo, bool) {
+	base := filepath.Base(filePath)
+	lowerBase := strings.ToLower(base)
+	extension := strings.TrimSpace(requiredExtension)
+	if extension != "" {
+		if !strings.HasSuffix(lowerBase, strings.ToLower(extension)) {
+			return pluginFileInfo{}, false
+		}
+	} else {
+		for _, candidateExtension := range []string{".so", ".dylib", ".dll"} {
+			if strings.HasSuffix(lowerBase, candidateExtension) {
+				extension = candidateExtension
+				break
+			}
+		}
+		if extension == "" {
+			return pluginFileInfo{}, false
+		}
+	}
+	name := base[:len(base)-len(extension)]
+	id := name
+	version := ""
+	if versionIndex := strings.LastIndex(name, "-v"); versionIndex > 0 {
+		candidateID := name[:versionIndex]
+		candidateVersion := name[versionIndex+2:]
+		if validPluginFileID(candidateID) && validPluginFileVersion(candidateVersion) {
+			id = candidateID
+			version = candidateVersion
+		}
+	}
+	if !validPluginFileID(id) {
+		return pluginFileInfo{}, false
+	}
+	return pluginFileInfo{ID: id, Path: filePath, Version: version}, true
+}
+
+func pluginFilePreferred(candidate pluginFileInfo, current pluginFileInfo) bool {
+	if candidate.Version == "" {
+		return false
+	}
+	if current.Version == "" {
+		return true
+	}
+	comparison, comparable := comparePluginFileVersions(candidate.Version, current.Version)
+	if !comparable {
+		return candidate.Version > current.Version
+	}
+	return comparison > 0
+}
+
+func comparePluginFileVersions(a string, b string) (int, bool) {
+	segmentsA := strings.Split(a, ".")
+	segmentsB := strings.Split(b, ".")
+	length := len(segmentsA)
+	if len(segmentsB) > length {
+		length = len(segmentsB)
+	}
+	for index := 0; index < length; index++ {
+		numberA, okA := pluginFileVersionSegment(segmentsA, index)
+		numberB, okB := pluginFileVersionSegment(segmentsB, index)
+		if !okA || !okB {
+			return 0, false
+		}
+		if numberA != numberB {
+			if numberA < numberB {
+				return -1, true
+			}
+			return 1, true
+		}
+	}
+	return 0, true
+}
+
+func pluginFileVersionSegment(segments []string, index int) (int64, bool) {
+	if index >= len(segments) {
+		return 0, true
+	}
+	number, errParse := strconv.ParseInt(segments[index], 10, 64)
+	if errParse != nil || number < 0 {
+		return 0, false
+	}
+	return number, true
 }
 
 func validPluginFileID(id string) bool {
@@ -461,6 +597,11 @@ func validPluginFileID(id string) bool {
 		}
 	}
 	return true
+}
+
+func validPluginFileVersion(version string) bool {
+	version = strings.TrimSpace(version)
+	return version != "" && !strings.HasPrefix(version, "v") && pluginFileVersionPattern.MatchString(version)
 }
 
 func storeManifestFromPluginConfig(id string, item config.PluginInstanceConfig) (pluginstore.Manifest, bool, error) {
