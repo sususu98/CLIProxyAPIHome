@@ -152,6 +152,18 @@ func isMTLSAuthenticated(conn net.Conn) bool {
 	return len(state.PeerCertificates) > 0 && len(state.VerifiedChains) > 0
 }
 
+func peerCertificateNodeID(conn net.Conn) string {
+	stater, ok := conn.(interface{ ConnectionState() tls.ConnectionState })
+	if !ok {
+		return ""
+	}
+	state := stater.ConnectionState()
+	if len(state.PeerCertificates) == 0 || state.PeerCertificates[0] == nil {
+		return ""
+	}
+	return strings.TrimSpace(state.PeerCertificates[0].Subject.CommonName)
+}
+
 func subscriptionMessage(channel string, payload []byte) dispatch.Reply {
 	return dispatch.Array(
 		dispatch.BulkString([]byte("message")),
@@ -191,8 +203,10 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 		}
 	}
 	authSource := respAuthSourceNone
+	clientNodeID := ""
 	if isMTLSAuthenticated(conn) {
 		authSource = respAuthSourceMTLS
+		clientNodeID = peerCertificateNodeID(conn)
 	}
 	reader := bufio.NewReader(conn)
 	writer := newSafeWriter(bufio.NewWriter(conn))
@@ -210,7 +224,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 			unsubscribeConfig = nil
 		}
 		if addedNode {
-			node.GlobalRegistry().Remove(clientIP)
+			node.GlobalRegistry().RemoveWithNodeID(clientIP, clientNodeID)
 			s.syncClusterClientCount(ctx)
 			addedNode = false
 		}
@@ -315,6 +329,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 			reply = s.registry.Execute(ctx, dispatch.Env{
 				Runtime:  s.runtime,
 				ClientIP: clientIP,
+				NodeID:   clientNodeID,
 				Conn: &dispatch.ConnEnv{
 					SubscribeConfigYAML: func() (int64, error) {
 						if s.runtime == nil {
@@ -324,7 +339,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 							return 1, nil
 						}
 						if !addedNode {
-							node.GlobalRegistry().Add(clientIP, connectedAt)
+							node.GlobalRegistry().AddWithNodeID(clientIP, clientNodeID, connectedAt)
 							s.syncClusterClientCount(ctx)
 							addedNode = true
 						}
@@ -345,7 +360,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 						unsubscribeConfig()
 						unsubscribeConfig = nil
 						if addedNode {
-							node.GlobalRegistry().Remove(clientIP)
+							node.GlobalRegistry().RemoveWithNodeID(clientIP, clientNodeID)
 							s.syncClusterClientCount(ctx)
 							addedNode = false
 						}

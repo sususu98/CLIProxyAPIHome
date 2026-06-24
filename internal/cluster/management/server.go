@@ -8,17 +8,19 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 )
 
 type Handler struct {
-	repo             *cluster.Repository
-	runtime          *home.Runtime
-	nodeIP           string
-	nodePort         int
-	forwardTLSConfig *tls.Config
+	repo                  *cluster.Repository
+	runtime               *home.Runtime
+	nodeIP                string
+	nodePort              int
+	forwardTLSConfig      *tls.Config
+	pluginStoreHTTPClient pluginstore.HTTPDoer
 }
 
 // NewHandler creates a new handler.
@@ -32,6 +34,13 @@ func (h *Handler) SetForwardTLSConfig(tlsConfig *tls.Config) {
 		return
 	}
 	h.forwardTLSConfig = tlsConfig
+}
+
+func (h *Handler) SetPluginStoreHTTPClient(client pluginstore.HTTPDoer) {
+	if h == nil {
+		return
+	}
+	h.pluginStoreHTTPClient = client
 }
 
 // requestContext handles a request context.
@@ -67,6 +76,18 @@ func (h *Handler) refreshConfig(ctx context.Context) error {
 	}
 	if errApply := h.runtime.ApplyConfigFromCluster(ctx, cfg); errApply != nil {
 		return errApply
+	}
+	h.runtime.PublishConfigYAML(payload)
+	return nil
+}
+
+func (h *Handler) publishCurrentConfig(ctx context.Context) error {
+	if h == nil || h.runtime == nil {
+		return nil
+	}
+	_, payload, errConfig := h.repo.LoadConfigAsRuntimeConfig(ctx)
+	if errConfig != nil {
+		return errConfig
 	}
 	h.runtime.PublishConfigYAML(payload)
 	return nil

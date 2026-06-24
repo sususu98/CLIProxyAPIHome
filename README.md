@@ -12,6 +12,7 @@ It serves as a centralized hub for managing and scheduling API credentials in la
 - **Multi-Provider OAuth2 Support**: Manages OAuth2 credentials for various AI model providers, including OpenAI, Claude, Codex, Antigravity, Kimi, xAI, and more.
 - **High Availability**: Supports multi-account management and round-robin load balancing to ensure optimal performance and reliability.
 - **Secure Access**: Provides a streamlined CLI authentication flow to ensure secure access to APIs.
+- **Plugin Support**: Supports installing and enabling CLIProxyAPI-compatible plugins through Home Management.
 - **Flexible Upstream Integration**: Easily integrate upstream providers via configuration, including:
   - OpenAI-compatible providers (e.g., OpenRouter)
   - OpenAI Responses protocol providers

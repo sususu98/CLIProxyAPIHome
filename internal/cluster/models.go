@@ -144,6 +144,57 @@ func (KVRecord) TableName() string {
 	return "kv_store"
 }
 
+type PluginStatusRecord struct {
+	NodeType      string     `gorm:"column:node_type;primaryKey;size:16;index:idx_plugin_status_node,priority:1;index:idx_plugin_status_plugin,priority:1"`
+	NodeID        string     `gorm:"column:node_id;primaryKey;size:128;index:idx_plugin_status_node,priority:2"`
+	PluginID      string     `gorm:"column:plugin_id;primaryKey;size:128;index:idx_plugin_status_plugin,priority:2"`
+	TaskID        uint       `gorm:"column:task_id;index"`
+	ClientIP      string     `gorm:"column:client_ip;index"`
+	SchemaVersion int        `gorm:"column:schema_version"`
+	Task          string     `gorm:"column:task"`
+	TaskStatus    string     `gorm:"column:task_status;index"`
+	Phase         string     `gorm:"column:phase;index"`
+	OK            bool       `gorm:"column:ok;index"`
+	TaskError     string     `gorm:"column:task_error;type:text"`
+	StartedAt     time.Time  `gorm:"column:started_at"`
+	FinishedAt    *time.Time `gorm:"column:finished_at"`
+	ReportedAt    time.Time  `gorm:"column:reported_at;index"`
+	GOOS          string     `gorm:"column:goos;index"`
+	GOARCH        string     `gorm:"column:goarch;index"`
+	Variant       string     `gorm:"column:variant"`
+	Version       string     `gorm:"column:version"`
+	ReleaseTag    string     `gorm:"column:release_tag"`
+	Repository    string     `gorm:"column:repository;type:text"`
+	InstallStatus string     `gorm:"column:install_status;index"`
+	LoadStatus    string     `gorm:"column:load_status;index"`
+	Path          string     `gorm:"column:path;type:text"`
+	Skipped       bool       `gorm:"column:skipped"`
+	Overwritten   bool       `gorm:"column:overwritten"`
+	PluginError   string     `gorm:"column:plugin_error;type:text"`
+	CreatedAt     time.Time  `gorm:"column:created_at"`
+	UpdatedAt     time.Time  `gorm:"column:updated_at"`
+}
+
+// TableName returns the database table name.
+func (PluginStatusRecord) TableName() string {
+	return "plugin_status"
+}
+
+type PluginTaskRecord struct {
+	ID             uint      `gorm:"column:id;primaryKey;autoIncrement"`
+	Operation      string    `gorm:"column:operation;size:32;index:idx_plugin_tasks_operation"`
+	PluginID       string    `gorm:"column:plugin_id;size:128;index:idx_plugin_tasks_plugin"`
+	TargetNodeType string    `gorm:"column:target_node_type;size:16;index:idx_plugin_tasks_target,priority:1"`
+	TargetNodeID   string    `gorm:"column:target_node_id;size:128;index:idx_plugin_tasks_target,priority:2"`
+	CreatedAt      time.Time `gorm:"column:created_at"`
+	UpdatedAt      time.Time `gorm:"column:updated_at"`
+}
+
+// TableName returns the database table name.
+func (PluginTaskRecord) TableName() string {
+	return "plugin_tasks"
+}
+
 type UserRecord struct {
 	ID        uint           `gorm:"column:id;primaryKey;autoIncrement;index:idx_user_active_order,priority:2"`
 	Username  string         `gorm:"column:username;not null;index;index:idx_user_username_active,priority:1"`

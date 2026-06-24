@@ -122,6 +122,9 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodGet, "/config", handler.GetConfig)
 	r.Set(http.MethodGet, "/config.yaml", handler.GetConfigYAML)
 	r.Set(http.MethodPut, "/config.yaml", handler.PutConfigYAML)
+	r.Set(http.MethodGet, "/plugin-store", handler.ListPluginStore)
+	r.Set(http.MethodPost, "/plugin-store/:id/install", handler.InstallPluginFromStore)
+	r.Set(http.MethodPost, "/plugin-store/:id/uninstall", handler.UninstallPluginFromStore)
 
 	r.Set(http.MethodGet, "/debug", handler.GetDebug)
 	r.Set(http.MethodPut, "/debug", handler.PutDebug)
@@ -199,7 +202,6 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodPut, "/model-group-details/:id", handler.UpdateModelGroupDetail)
 	r.Set(http.MethodPatch, "/model-group-details/:id", handler.UpdateModelGroupDetail)
 	r.Set(http.MethodDelete, "/model-group-details/:id", handler.DeleteModelGroupDetail)
-
 
 	r.Set(http.MethodGet, "/request-log", handler.GetRequestLog)
 	r.Set(http.MethodPut, "/request-log", handler.PutRequestLog)
@@ -670,7 +672,6 @@ func defaultRoutes(handler *cpasdkapi.Handler) *RouteRegistry {
 	r.Set(http.MethodGet, "/request-log", handler.GetRequestLog)
 	r.Set(http.MethodPut, "/request-log", handler.PutRequestLog)
 	r.Set(http.MethodPatch, "/request-log", handler.PutRequestLog)
-
 
 	r.Set(http.MethodGet, "/request-retry", handler.GetRequestRetry)
 	r.Set(http.MethodPut, "/request-retry", handler.PutRequestRetry)

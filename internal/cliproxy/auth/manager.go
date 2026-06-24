@@ -59,8 +59,10 @@ type Manager struct {
 	oauthModelAlias atomic.Value
 	runtimeConfig   atomic.Value
 
-	rtProvider   RoundTripperProvider
-	fullResolver FullAuthResolver
+	rtProvider      RoundTripperProvider
+	fullResolver    FullAuthResolver
+	pluginRefresher PluginAuthRefresher
+	pluginScheduler PluginScheduler
 
 	refreshCancel context.CancelFunc
 	refreshLoop   *authAutoRefreshLoop
@@ -611,7 +613,7 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
 
-	if m.useSchedulerFastPath() {
+	if !m.hasPluginScheduler() && m.useSchedulerFastPath() {
 		tried := make(map[string]struct{})
 		for {
 			auth, providerKey, errPick := m.scheduler.pickMixed(ctx, providers, routeModel, opts, tried)
@@ -667,6 +669,7 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 		now := time.Now()
 		m.mu.RLock()
 		selector := m.selector
+		pluginScheduler := m.pluginScheduler
 		dispatchCandidates := make([]dispatchCandidate, 0, len(m.auths))
 		availableAuths := make([]*Auth, 0, len(m.auths))
 		totalCandidates := 0
@@ -712,9 +715,34 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 			return nil, dispatchUnavailableError(routeModel, providerForSelector, totalCandidates, cooldownCount, earliest, now)
 		}
 
-		auth, errPick := selector.Pick(ctx, providerForSelector, selectionArgForSelector(selector, routeModel), opts, availableAuths)
-		if errPick != nil {
-			return nil, errPick
+		var auth *Auth
+		if pluginScheduler != nil {
+			pluginAuth, handled, errPluginPick := m.pickViaPluginScheduler(ctx, pluginScheduler, providerForSelector, normalizedProviders, routeModel, opts, tried, availableAuths)
+			if errPluginPick != nil {
+				return nil, errPluginPick
+			}
+			if handled && pluginAuth != nil {
+				auth = pluginAuth
+			}
+		}
+
+		if auth == nil {
+			if isBuiltInSelector(selector) {
+				builtinAuth, handledBuiltin, errBuiltinPick := m.pickViaBuiltinScheduler(ctx, schedulerStrategyCurrent, providerForSelector, normalizedProviders, routeModel, opts, tried)
+				if errBuiltinPick != nil {
+					return nil, errBuiltinPick
+				}
+				if handledBuiltin {
+					auth = builtinAuth
+				}
+			}
+			if auth == nil {
+				var errPick error
+				auth, errPick = selector.Pick(ctx, providerForSelector, selectionArgForSelector(selector, routeModel), opts, availableAuths)
+				if errPick != nil {
+					return nil, errPick
+				}
+			}
 		}
 		if auth == nil {
 			return nil, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
@@ -1233,7 +1261,10 @@ func (m *Manager) RefreshNow(ctx context.Context, authIndex string) (*Auth, erro
 	}
 
 	rt := m.roundTripperFor(target)
-	updated, errRefresh := refreshCredential(ctx, cfg, target.Clone(), rt)
+	updated, handledPluginRefresh, errRefresh := m.refreshViaPlugin(ctx, target)
+	if !handledPluginRefresh {
+		updated, errRefresh = refreshCredential(ctx, cfg, target.Clone(), rt)
+	}
 	now := time.Now().UTC()
 	if errRefresh != nil {
 		snapshot := target.Clone()
@@ -1292,7 +1323,10 @@ func (m *Manager) RefreshAuthCredential(ctx context.Context, target *Auth) (*Aut
 	}
 
 	rt := m.roundTripperFor(target)
-	updated, errRefresh := refreshCredential(ctx, cfg, target.Clone(), rt)
+	updated, handledPluginRefresh, errRefresh := m.refreshViaPlugin(ctx, target)
+	if !handledPluginRefresh {
+		updated, errRefresh = refreshCredential(ctx, cfg, target.Clone(), rt)
+	}
 	now := time.Now().UTC()
 	if errRefresh != nil {
 		snapshot := target.Clone()
@@ -1357,7 +1391,10 @@ func (m *Manager) refreshAuth(ctx context.Context, authID string) {
 		return
 	}
 
-	updated, errRefresh := refreshCredential(ctx, cfg, current.Clone(), m.roundTripperFor(current))
+	updated, handledPluginRefresh, errRefresh := m.refreshViaPlugin(ctx, current)
+	if !handledPluginRefresh {
+		updated, errRefresh = refreshCredential(ctx, cfg, current.Clone(), m.roundTripperFor(current))
+	}
 	if errRefresh != nil && errors.Is(errRefresh, context.Canceled) {
 		log.Debugf("auth refresh canceled | auth=%s provider=%s", authID, current.Provider)
 		return

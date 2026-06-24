@@ -58,6 +58,28 @@ pprof:
   enable: false
   addr: "127.0.0.1:8316"
 
+# Standard dynamic library plugins are trusted in-process code loaded by Home and downstream CPA nodes.
+# Home uses provider/auth/model/scheduler capabilities locally. Store installs write a pinned
+# manifest into plugins.configs.<pluginID>.store; each Home/CPA node downloads its own
+# current-platform artifact into this local directory during config application.
+# Build Go examples with go build -buildmode=c-shared for the target GOOS/GOARCH.
+# Other languages can implement the same C ABI and JSON method protocol.
+# Per-plugin enabled only controls plugins.configs.<pluginID>.enabled and does not implicitly change global plugins.enabled.
+plugins:
+  enabled: false
+  dir: "plugins"
+  # Additional plugin store registries. The built-in official registry is always included.
+  # store-sources:
+  #   - "https://example.com/cliproxy-plugins/registry.json"
+  configs:
+    example:
+      enabled: true
+      priority: 1
+      config1: true
+      config2: "string"
+      config3: 3
+      mode: "safe" # enum example: safe, fast
+
 # When true, disable high-overhead HTTP middleware features to reduce per-request memory usage under high concurrency.
 commercial-mode: false
 

@@ -72,6 +72,7 @@ func RuntimeConfigFromRoot(root map[string]any) (*appconfig.Config, []byte, erro
 	if errUnmarshal := yaml.Unmarshal(data, cfg); errUnmarshal != nil {
 		return nil, nil, errUnmarshal
 	}
+	cfg.NormalizePluginsConfig()
 	cfg.SanitizeGeminiKeys()
 	cfg.SanitizeVertexCompatKeys()
 	cfg.SanitizeCodexKeys()

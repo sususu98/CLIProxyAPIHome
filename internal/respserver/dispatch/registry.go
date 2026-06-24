@@ -16,6 +16,10 @@ type Env struct {
 	// ClientIP is the remote TCP client's IP address as resolved by the RESP server.
 	// It can be empty when the address cannot be resolved.
 	ClientIP string
+
+	// NodeID is the mTLS client certificate common name when available.
+	// It can be empty in unit tests or unauthenticated contexts.
+	NodeID string
 }
 
 type ConnEnv struct {

@@ -206,6 +206,9 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/payload` |
 | `PATCH` | `/payload` |
 | `PUT` | `/payload` |
+| `GET` | `/plugin-store` |
+| `POST` | `/plugin-store/:id/install` |
+| `POST` | `/plugin-store/:id/uninstall` |
 | `DELETE` | `/proxy-url` |
 | `GET` | `/proxy-url` |
 | `PATCH` | `/proxy-url` |
@@ -461,10 +464,40 @@ openai-compatibility
 
 ```json
 {
+  "plugin_report_required": true,
+  "plugin_report_statuses": [
+    {
+      "schema_version": 1,
+      "task": "plugin-sync",
+      "node_type": "cpa",
+      "node_id": "node-1",
+      "client_ip": "10.0.0.12",
+      "status": "success",
+      "phase": "load",
+      "ok": true,
+      "updated_at": "2026-05-27T10:29:59Z",
+      "platform": { "goos": "linux", "goarch": "amd64" },
+      "plugins": [
+        { "id": "sample-provider", "install_status": "installed", "load_status": "loaded" }
+      ]
+    }
+  ],
   "nodes": [
     {
       "ip": "10.0.0.12",
-      "connected_time": "2026-05-27T10:30:00Z"
+      "node_id": "node-1",
+      "connected_time": "2026-05-27T10:30:00Z",
+      "client_count": 1,
+      "healthy": true,
+      "plugin_report_state": "reported_ok",
+      "plugin_report_statuses": [
+        {
+          "node_id": "node-1",
+          "status": "success",
+          "phase": "load",
+          "ok": true
+        }
+      ]
     }
   ]
 }
@@ -473,8 +506,21 @@ openai-compatibility
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `nodes` | array | 当前活跃节点列表。 |
+| `plugin_report_required` | boolean | 当前 Home 配置是否期望 CPA 上报插件状态；至少一个已启用插件带有固定的 store manifest 时为 `true`。 |
+| `plugin_report_statuses` | array | 共享数据库中保存的最新插件上报，按上报节点和上报元数据分组；单插件删除上报可以和其他插件保留的状态行同时存在。它们会一直保留到节点再次上报或被显式清理，不按 TTL 自动过期。这是 CPA 自报告的观测信息，不是强可信安装事实。 |
+| `nodes[].node_id` | string | 从 Home 客户端证书得到的 CPA node ID。 |
 | `nodes[].ip` | string | 节点 IP 地址。 |
 | `nodes[].connected_time` | string | 当前活跃节点条目的首次连接时间。 |
+| `nodes[].client_count` | integer | 当前 IP 下活跃 RESP 订阅连接数。 |
+| `nodes[].healthy` | boolean | 节点是否存在活跃 RESP 配置订阅连接；插件上报不会直接让该字段变为不健康。 |
+| `nodes[].plugin_report_state` | string | 当前已配置插件的观测状态：`not_required`、`missing_report`、`reported_partial`、`reported_failed` 或 `reported_ok`；当前不需要的插件上报失败不会让该状态变为失败。 |
+| `nodes[].plugin_report_statuses` | array | 关联到当前活跃节点的插件上报，优先按 node ID 匹配，缺失时按 IP fallback。 |
+| `plugin_report_statuses[].node_type` | string | 上报节点类型；CPA 节点上报为 `cpa`，`home` 预留给 Home 节点上报。 |
+| `plugin_report_statuses[].node_id` | string | 从 CPA Home 客户端证书得到的节点 ID。 |
+| `plugin_report_statuses[].status` | string | 此上报分组的插件任务状态，当前为 `success` 或 `failed`。 |
+| `plugin_report_statuses[].phase` | string | 此上报分组的任务阶段，例如 `install`、`load` 或 `delete`。 |
+| `plugin_report_statuses[].ok` | boolean | 节点自报告的任务是否成功。 |
+| `plugin_report_statuses[].plugins` | array | 属于此上报分组的每个插件安装/加载/删除结果。 |
 
 ### GET `/latest-version`
 
@@ -496,6 +542,142 @@ openai-compatibility
 { "error": "unexpected_status", "message": "status 502: detail" }
 { "error": "decode_failed", "message": "detail" }
 { "error": "invalid_response", "message": "missing release version" }
+```
+
+## Plugin Store
+
+插件商店接口用于列出 registry 中的插件，并把选中的插件写入数据库驱动的 Home 配置。安装接口写入的是 `plugins.configs.<pluginID>.store` 固定 manifest，包含 repository、version 和 release tag；Home-mode CPA 节点随后根据这份 manifest 自行下载当前平台产物。通过 store 安装的插件默认不会被 Home 进程下载或加载；只有可信的 provider/auth 插件确实需要在 Home 内运行时，才显式设置 `plugins.configs.<pluginID>.load-in-home: true`。
+
+### GET `/plugin-store`
+
+列出内置官方 registry 和 `plugins.store-sources` 配置的额外 registry。
+
+输入：无。
+
+输出示例：
+
+```json
+{
+  "plugins_enabled": true,
+  "plugins_dir": "plugins",
+  "sources": [
+    {
+      "id": "official",
+      "name": "Official",
+      "url": "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI-Plugins-Store/main/registry.json"
+    }
+  ],
+  "plugins": [
+    {
+      "store_id": "official/sample-provider",
+      "source_id": "official",
+      "source_name": "Official",
+      "source_url": "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI-Plugins-Store/main/registry.json",
+      "id": "sample-provider",
+      "name": "Sample Provider",
+      "description": "Adds sample provider support.",
+      "author": "author-name",
+      "version": "0.2.0",
+      "repository": "https://github.com/author-name/sample-provider",
+      "installed": true,
+      "installed_version": "0.2.0",
+      "configured": true,
+      "registered": false,
+      "enabled": true,
+      "effective_enabled": true,
+      "update_available": false
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `plugins_enabled` | boolean | 当前全局 `plugins.enabled` 值。 |
+| `plugins_dir` | string | 各节点本地插件产物目录。 |
+| `sources` | array | 本次查询使用的插件 registry 来源。 |
+| `source_errors` | array | 部分 registry 查询失败时的来源级错误。 |
+| `plugins[].installed` | boolean | 当前配置中是否存在该插件的 store manifest。 |
+| `plugins[].installed_version` | string | 当前配置 manifest 固定的版本。 |
+| `plugins[].enabled` | boolean | `plugins.configs.<id>.enabled` 值。 |
+| `plugins[].effective_enabled` | boolean | 全局 plugins 和单插件 enabled 同时为 true 时为 true。 |
+| `plugins[].update_available` | boolean | registry 版本高于当前 manifest 版本时为 true。 |
+
+常见错误：
+
+```json
+{ "error": "plugin_store_source_invalid", "message": "detail" }
+{ "error": "plugin_store_registry_failed", "message": "detail" }
+```
+
+### POST `/plugin-store/:id/install`
+
+从 registry 条目安装插件配置 manifest。如果多个来源包含同一插件 ID，传入 `?source=<source_id>` 指定来源。
+
+输入 body：无。
+
+Query：
+
+| Query | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `source` | string | 否 | 插件 ID 在多个 registry 中有歧义时指定来源 ID。 |
+
+输出示例：
+
+```json
+{
+  "status": "installed",
+  "source_id": "official",
+  "source_name": "Official",
+  "source_url": "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI-Plugins-Store/main/registry.json",
+  "id": "sample-provider",
+  "version": "0.2.0",
+  "path": "",
+  "plugins_enabled": true,
+  "restart_required": false
+}
+```
+
+常见错误：
+
+```json
+{ "error": "plugin_not_found", "message": "plugin not found in registry" }
+{ "error": "plugin_store_source_required", "message": "multiple plugin store sources contain this plugin id; specify source" }
+{ "error": "plugin_release_failed", "message": "detail" }
+{ "error": "plugin_release_invalid", "message": "detail" }
+{ "error": "invalid_config", "message": "detail" }
+```
+
+### POST `/plugin-store/:id/uninstall`
+
+从整个 Home/CPA 集群卸载插件。接口会从共享 Home 配置中移除该插件的 store manifest，并为所有 CPA 节点创建删除任务；活跃 Home 节点在应用配置变化时也会删除本机当前平台的插件文件。
+
+输入 body/query：无。
+
+输出示例：
+
+```json
+{
+  "status": "uninstalled",
+  "id": "sample-provider",
+  "configured_removed": true,
+  "target_node_type": "all",
+  "restart_required": false,
+  "task": {
+    "id": 12,
+    "operation": "delete",
+    "plugin_id": "sample-provider",
+    "target_node_type": "all"
+  }
+}
+```
+
+常见错误：
+
+```json
+{ "error": "invalid_plugin_id", "message": "invalid plugin id" }
+{ "error": "plugin_task_create_failed", "message": "detail" }
+{ "error": "invalid_config", "message": "detail" }
 ```
 
 ### POST `/certificates/clients`
@@ -2559,6 +2741,10 @@ DELETE query：
 | `logging-to-file` | boolean | 将 app logs 写入文件而非 stdout。 |
 | `logs-max-total-size-mb` | integer | 日志文件总大小上限；`0` 禁用清理。 |
 | `error-logs-max-files` | integer | request error log 文件保留数量。 |
+| `plugins.enabled` | boolean | 在 Home 和下游 CPA 节点启用受信任的进程内插件。 |
+| `plugins.dir` | string | 每个节点本地插件产物目录。 |
+| `plugins.store-sources` | array of string | 额外插件商店 registry URL；内置官方 registry 始终包含。 |
+| `plugins.configs` | object | 以插件 ID 为 key 的单插件配置。插件商店安装会在插件条目下写入固定 `store` manifest；Home-mode CPA 节点根据该 manifest 下载产物，Home 仅在显式设置 `load-in-home: true` 时下载并加载。 |
 | `usage-statistics-enabled` | boolean | 启用内存 usage aggregation。Home 会向下游 CPA 强制为 `true`，并拒绝通过 Management API 关闭。 |
 | `redis-usage-queue-retention-seconds` | integer | Usage queue 保留窗口；默认 `60`，最大 `3600`。 |
 | `disable-cooling` | boolean | 全局禁用 quota cooldown scheduling。Home 会向下游 CPA 强制为 `true`。 |

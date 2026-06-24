@@ -94,6 +94,11 @@ func (r *Runtime) applyConfigAndReloadAuths(ctx context.Context, cfg *config.Con
 		r.coreManager.SetOAuthModelAlias(cfg.OAuthModelAlias)
 		r.coreManager.SetSelector(selectorFromConfig(cfg))
 	}
+	r.deleteRemovedPluginArtifacts(ctx, oldCfg, cfg)
+	if errPluginSync := r.syncPluginStoreManifests(ctx, cfg); errPluginSync != nil {
+		return errPluginSync
+	}
+	r.applyPluginConfig(ctx, cfg)
 
 	configaccess.Register(&cfg.SDKConfig)
 	r.refreshAccessProviders()

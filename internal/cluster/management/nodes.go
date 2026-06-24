@@ -1,10 +1,21 @@
 package management
 
 import (
+	"context"
 	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
+)
+
+const (
+	pluginInstallStatusFailed    = "failed"
+	pluginInstallStatusInstalled = "installed"
+	pluginInstallStatusSkipped   = "skipped"
+	pluginLoadStatusFailed       = "failed"
+	pluginLoadStatusLoaded       = "loaded"
 )
 
 // ListNodes returns a nodes.
@@ -12,5 +23,145 @@ func (h *Handler) ListNodes(c *gin.Context) {
 	if c == nil {
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"nodes": node.GlobalRegistry().List()})
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	taskStatuses, errStatuses := h.pluginTaskStatuses(ctx)
+	if errStatuses != nil {
+		respondError(c, http.StatusInternalServerError, "plugin_status_load_failed", errStatuses)
+		return
+	}
+	statusesByNodeID := make(map[string][]node.PluginTaskStatus)
+	statusesByIP := make(map[string][]node.PluginTaskStatus)
+	for _, status := range taskStatuses {
+		nodeID := strings.TrimSpace(status.NodeID)
+		if nodeID != "" {
+			statusesByNodeID[nodeID] = append(statusesByNodeID[nodeID], status)
+		}
+		clientIP := strings.TrimSpace(status.ClientIP)
+		if clientIP == "" {
+			continue
+		}
+		statusesByIP[clientIP] = append(statusesByIP[clientIP], status)
+	}
+	requiredPluginIDs := h.pluginTaskRequiredIDs(ctx)
+	activeNodes := node.GlobalRegistry().List()
+	nodes := make([]gin.H, 0, len(activeNodes))
+	for _, activeNode := range activeNodes {
+		statuses := statusesByNodeID[strings.TrimSpace(activeNode.NodeID)]
+		if len(statuses) == 0 {
+			statuses = statusesByIP[activeNode.IP]
+		}
+		state := pluginReportState(statuses, requiredPluginIDs)
+		nodes = append(nodes, gin.H{
+			"node_id":                activeNode.NodeID,
+			"ip":                     activeNode.IP,
+			"connected_time":         activeNode.Connected,
+			"client_count":           activeNode.ClientCount,
+			"healthy":                activeNode.ClientCount > 0,
+			"plugin_report_state":    state,
+			"plugin_report_statuses": statuses,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"nodes":                  nodes,
+		"plugin_report_required": len(requiredPluginIDs) > 0,
+		"plugin_report_statuses": taskStatuses,
+	})
+}
+
+func (h *Handler) pluginTaskStatuses(ctx context.Context) ([]node.PluginTaskStatus, error) {
+	if h == nil || h.repo == nil {
+		return nil, nil
+	}
+	return h.repo.ListPluginStatuses(ctx, node.PluginStatusNodeTypeCPA)
+}
+
+func (h *Handler) pluginTaskRequiredIDs(ctx context.Context) []string {
+	cfg, _, errConfig := h.currentConfig(ctx)
+	if errConfig != nil || cfg == nil || !cfg.Plugins.Enabled {
+		return nil
+	}
+	ids := make([]string, 0, len(cfg.Plugins.Configs))
+	for id, item := range cfg.Plugins.Configs {
+		if !pluginInstanceEnabled(item) {
+			continue
+		}
+		manifest, configured := configuredPluginStoreManifest(id, cfg)
+		if !configured {
+			continue
+		}
+		pluginID := strings.TrimSpace(manifest.ID)
+		if pluginID == "" {
+			pluginID = strings.TrimSpace(id)
+		}
+		if pluginID != "" {
+			ids = append(ids, pluginID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func pluginReportState(statuses []node.PluginTaskStatus, requiredPluginIDs []string) string {
+	if len(requiredPluginIDs) == 0 {
+		return "not_required"
+	}
+	if len(statuses) == 0 {
+		return "missing_report"
+	}
+
+	plugins := make(map[string]node.PluginTaskPlugin)
+	seen := make(map[string]struct{})
+	for _, status := range statuses {
+		for _, plugin := range status.Plugins {
+			id := strings.TrimSpace(plugin.ID)
+			if id == "" {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			plugins[id] = plugin
+			seen[id] = struct{}{}
+		}
+	}
+
+	for _, status := range statuses {
+		if len(status.Plugins) == 0 && (!status.OK || !strings.EqualFold(strings.TrimSpace(status.Status), "success")) {
+			return "reported_failed"
+		}
+	}
+
+	for _, id := range requiredPluginIDs {
+		plugin, ok := plugins[id]
+		if !ok {
+			return "reported_partial"
+		}
+		state := pluginReportPluginState(plugin)
+		if state == "reported_failed" {
+			return "reported_failed"
+		}
+		if state != "reported_ok" {
+			return "reported_partial"
+		}
+	}
+	return "reported_ok"
+}
+
+func pluginReportPluginState(plugin node.PluginTaskPlugin) string {
+	if strings.TrimSpace(plugin.Error) != "" {
+		return "reported_failed"
+	}
+	installStatus := strings.ToLower(strings.TrimSpace(plugin.InstallStatus))
+	loadStatus := strings.ToLower(strings.TrimSpace(plugin.LoadStatus))
+	if installStatus == pluginInstallStatusFailed || loadStatus == pluginLoadStatusFailed {
+		return "reported_failed"
+	}
+	if installStatus != pluginInstallStatusInstalled && installStatus != pluginInstallStatusSkipped {
+		return "reported_partial"
+	}
+	if loadStatus != pluginLoadStatusLoaded {
+		return "reported_partial"
+	}
+	return "reported_ok"
 }

@@ -11,6 +11,7 @@ import (
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
 	"gorm.io/gorm"
 )
 
@@ -184,6 +185,22 @@ func (a *RuntimeAdapter) KVPurgeExpired(ctx context.Context, now time.Time, limi
 		return 0, fmt.Errorf("cluster runtime adapter is disabled")
 	}
 	return a.repo.KVPurgeExpired(ctx, now, limit)
+}
+
+// ReplacePluginStatus stores the latest plugin status report for a node.
+func (a *RuntimeAdapter) ReplacePluginStatus(ctx context.Context, nodeType string, status node.PluginTaskStatus) error {
+	if !a.Enabled() {
+		return fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.ReplacePluginStatus(ctx, nodeType, status)
+}
+
+// ListPendingPluginTasks returns plugin tasks that the node has not acked yet.
+func (a *RuntimeAdapter) ListPendingPluginTasks(ctx context.Context, nodeType string, nodeID string) ([]node.PluginTask, error) {
+	if !a.Enabled() {
+		return nil, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	return a.repo.ListPendingPluginTasks(ctx, nodeType, nodeID)
 }
 
 // AllowedAuthIDsForAPIKey returns auth IDs allowed by API-key channel bindings.
