@@ -10,7 +10,6 @@ func ForceDownstreamHomeModeConfig(cfg *Config) {
 	cfg.UsageStatisticsEnabled = true
 	cfg.DisableCooling = true
 	cfg.WebsocketAuth = false
-	cfg.EnableGeminiCLIEndpoint = false
 }
 
 // ApplyDownstreamHomeModeScalars only applies scalar Home-mode overrides.
@@ -24,5 +23,4 @@ func ApplyDownstreamHomeModeScalars(root map[string]any) {
 	root["usage-statistics-enabled"] = true
 	root["disable-cooling"] = true
 	root["ws-auth"] = false
-	root["enable-gemini-cli-endpoint"] = false
 }

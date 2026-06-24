@@ -62,12 +62,6 @@ func DeterministicAPIKeyUUID(provider, baseURL, apiKeyHash, compatName, provider
 	return deterministicUUID(input)
 }
 
-// DeterministicVirtualUUID handles a deterministic virtual uuid.
-func DeterministicVirtualUUID(parentUUID, projectID string) string {
-	input := strings.Join([]string{strings.TrimSpace(parentUUID), strings.TrimSpace(projectID)}, "\x00")
-	return deterministicUUID(input)
-}
-
 // APIKeyHash handles an api key hash.
 func APIKeyHash(apiKey string) string {
 	trimmedKey := strings.TrimSpace(apiKey)

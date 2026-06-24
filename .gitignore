@@ -1,4 +1,8 @@
-docs/
+docs/*
+!docs/management/
+!docs/management/**
+!docs/user/
+!docs/user/**
 logs/
 static/
 config.yaml

@@ -378,7 +378,6 @@ func collectImportAuthFiles(cfg *appconfig.Config, authDir string, now time.Time
 		return errReadDir
 	}
 
-	legacyUUIDs := make(map[string]string)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
 			continue
@@ -407,24 +406,7 @@ func collectImportAuthFiles(cfg *appconfig.Config, authDir string, now time.Time
 			ClusterMode: true,
 		}
 		sctx.UUIDForAuth = func(auth *coreauth.Auth) string {
-			if auth == nil {
-				return ""
-			}
-			legacyID := auth.ID
-			if auth.Attributes != nil {
-				if parentID := strings.TrimSpace(auth.Attributes["gemini_virtual_parent"]); parentID != "" {
-					parentUUID := strings.TrimSpace(legacyUUIDs[parentID])
-					if parentUUID == "" {
-						parentUUID = parentID
-					}
-					auth.Attributes["gemini_virtual_parent"] = parentUUID
-					if auth.Metadata != nil {
-						auth.Metadata["virtual_parent_id"] = parentUUID
-					}
-					return DeterministicVirtualUUID(parentUUID, auth.Attributes["gemini_virtual_project"])
-				}
-			}
-			legacyUUIDs[legacyID] = currentFileUUID
+			_ = auth
 			return currentFileUUID
 		}
 

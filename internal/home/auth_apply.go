@@ -6,7 +6,6 @@ import (
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/runtime/geminicli"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -198,24 +197,18 @@ func extractAccessToken(auth *coreauth.Auth) string {
 		return ""
 	}
 
-	metadata := auth.Metadata
-	if shared := geminicli.ResolveSharedCredential(auth.Runtime); shared != nil {
-		if snapshot := shared.MetadataSnapshot(); len(snapshot) > 0 {
-			metadata = snapshot
-		}
-	}
-	if metadata == nil {
+	if auth.Metadata == nil {
 		return ""
 	}
 
-	if v, ok := metadata["access_token"].(string); ok {
+	if v, ok := auth.Metadata["access_token"].(string); ok {
 		if trimmed := strings.TrimSpace(v); trimmed != "" {
 			return trimmed
 		}
 	}
 
 	for _, nestedKey := range []string{"token", "Token"} {
-		raw, ok := metadata[nestedKey]
+		raw, ok := auth.Metadata[nestedKey]
 		if !ok || raw == nil {
 			continue
 		}

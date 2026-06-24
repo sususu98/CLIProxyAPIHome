@@ -93,29 +93,6 @@ The table below is extracted from the final Home route registry built by `intern
 
 | Method | Path |
 | --- | --- |
-| `GET` | `/ampcode` |
-| `GET` | `/ampcode/force-model-mappings` |
-| `PATCH` | `/ampcode/force-model-mappings` |
-| `PUT` | `/ampcode/force-model-mappings` |
-| `DELETE` | `/ampcode/model-mappings` |
-| `GET` | `/ampcode/model-mappings` |
-| `PATCH` | `/ampcode/model-mappings` |
-| `PUT` | `/ampcode/model-mappings` |
-| `GET` | `/ampcode/restrict-management-to-localhost` |
-| `PATCH` | `/ampcode/restrict-management-to-localhost` |
-| `PUT` | `/ampcode/restrict-management-to-localhost` |
-| `DELETE` | `/ampcode/upstream-api-key` |
-| `GET` | `/ampcode/upstream-api-key` |
-| `PATCH` | `/ampcode/upstream-api-key` |
-| `PUT` | `/ampcode/upstream-api-key` |
-| `DELETE` | `/ampcode/upstream-api-keys` |
-| `GET` | `/ampcode/upstream-api-keys` |
-| `PATCH` | `/ampcode/upstream-api-keys` |
-| `PUT` | `/ampcode/upstream-api-keys` |
-| `DELETE` | `/ampcode/upstream-url` |
-| `GET` | `/ampcode/upstream-url` |
-| `PATCH` | `/ampcode/upstream-url` |
-| `PUT` | `/ampcode/upstream-url` |
 | `GET` | `/anthropic-auth-url` |
 | `GET` | `/antigravity-auth-url` |
 | `POST` | `/api-call` |
@@ -183,7 +160,6 @@ The table below is extracted from the final Home route registry built by `intern
 | `GET` | `/gemini-api-key` |
 | `PATCH` | `/gemini-api-key` |
 | `PUT` | `/gemini-api-key` |
-| `GET` | `/gemini-cli-auth-url` |
 | `GET` | `/get-auth-status` |
 | `GET` | `/kimi-auth-url` |
 | `GET` | `/latest-version` |
@@ -283,7 +259,6 @@ Example response:
 {
   "proxy-url": "http://127.0.0.1:7890",
   "disable-image-generation": false,
-  "enable-gemini-cli-endpoint": false,
   "force-model-prefix": false,
   "request-log": false,
   "api-keys": ["client-key"],
@@ -345,14 +320,6 @@ Example response:
   },
   "openai-compatibility": [],
   "vertex-api-key": [],
-  "ampcode": {
-    "upstream-url": "",
-    "upstream-api-key": "",
-    "upstream-api-keys": [],
-    "restrict-management-to-localhost": false,
-    "model-mappings": [],
-    "force-model-mappings": false
-  },
   "oauth-excluded-models": {
     "claude": ["model-id"]
   },
@@ -1487,8 +1454,6 @@ Example response:
 }
 ```
 
-Gemini virtual auth records may also return `virtual_primary`, `virtual_children`, `virtual`, `virtual_parent_id`, `virtual_project`, and `project_id`.
-
 ### GET `/auth-files/models?name=<name-or-id>`
 
 Returns models associated with an auth file or auth ID.
@@ -1673,7 +1638,6 @@ These routes create provider login URLs or device-flow sessions:
 ```text
 GET /anthropic-auth-url
 GET /codex-auth-url
-GET /gemini-cli-auth-url
 GET /antigravity-auth-url
 GET /kimi-auth-url
 GET /xai-auth-url
@@ -1688,12 +1652,6 @@ Common response:
   "state": "oauth-state"
 }
 ```
-
-`GET /gemini-cli-auth-url` accepts:
-
-| Query | Type | Description |
-| --- | --- | --- |
-| `project_id` | string | Requested GCP project ID. Special values include `ALL` and `GOOGLE_ONE`; empty value means automatic selection. |
 
 `GET /kimi-auth-url` starts a device flow and returns the verification URL. Completion is handled by Home in the background.
 
@@ -1733,7 +1691,7 @@ Example request:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `provider` | string | yes | Supported aliases: `anthropic`/`claude`, `codex`/`openai`, `gemini`/`google`, `antigravity`/`anti-gravity`, and `xai`/`x-ai`/`grok`. `kimi` is not completed through this route. |
+| `provider` | string | yes | Supported aliases: `anthropic`/`claude`, `codex`/`openai`, `antigravity`/`anti-gravity`, and `xai`/`x-ai`/`grok`. `kimi` is not completed through this route. |
 | `redirect_url` | string | no | Full callback URL. Missing `code`, `state`, or `error` values can be extracted from it. |
 | `code` | string | conditionally | OAuth authorization code; required unless `error` is supplied. |
 | `state` | string | yes | OAuth state token. |
@@ -2059,7 +2017,6 @@ Supported channels:
 claude
 gemini
 vertex
-gemini-cli
 codex
 codex-free
 codex-team
@@ -2462,54 +2419,6 @@ Response:
 { "status": "ok" }
 ```
 
-## AmpCode
-
-These routes read and write `ampcode` config.
-
-`AmpCode` object:
-
-```json
-{
-  "upstream-url": "https://amp.example.com",
-  "upstream-api-key": "upstream-key",
-  "upstream-api-keys": [
-    {
-      "upstream-api-key": "upstream-key",
-      "api-keys": ["client-key"]
-    }
-  ],
-  "restrict-management-to-localhost": false,
-  "model-mappings": [
-    { "from": "claude-opus-4.5", "to": "claude-sonnet-4", "regex": false }
-  ],
-  "force-model-mappings": false
-}
-```
-
-Routes:
-
-| Method | Path | Input | Output |
-| --- | --- | --- | --- |
-| `GET` | `/ampcode` | none | `{ "ampcode": AmpCode }` |
-| `GET` | `/ampcode/upstream-url` | none | `{ "upstream-url": string }` |
-| `PUT/PATCH` | `/ampcode/upstream-url` | `{ "value": string }` | `{ "status": "ok" }` |
-| `DELETE` | `/ampcode/upstream-url` | none | `{ "status": "ok" }` |
-| `GET` | `/ampcode/upstream-api-key` | none | `{ "upstream-api-key": string }` |
-| `PUT/PATCH` | `/ampcode/upstream-api-key` | `{ "value": string }` | `{ "status": "ok" }` |
-| `DELETE` | `/ampcode/upstream-api-key` | none | `{ "status": "ok" }` |
-| `GET` | `/ampcode/restrict-management-to-localhost` | none | `{ "restrict-management-to-localhost": boolean }` |
-| `PUT/PATCH` | `/ampcode/restrict-management-to-localhost` | `{ "value": boolean }` | `{ "status": "ok" }` |
-| `GET` | `/ampcode/model-mappings` | none | `{ "model-mappings": AmpModelMapping[] }` |
-| `PUT` | `/ampcode/model-mappings` | `{ "value": AmpModelMapping[] }` | `{ "status": "ok" }` |
-| `PATCH` | `/ampcode/model-mappings` | `{ "value": AmpModelMapping[] }`; upsert by `from` | `{ "status": "ok" }` |
-| `DELETE` | `/ampcode/model-mappings` | `{ "value": ["from-model"] }`; invalid or missing body clears all mappings | `{ "status": "ok" }` |
-| `GET` | `/ampcode/force-model-mappings` | none | `{ "force-model-mappings": boolean }` |
-| `PUT/PATCH` | `/ampcode/force-model-mappings` | `{ "value": boolean }` | `{ "status": "ok" }` |
-| `GET` | `/ampcode/upstream-api-keys` | none | `{ "upstream-api-keys": AmpUpstreamAPIKeyEntry[] }` |
-| `PUT` | `/ampcode/upstream-api-keys` | `{ "value": AmpUpstreamAPIKeyEntry[] }` | `{ "status": "ok" }` |
-| `PATCH` | `/ampcode/upstream-api-keys` | `{ "value": AmpUpstreamAPIKeyEntry[] }`; upsert by `upstream-api-key` | `{ "status": "ok" }` |
-| `DELETE` | `/ampcode/upstream-api-keys` | `{ "value": [] }` clears all; `{ "value": ["key"] }` deletes matching upstream keys | `{ "status": "ok" }` |
-
 ## OAuth Model Rules
 
 ### `/oauth-excluded-models`
@@ -2636,7 +2545,6 @@ These fields are accepted by Home YAML config. `PUT /config.yaml` accepts non-cr
 | `auth-dir` | string | Local auth token directory. |
 | `proxy-url` | string | Global outbound proxy URL. |
 | `disable-image-generation` | boolean or `"chat"` | `false` enables image generation; `true` disables it globally; `"chat"` disables injection for non-image endpoints. |
-| `enable-gemini-cli-endpoint` | boolean | Enables Gemini CLI internal endpoints. |
 | `force-model-prefix` | boolean | Requires explicit model prefixes for prefixed credentials. |
 | `request-log` | boolean | Enables detailed request logging. |
 | `api-keys` | array of string | Client API keys accepted by Home. |
@@ -2681,7 +2589,6 @@ These fields are accepted by Home YAML config. `PUT /config.yaml` accepts non-cr
 | `claude-header-defaults.stabilize-device-profile` | boolean pointer | Enables stable Claude device profile baseline. |
 | `openai-compatibility` | array of `OpenAICompatibility` | OpenAI-compatible providers; use provider-key routes. |
 | `vertex-api-key` | array of `VertexCompatKey` | Vertex-compatible API-key credentials; use provider-key routes. |
-| `ampcode` | `AmpCode` | Amp CLI integration settings. |
 | `oauth-excluded-models` | object string to array of string | Per-provider OAuth/file-backed auth excluded models. |
 | `oauth-model-alias` | object string to array of `OAuthModelAlias` | Per-channel OAuth model aliases. |
 | `payload.default` | array of `PayloadRule` | Sets missing JSON payload params. |

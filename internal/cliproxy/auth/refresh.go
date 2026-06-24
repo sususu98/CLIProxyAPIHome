@@ -16,7 +16,6 @@ import (
 	kimiauth "github.com/router-for-me/CLIProxyAPIHome/internal/auth/kimi"
 	xaiauth "github.com/router-for-me/CLIProxyAPIHome/internal/auth/xai"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/runtime/geminicli"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -37,8 +36,6 @@ func refreshCredential(ctx context.Context, cfg *config.Config, auth *Auth, rt h
 		return refreshCodex(ctx, cfg, auth)
 	case "claude":
 		return refreshClaude(ctx, cfg, auth)
-	case "gemini", "gemini-cli":
-		return refreshGeminiCLI(ctx, cfg, auth, rt)
 	case "kimi":
 		return refreshKimi(ctx, cfg, auth)
 	case "antigravity":
@@ -48,181 +45,6 @@ func refreshCredential(ctx context.Context, cfg *config.Config, auth *Auth, rt h
 	default:
 		return auth, nil
 	}
-}
-
-// refreshGeminiCLI refreshes a gemini cli.
-func refreshGeminiCLI(ctx context.Context, cfg *config.Config, auth *Auth, rt http.RoundTripper) (*Auth, error) {
-	// Resolve credential context before calling upstream OAuth services.
-	_ = cfg
-	if auth == nil {
-		return nil, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	meta := auth.Metadata
-	shared := geminicli.ResolveSharedCredential(auth.Runtime)
-	if shared != nil {
-		meta = shared.MetadataSnapshot()
-	}
-	if meta == nil {
-		return auth, nil
-	}
-
-	tokenKey := ""
-	tokenMap := map[string]any(nil)
-	for _, key := range []string{"token", "Token"} {
-		raw, ok := meta[key]
-		if !ok || raw == nil {
-			continue
-		}
-		switch typed := raw.(type) {
-		case map[string]any:
-			tokenKey = key
-			tokenMap = typed
-		case map[string]string:
-			converted := make(map[string]any, len(typed))
-			for k, v := range typed {
-				converted[k] = v
-			}
-			tokenKey = key
-			tokenMap = converted
-		}
-		if tokenMap != nil {
-			break
-		}
-	}
-
-	if tokenMap == nil {
-		tokenMap = meta
-	}
-
-	refreshToken, _ := tokenMap["refresh_token"].(string)
-	clientID, _ := tokenMap["client_id"].(string)
-	clientSecret, _ := tokenMap["client_secret"].(string)
-	tokenURI, _ := tokenMap["token_uri"].(string)
-	refreshToken = strings.TrimSpace(refreshToken)
-	clientID = strings.TrimSpace(clientID)
-	clientSecret = strings.TrimSpace(clientSecret)
-	tokenURI = strings.TrimSpace(tokenURI)
-	if tokenURI == "" {
-		tokenURI = "https://oauth2.googleapis.com/token"
-	}
-
-	if refreshToken == "" || clientID == "" || clientSecret == "" {
-		return nil, fmt.Errorf("gemini refresh: missing refresh credentials")
-	}
-
-	form := url.Values{}
-	form.Set("grant_type", "refresh_token")
-	form.Set("refresh_token", refreshToken)
-	form.Set("client_id", clientID)
-	form.Set("client_secret", clientSecret)
-
-	req, errReq := http.NewRequestWithContext(ctx, http.MethodPost, tokenURI, strings.NewReader(form.Encode()))
-	if errReq != nil {
-		return nil, errReq
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "Go-http-client/2.0")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	if rt != nil {
-		client.Transport = rt
-	}
-	resp, errDo := client.Do(req)
-	if errDo != nil {
-		return nil, errDo
-	}
-	defer func() {
-		if errClose := resp.Body.Close(); errClose != nil {
-			log.Errorf("gemini refresh: response body close error: %v", errClose)
-		}
-	}()
-	body, errRead := io.ReadAll(resp.Body)
-	if errRead != nil {
-		return nil, errRead
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("gemini refresh: oauth refresh failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	var tokenResp struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int64  `json:"expires_in"`
-		TokenType    string `json:"token_type"`
-	}
-	if errUnmarshal := json.Unmarshal(body, &tokenResp); errUnmarshal != nil {
-		return nil, errUnmarshal
-	}
-	if strings.TrimSpace(tokenResp.AccessToken) == "" {
-		return nil, fmt.Errorf("gemini refresh: no access_token in refresh response")
-	}
-
-	tokenMapCopy := make(map[string]any, len(tokenMap)+4)
-	for k, v := range tokenMap {
-		tokenMapCopy[k] = v
-	}
-	tokenMapCopy["access_token"] = strings.TrimSpace(tokenResp.AccessToken)
-	if strings.TrimSpace(tokenResp.RefreshToken) != "" {
-		tokenMapCopy["refresh_token"] = strings.TrimSpace(tokenResp.RefreshToken)
-	}
-	if tokenResp.ExpiresIn > 0 {
-		expiry := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).UTC()
-		if _, ok := tokenMapCopy["expiry_date"]; ok {
-			tokenMapCopy["expiry_date"] = expiry.UnixMilli()
-		} else if _, ok := tokenMapCopy["expired"]; ok {
-			tokenMapCopy["expired"] = expiry.Format(time.RFC3339)
-		} else if _, ok := tokenMapCopy["expiry"]; ok {
-			tokenMapCopy["expiry"] = expiry.Format(time.RFC3339)
-		} else if _, ok := tokenMapCopy["expires_at"]; ok {
-			tokenMapCopy["expires_at"] = expiry.Format(time.RFC3339)
-		} else if _, ok := tokenMapCopy["expiresAt"]; ok {
-			tokenMapCopy["expiresAt"] = expiry.Format(time.RFC3339)
-		} else if _, ok := tokenMapCopy["expires"]; ok {
-			tokenMapCopy["expires"] = expiry.Format(time.RFC3339)
-		}
-	}
-
-	now := time.Now().UTC()
-	if _, ok := meta["last_refresh"]; ok {
-		meta["last_refresh"] = now.Format(time.RFC3339)
-	} else if _, ok := meta["lastRefresh"]; ok {
-		meta["lastRefresh"] = now.Format(time.RFC3339)
-	}
-
-	if tokenKey != "" {
-		meta[tokenKey] = tokenMapCopy
-	} else {
-		meta = tokenMapCopy
-	}
-
-	if shared != nil {
-		values := map[string]any{}
-		if tokenKey != "" {
-			values[tokenKey] = tokenMapCopy
-		} else {
-			values["access_token"] = tokenMapCopy["access_token"]
-			if v, ok := tokenMapCopy["refresh_token"]; ok {
-				values["refresh_token"] = v
-			}
-			if v, ok := tokenMapCopy["expiry_date"]; ok {
-				values["expiry_date"] = v
-			}
-			if v, ok := tokenMapCopy["expired"]; ok {
-				values["expired"] = v
-			}
-			if v, ok := tokenMapCopy["expiry"]; ok {
-				values["expiry"] = v
-			}
-		}
-		shared.MergeMetadata(values)
-	}
-
-	auth.Metadata = meta
-	return auth, nil
 }
 
 // refreshCodex refreshes a codex.

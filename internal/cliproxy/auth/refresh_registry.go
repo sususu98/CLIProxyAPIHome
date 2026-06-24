@@ -17,7 +17,6 @@ func init() {
 	registerRefreshLead("codex", &codexRefreshLead)
 	registerRefreshLead("claude", &claudeRefreshLead)
 	registerRefreshLead("gemini", nil)
-	registerRefreshLead("gemini-cli", nil)
 	registerRefreshLead("antigravity", &antigravityRefreshLead)
 	registerRefreshLead("kimi", &kimiRefreshLead)
 	registerRefreshLead("xai", &xaiRefreshLead)

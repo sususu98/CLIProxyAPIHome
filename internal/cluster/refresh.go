@@ -173,19 +173,6 @@ func (c *RefreshController) refreshTarget(core *coreauth.Manager, authIndex stri
 
 	target := requested
 	targetIndex := authIndex
-	if requested.Attributes != nil {
-		if parent := strings.TrimSpace(requested.Attributes["gemini_virtual_parent"]); parent != "" {
-			parentAuth, okParent := core.GetByID(parent)
-			if !okParent || parentAuth == nil {
-				return "", "", fmt.Errorf("auth manager: auth not found")
-			}
-			target = parentAuth
-			targetIndex = strings.TrimSpace(parentAuth.Index)
-			if targetIndex == "" {
-				targetIndex = strings.TrimSpace(parentAuth.EnsureIndex())
-			}
-		}
-	}
 
 	uuid := strings.TrimSpace(target.ID)
 	if uuid == "" {
