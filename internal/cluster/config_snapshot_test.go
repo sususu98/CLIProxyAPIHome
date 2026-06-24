@@ -4,11 +4,10 @@ import "testing"
 
 func TestRuntimeConfigFromRootAppliesHomeModeScalarsAndPreservesRemoteManagement(t *testing.T) {
 	root := map[string]any{
-		"api-keys":                   []any{"local-key"},
-		"usage-statistics-enabled":   false,
-		"disable-cooling":            false,
-		"ws-auth":                    true,
-		"enable-gemini-cli-endpoint": true,
+		"api-keys":                 []any{"local-key"},
+		"usage-statistics-enabled": false,
+		"disable-cooling":          false,
+		"ws-auth":                  true,
 		"remote-management": map[string]any{
 			"allow-remote":          true,
 			"disable-control-panel": false,
@@ -30,9 +29,6 @@ func TestRuntimeConfigFromRootAppliesHomeModeScalarsAndPreservesRemoteManagement
 	}
 	if cfg.WebsocketAuth {
 		t.Fatal("WebsocketAuth = true, want false")
-	}
-	if cfg.EnableGeminiCLIEndpoint {
-		t.Fatal("EnableGeminiCLIEndpoint = true, want false")
 	}
 	if !cfg.RemoteManagement.AllowRemote {
 		t.Fatal("RemoteManagement.AllowRemote = false, want preserved true")

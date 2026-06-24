@@ -207,7 +207,6 @@ func TestPutConfigYAMLForcesHomeModeScalarsAndPreservesRemoteManagement(t *testi
 	payload := `port: 8327
 usage-statistics-enabled: false
 disable-cooling: false
-enable-gemini-cli-endpoint: true
 ws-auth: true
 remote-management:
   allow-remote: true
@@ -243,9 +242,6 @@ api-keys:
 	}
 	if cfg["ws-auth"] != false {
 		t.Fatalf("ws-auth = %v, want false", cfg["ws-auth"])
-	}
-	if cfg["enable-gemini-cli-endpoint"] != false {
-		t.Fatalf("enable-gemini-cli-endpoint = %v, want false", cfg["enable-gemini-cli-endpoint"])
 	}
 	entries, errEntries := repo.ListAPIKeyEntries(context.Background())
 	if errEntries != nil {

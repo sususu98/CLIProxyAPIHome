@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/runtime/geminicli"
 )
 
 // SanitizeAuthForDownstream removes refresh-capable credentials from the auth payload
@@ -16,21 +15,6 @@ func SanitizeAuthForDownstream(auth *coreauth.Auth) *coreauth.Auth {
 	}
 
 	out := auth.Clone()
-
-	if shared := geminicli.ResolveSharedCredential(out.Runtime); shared != nil {
-		if snapshot := shared.MetadataSnapshot(); len(snapshot) > 0 {
-			merged := make(map[string]any, len(snapshot))
-			for k, v := range snapshot {
-				merged[k] = v
-			}
-			if out.Metadata != nil {
-				for k, v := range out.Metadata {
-					merged[k] = v
-				}
-			}
-			out.Metadata = merged
-		}
-	}
 
 	if out.Attributes != nil {
 		delete(out.Attributes, "refresh_token")

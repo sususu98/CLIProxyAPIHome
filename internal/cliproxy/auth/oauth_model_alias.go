@@ -275,14 +275,13 @@ func modelAliasChannel(auth *Auth) string {
 // and auth kind. Returns empty string if the provider/authKind combination doesn't support
 // OAuth model alias (e.g., API key authentication).
 //
-// Supported channels: gemini-cli, vertex, antigravity, claude, codex, kimi, xai.
+// Supported channels: vertex, antigravity, claude, codex, kimi, xai.
 func OAuthModelAliasChannel(provider, authKind string) string {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	authKind = strings.ToLower(strings.TrimSpace(authKind))
 	switch provider {
 	case "gemini":
 		// gemini provider uses gemini-api-key config, not oauth-model-alias.
-		// OAuth-based gemini auth is converted to "gemini-cli" by the synthesizer.
 		return ""
 	case "vertex":
 		if authKind == "apikey" {
@@ -299,7 +298,7 @@ func OAuthModelAliasChannel(provider, authKind string) string {
 			return ""
 		}
 		return "codex"
-	case "gemini-cli", "antigravity", "kimi", "xai":
+	case "antigravity", "kimi", "xai":
 		return provider
 	default:
 		return ""

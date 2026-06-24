@@ -17,7 +17,6 @@ type staticModelsJSON struct {
 	Claude      []*ModelInfo `json:"claude"`
 	Gemini      []*ModelInfo `json:"gemini"`
 	Vertex      []*ModelInfo `json:"vertex"`
-	GeminiCLI   []*ModelInfo `json:"gemini-cli"`
 	CodexFree   []*ModelInfo `json:"codex-free"`
 	CodexTeam   []*ModelInfo `json:"codex-team"`
 	CodexPlus   []*ModelInfo `json:"codex-plus"`
@@ -40,11 +39,6 @@ func GetGeminiModels() []*ModelInfo {
 // GetGeminiVertexModels returns Gemini model definitions for Vertex AI.
 func GetGeminiVertexModels() []*ModelInfo {
 	return cloneModelInfos(getModels().Vertex)
-}
-
-// GetGeminiCLIModels returns Gemini model definitions for the Gemini CLI.
-func GetGeminiCLIModels() []*ModelInfo {
-	return cloneModelInfos(getModels().GeminiCLI)
 }
 
 // GetCodexFreeModels returns model definitions for the Codex free plan tier.
@@ -88,7 +82,6 @@ func GetAllStaticModelDefinitions() map[string][]*ModelInfo {
 		"claude":      GetClaudeModels(),
 		"gemini":      GetGeminiModels(),
 		"vertex":      GetGeminiVertexModels(),
-		"gemini-cli":  GetGeminiCLIModels(),
 		"codex-free":  GetCodexFreeModels(),
 		"codex-team":  GetCodexTeamModels(),
 		"codex-plus":  GetCodexPlusModels(),
@@ -220,7 +213,6 @@ func cloneModelInfos(models []*ModelInfo) []*ModelInfo {
 //   - claude
 //   - gemini
 //   - vertex
-//   - gemini-cli
 //   - codex
 //   - kimi
 //   - antigravity
@@ -235,8 +227,6 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetGeminiModels()
 	case "vertex":
 		return GetGeminiVertexModels()
-	case "gemini-cli":
-		return GetGeminiCLIModels()
 	case "codex", "codex-pro":
 		return GetCodexProModels()
 	case "codex-plus":
@@ -269,7 +259,6 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		data.Claude,
 		data.Gemini,
 		data.Vertex,
-		data.GeminiCLI,
 		data.CodexPro,
 		data.Kimi,
 		data.Antigravity,

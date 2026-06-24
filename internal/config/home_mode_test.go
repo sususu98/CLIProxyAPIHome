@@ -8,7 +8,6 @@ func TestForceDownstreamHomeModeConfigPreservesRemoteManagement(t *testing.T) {
 	cfg.UsageStatisticsEnabled = false
 	cfg.DisableCooling = false
 	cfg.WebsocketAuth = true
-	cfg.EnableGeminiCLIEndpoint = true
 	cfg.RemoteManagement.AllowRemote = true
 	cfg.RemoteManagement.DisableControlPanel = false
 
@@ -26,9 +25,6 @@ func TestForceDownstreamHomeModeConfigPreservesRemoteManagement(t *testing.T) {
 	if cfg.WebsocketAuth {
 		t.Fatal("WebsocketAuth = true, want false")
 	}
-	if cfg.EnableGeminiCLIEndpoint {
-		t.Fatal("EnableGeminiCLIEndpoint = true, want false")
-	}
 	if !cfg.RemoteManagement.AllowRemote {
 		t.Fatal("RemoteManagement.AllowRemote = false, want preserved true")
 	}
@@ -42,7 +38,6 @@ func TestApplyDownstreamHomeModeScalarsPreservesRemoteManagement(t *testing.T) {
 		"api-keys":                   []any{"local-key"},
 		"usage-statistics-enabled":   false,
 		"disable-cooling":            false,
-		"enable-gemini-cli-endpoint": true,
 		"remote-management": map[string]any{
 			"allow-remote":          true,
 			"disable-control-panel": false,
@@ -63,9 +58,6 @@ func TestApplyDownstreamHomeModeScalarsPreservesRemoteManagement(t *testing.T) {
 	}
 	if root["ws-auth"] != false {
 		t.Fatalf("ws-auth = %v, want false", root["ws-auth"])
-	}
-	if root["enable-gemini-cli-endpoint"] != false {
-		t.Fatalf("enable-gemini-cli-endpoint = %v, want false", root["enable-gemini-cli-endpoint"])
 	}
 	remoteManagement, ok := root["remote-management"].(map[string]any)
 	if !ok {

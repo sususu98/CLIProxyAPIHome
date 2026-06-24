@@ -13,7 +13,6 @@ import (
 	"time"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPIHome/internal/runtime/geminicli"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -212,9 +211,6 @@ func (r *Repository) GetAuth(ctx context.Context, uuid string) (*coreauth.Auth, 
 	if errAuth != nil {
 		return nil, nil, errAuth
 	}
-	if errHydrate := r.hydrateAuthRuntime(ctx, db, auth); errHydrate != nil {
-		return nil, nil, errHydrate
-	}
 	return auth, record, nil
 }
 
@@ -248,9 +244,6 @@ func (r *Repository) WithAuthRefreshLock(ctx context.Context, uuid string, fn fu
 		}
 		auth.ID = uuid
 		auth.Index = uuid
-		if errHydrate := r.hydrateAuthRuntime(ctx, txDB, auth); errHydrate != nil {
-			return errHydrate
-		}
 
 		refreshed, errRefresh := fn(&Repository{db: txDB}, auth)
 		if errRefresh != nil {
@@ -288,7 +281,6 @@ func (r *Repository) ListAuthIndex(ctx context.Context) ([]AuthIndex, error) {
 		auth.Index = record.UUID
 		auths = append(auths, auth)
 	}
-	applyGeminiVirtualParentStatus(auths)
 
 	out := make([]AuthIndex, 0, len(records))
 	for i, record := range records {
@@ -389,8 +381,6 @@ func (r *Repository) ListAuths(ctx context.Context) ([]*coreauth.Auth, error) {
 		auth.Index = record.UUID
 		auths = append(auths, auth)
 	}
-	applyGeminiVirtualParentStatus(auths)
-	hydrateAuthListRuntimes(auths)
 	return auths, nil
 }
 
@@ -918,341 +908,4 @@ func hashValue(value string) string {
 	}
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
-}
-
-// hydrateAuthRuntime handles a hydrate auth runtime.
-func (r *Repository) hydrateAuthRuntime(ctx context.Context, db *gorm.DB, auth *coreauth.Auth) error {
-	// Normalize auth state before updating runtime indexes.
-	if auth == nil {
-		return nil
-	}
-	if shared := geminiSharedCredential(auth, ""); shared != nil {
-		auth.Runtime = shared
-	}
-
-	parentID := geminiVirtualParentID(auth)
-	if parentID == "" {
-		return nil
-	}
-
-	parent := &coreauth.Auth{}
-	if strings.TrimSpace(parentID) == strings.TrimSpace(auth.ID) {
-		parent = auth
-	} else {
-		parentRecord := &AuthRecord{}
-		errFirst := db.WithContext(contextOrBackground(ctx)).Where("uuid = ?", parentID).First(parentRecord).Error
-		if errFirst != nil {
-			if errors.Is(errFirst, gorm.ErrRecordNotFound) {
-				return nil
-			}
-			return errFirst
-		}
-		parentAuth, errAuth := RecordToAuth(parentRecord)
-		if errAuth != nil {
-			return errAuth
-		}
-		parent = parentAuth
-	}
-
-	if geminiVirtualParentExplicitlyDisabled(parent) {
-		disableGeminiVirtualAuth(auth, parent)
-	}
-	applyGeminiVirtualInheritedFields(auth, parent)
-	applyGeminiVirtualRuntime(auth, parent)
-	return nil
-}
-
-// hydrateAuthListRuntimes handles a hydrate auth list runtimes.
-func hydrateAuthListRuntimes(auths []*coreauth.Auth) {
-	// Normalize auth state before updating runtime indexes.
-	if len(auths) == 0 {
-		return
-	}
-
-	byID := make(map[string]*coreauth.Auth, len(auths))
-	sharedByID := make(map[string]*geminicli.SharedCredential, len(auths))
-	for _, auth := range auths {
-		if auth == nil {
-			continue
-		}
-		authID := strings.TrimSpace(auth.ID)
-		if authID == "" {
-			continue
-		}
-		byID[authID] = auth
-		if shared := geminiSharedCredential(auth, ""); shared != nil {
-			auth.Runtime = shared
-			sharedByID[authID] = shared
-		}
-	}
-
-	for _, auth := range auths {
-		if auth == nil {
-			continue
-		}
-		parentID := geminiVirtualParentID(auth)
-		if parentID == "" {
-			continue
-		}
-		parent := byID[parentID]
-		if parent == nil {
-			continue
-		}
-		applyGeminiVirtualInheritedFields(auth, parent)
-		shared := sharedByID[parentID]
-		if shared == nil {
-			shared = geminiSharedCredential(parent, geminiVirtualProjectID(auth))
-			if shared == nil {
-				continue
-			}
-			parent.Runtime = shared
-			sharedByID[parentID] = shared
-		}
-		projectID := geminiVirtualProjectID(auth)
-		if projectID == "" {
-			continue
-		}
-		auth.Runtime = geminicli.NewVirtualCredential(projectID, shared)
-	}
-}
-
-// applyGeminiVirtualParentStatus disables virtual auths when their source parent
-// was explicitly disabled by configuration or the management API.
-func applyGeminiVirtualParentStatus(auths []*coreauth.Auth) {
-	if len(auths) == 0 {
-		return
-	}
-
-	byID := make(map[string]*coreauth.Auth, len(auths))
-	for _, auth := range auths {
-		if auth == nil {
-			continue
-		}
-		authID := strings.TrimSpace(auth.ID)
-		if authID == "" {
-			continue
-		}
-		byID[authID] = auth
-	}
-
-	for _, auth := range auths {
-		if auth == nil {
-			continue
-		}
-		parentID := geminiVirtualParentID(auth)
-		if parentID == "" {
-			continue
-		}
-		parent := byID[parentID]
-		if !geminiVirtualParentExplicitlyDisabled(parent) {
-			continue
-		}
-		disableGeminiVirtualAuth(auth, parent)
-	}
-}
-
-// disableGeminiVirtualAuth applies the effective disabled state inherited from parent auth.
-func disableGeminiVirtualAuth(auth *coreauth.Auth, parent *coreauth.Auth) {
-	if auth == nil {
-		return
-	}
-	auth.Disabled = true
-	auth.Status = coreauth.StatusDisabled
-	if strings.TrimSpace(auth.StatusMessage) == "" {
-		statusMessage := ""
-		if parent != nil {
-			statusMessage = strings.TrimSpace(parent.StatusMessage)
-		}
-		if statusMessage == "" {
-			statusMessage = "disabled via management API"
-		}
-		auth.StatusMessage = statusMessage
-	}
-	if auth.Metadata == nil {
-		auth.Metadata = make(map[string]any)
-	}
-	auth.Metadata["disabled"] = true
-}
-
-// geminiVirtualParentExplicitlyDisabled distinguishes operator-disabled parents
-// from synthetic virtual primaries, which are disabled only to prevent dispatch.
-func geminiVirtualParentExplicitlyDisabled(auth *coreauth.Auth) bool {
-	if auth == nil {
-		return false
-	}
-	if boolFromMetadata(auth.Metadata, "disabled") {
-		return true
-	}
-	if !(auth.Disabled || auth.Status == coreauth.StatusDisabled) {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(auth.StatusMessage), "disabled via management API")
-}
-
-// boolFromMetadata reads boolean-like metadata values.
-func boolFromMetadata(metadata map[string]any, key string) bool {
-	if metadata == nil {
-		return false
-	}
-	raw, ok := metadata[key]
-	if !ok || raw == nil {
-		return false
-	}
-	switch value := raw.(type) {
-	case bool:
-		return value
-	case string:
-		trimmed := strings.TrimSpace(value)
-		return strings.EqualFold(trimmed, "true") || trimmed == "1"
-	default:
-		return false
-	}
-}
-
-// applyGeminiVirtualRuntime applies a gemini virtual runtime.
-func applyGeminiVirtualRuntime(auth *coreauth.Auth, parent *coreauth.Auth) {
-	if auth == nil || parent == nil {
-		return
-	}
-	projectID := geminiVirtualProjectID(auth)
-	if projectID == "" {
-		return
-	}
-	shared := geminicli.ResolveSharedCredential(parent.Runtime)
-	if shared == nil {
-		shared = geminiSharedCredential(parent, projectID)
-		if shared == nil {
-			return
-		}
-		parent.Runtime = shared
-	}
-	auth.Runtime = geminicli.NewVirtualCredential(projectID, shared)
-}
-
-// applyGeminiVirtualInheritedFields mirrors inherited prefix and proxy settings on virtual Gemini auths.
-func applyGeminiVirtualInheritedFields(auth *coreauth.Auth, parent *coreauth.Auth) {
-	if auth == nil || parent == nil {
-		return
-	}
-	if geminiVirtualParentID(auth) == "" {
-		return
-	}
-	auth.ProxyURL = strings.TrimSpace(parent.ProxyURL)
-	auth.Prefix = strings.TrimSpace(parent.Prefix)
-}
-
-// geminiSharedCredential handles a gemini shared credential.
-func geminiSharedCredential(auth *coreauth.Auth, fallbackProjectID string) *geminicli.SharedCredential {
-	if auth == nil || !isGeminiCLIAuth(auth) {
-		return nil
-	}
-	if auth.Metadata == nil && auth.Attributes == nil {
-		return nil
-	}
-
-	email := metadataString(auth.Metadata, "email")
-	projects := geminiProjectIDs(auth)
-	if fallbackProjectID != "" {
-		projects = appendUniqueString(projects, fallbackProjectID)
-	}
-	return geminicli.NewSharedCredential(auth.ID, email, auth.Metadata, projects)
-}
-
-// isGeminiCLIAuth reports whether gemini cli auth.
-func isGeminiCLIAuth(auth *coreauth.Auth) bool {
-	if auth == nil {
-		return false
-	}
-	provider := strings.TrimSpace(auth.Provider)
-	if strings.EqualFold(provider, "gemini-cli") || strings.EqualFold(provider, "gemini") {
-		return true
-	}
-	if auth.Attributes != nil {
-		if strings.TrimSpace(auth.Attributes["gemini_virtual_primary"]) != "" {
-			return true
-		}
-		if strings.TrimSpace(auth.Attributes["gemini_virtual_parent"]) != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// geminiVirtualParentID handles a gemini virtual parent id.
-func geminiVirtualParentID(auth *coreauth.Auth) string {
-	if auth == nil || auth.Attributes == nil {
-		return ""
-	}
-	return strings.TrimSpace(auth.Attributes["gemini_virtual_parent"])
-}
-
-// geminiVirtualProjectID handles a gemini virtual project id.
-func geminiVirtualProjectID(auth *coreauth.Auth) string {
-	if auth == nil {
-		return ""
-	}
-	if auth.Attributes != nil {
-		if projectID := strings.TrimSpace(auth.Attributes["gemini_virtual_project"]); projectID != "" {
-			return projectID
-		}
-	}
-	return metadataString(auth.Metadata, "project_id")
-}
-
-// geminiProjectIDs handles a gemini project i ds.
-func geminiProjectIDs(auth *coreauth.Auth) []string {
-	if auth == nil {
-		return nil
-	}
-	out := make([]string, 0, 4)
-	if auth.Attributes != nil {
-		for _, id := range splitCommaValues(auth.Attributes["virtual_children"]) {
-			out = appendUniqueString(out, id)
-		}
-	}
-	for _, id := range splitCommaValues(metadataString(auth.Metadata, "project_id")) {
-		out = appendUniqueString(out, id)
-	}
-	return out
-}
-
-// metadataString handles a metadata string.
-func metadataString(metadata map[string]any, key string) string {
-	if metadata == nil {
-		return ""
-	}
-	value, _ := metadata[key].(string)
-	return strings.TrimSpace(value)
-}
-
-// splitCommaValues splits a comma values.
-func splitCommaValues(value string) []string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if trimmed == "" {
-			continue
-		}
-		out = append(out, trimmed)
-	}
-	return out
-}
-
-// appendUniqueString appends an unique string.
-func appendUniqueString(values []string, value string) []string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return values
-	}
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
 }

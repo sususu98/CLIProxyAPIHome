@@ -1210,19 +1210,6 @@ func (m *Manager) RefreshNow(ctx context.Context, authIndex string) (*Auth, erro
 	m.mu.RLock()
 	requested := m.indexAuth[authIndex]
 	targetIndex := authIndex
-	if requested != nil && requested.Attributes != nil {
-		if parent := strings.TrimSpace(requested.Attributes["gemini_virtual_parent"]); parent != "" {
-			if parentAuth := m.auths[parent]; parentAuth != nil {
-				parentIndex := strings.TrimSpace(parentAuth.Index)
-				if parentIndex == "" {
-					parentIndex = strings.TrimSpace(parentAuth.EnsureIndex())
-				}
-				if parentIndex != "" {
-					targetIndex = parentIndex
-				}
-			}
-		}
-	}
 	target := m.indexAuth[targetIndex]
 	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
 	m.mu.RUnlock()

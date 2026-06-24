@@ -62,7 +62,6 @@ oauth-excluded-models:
 	assertContains("usage-statistics-enabled: true")
 	assertContains("disable-cooling: true")
 	assertContains("ws-auth: false")
-	assertContains("enable-gemini-cli-endpoint: false")
 
 	assertNotContains("tls:")
 	assertNotContains("remote-management:")

@@ -139,7 +139,7 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 		respondError(c, http.StatusNotFound, "not_found", nil)
 		return
 	}
-	if errDelete := h.deleteOAuthAuthAndChildren(ctx, auth, auths); errDelete != nil {
+	if errDelete := h.deleteOAuthAuth(ctx, auth); errDelete != nil {
 		respondError(c, http.StatusInternalServerError, "write_failed", errDelete)
 		return
 	}
@@ -184,18 +184,10 @@ func (h *Handler) PatchAuthFileStatus(c *gin.Context) {
 		return
 	}
 	disabled := *req.Disabled
-	auths, errAuths := h.repo.ListAuths(ctx)
-	if errAuths != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", errAuths)})
+	applyAuthDisabledStatus(auth, disabled)
+	if _, errUpsert := h.repo.UpsertAuth(ctx, auth, "update"); errUpsert != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", errUpsert)})
 		return
-	}
-	targets := authStatusUpdateTargets(auth, auths)
-	for _, target := range targets {
-		applyAuthDisabledStatus(target, disabled)
-		if _, errUpsert := h.repo.UpsertAuth(ctx, target, "update"); errUpsert != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", errUpsert)})
-			return
-		}
 	}
 	if errRefresh := h.refreshAuths(ctx); errRefresh != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update auth: %v", errRefresh)})
@@ -315,7 +307,6 @@ func (h *Handler) synthesizeOAuthPayload(raw []byte, fileUUID string, originalFi
 	// Resolve credential context before calling upstream OAuth services.
 	cfg := h.runtime.Config()
 	authPath := fileUUID + ".json"
-	legacyUUIDs := make(map[string]string)
 	sctx := &synthesizer.SynthesisContext{
 		Config:      cfg,
 		AuthDir:     "",
@@ -324,24 +315,7 @@ func (h *Handler) synthesizeOAuthPayload(raw []byte, fileUUID string, originalFi
 		ClusterMode: true,
 	}
 	sctx.UUIDForAuth = func(auth *coreauth.Auth) string {
-		if auth == nil {
-			return ""
-		}
-		legacyID := auth.ID
-		if auth.Attributes != nil {
-			if parentID := strings.TrimSpace(auth.Attributes["gemini_virtual_parent"]); parentID != "" {
-				parentUUID := strings.TrimSpace(legacyUUIDs[parentID])
-				if parentUUID == "" {
-					parentUUID = parentID
-				}
-				auth.Attributes["gemini_virtual_parent"] = parentUUID
-				if auth.Metadata != nil {
-					auth.Metadata["virtual_parent_id"] = parentUUID
-				}
-				return cluster.DeterministicVirtualUUID(parentUUID, auth.Attributes["gemini_virtual_project"])
-			}
-		}
-		legacyUUIDs[legacyID] = fileUUID
+		_ = auth
 		return fileUUID
 	}
 	auths := synthesizer.SynthesizeAuthFile(sctx, authPath, raw)
@@ -390,9 +364,6 @@ func isOAuthPayloadAuth(auth *coreauth.Auth, fileUUID string) bool {
 	if strings.TrimSpace(auth.ID) == fileUUID {
 		return true
 	}
-	if auth.Attributes != nil {
-		return strings.TrimSpace(auth.Attributes["gemini_virtual_parent"]) == fileUUID
-	}
 	return false
 }
 
@@ -405,24 +376,13 @@ func (h *Handler) findOAuthAuth(ctx context.Context, identifier authIdentifier) 
 	return findOAuthAuthInList(auths, identifier), nil
 }
 
-// deleteOAuthAuthAndChildren deletes an o auth auth and children.
-func (h *Handler) deleteOAuthAuthAndChildren(ctx context.Context, auth *coreauth.Auth, auths []*coreauth.Auth) error {
+// deleteOAuthAuth deletes an o auth auth.
+func (h *Handler) deleteOAuthAuth(ctx context.Context, auth *coreauth.Auth) error {
 	if auth == nil {
 		return nil
 	}
 	if errDelete := h.repo.SoftDeleteAuth(ctx, auth.ID); errDelete != nil {
 		return errDelete
-	}
-	for _, child := range auths {
-		if child == nil || child.Attributes == nil {
-			continue
-		}
-		if strings.TrimSpace(child.Attributes["gemini_virtual_parent"]) != auth.ID {
-			continue
-		}
-		if errDelete := h.repo.SoftDeleteAuth(ctx, child.ID); errDelete != nil {
-			return errDelete
-		}
 	}
 	return nil
 }
@@ -490,7 +450,7 @@ func findOAuthAuthInList(auths []*coreauth.Auth, identifier authIdentifier) *cor
 			}
 		}
 		for _, auth := range filtered {
-			if authFileName(auth) == identifier.Name && !isVirtualOAuthAuth(auth) {
+			if authFileName(auth) == identifier.Name {
 				return auth
 			}
 		}
@@ -513,52 +473,6 @@ func isOAuthAuth(auth *coreauth.Auth) bool {
 	}
 	typeValue := stringFromAny(auth.Metadata["type"])
 	return typeValue != ""
-}
-
-// isVirtualOAuthAuth reports whether virtual o auth auth.
-func isVirtualOAuthAuth(auth *coreauth.Auth) bool {
-	if auth == nil {
-		return false
-	}
-	if auth.Metadata != nil && boolFromAny(auth.Metadata["virtual"]) {
-		return true
-	}
-	return auth.Attributes != nil && strings.EqualFold(auth.Attributes["runtime_only"], "true")
-}
-
-// isGeminiVirtualPrimaryAuth reports whether auth is the source record for virtual Gemini auths.
-func isGeminiVirtualPrimaryAuth(auth *coreauth.Auth) bool {
-	if auth == nil || auth.Attributes == nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(auth.Attributes["gemini_virtual_primary"]), "true")
-}
-
-// authStatusUpdateTargets returns the auth records affected by a status toggle.
-func authStatusUpdateTargets(auth *coreauth.Auth, auths []*coreauth.Auth) []*coreauth.Auth {
-	if auth == nil {
-		return nil
-	}
-	targets := []*coreauth.Auth{auth}
-	if !isGeminiVirtualPrimaryAuth(auth) {
-		return targets
-	}
-	seen := map[string]struct{}{strings.TrimSpace(auth.ID): {}}
-	for _, child := range auths {
-		if child == nil || child.Attributes == nil {
-			continue
-		}
-		if strings.TrimSpace(child.Attributes["gemini_virtual_parent"]) != auth.ID {
-			continue
-		}
-		childID := strings.TrimSpace(child.ID)
-		if _, ok := seen[childID]; ok {
-			continue
-		}
-		seen[childID] = struct{}{}
-		targets = append(targets, child)
-	}
-	return targets
 }
 
 // applyAuthDisabledStatus updates disabled status fields and persisted metadata.
@@ -599,22 +513,6 @@ func authFileEntry(auth *coreauth.Auth) gin.H {
 		"runtime_only":   auth.Attributes != nil && strings.EqualFold(auth.Attributes["runtime_only"], "true"),
 		"source":         "db",
 	}
-	if isGeminiVirtualPrimaryAuth(auth) {
-		entry["virtual_primary"] = true
-		if auth.Attributes != nil {
-			entry["virtual_children"] = strings.TrimSpace(auth.Attributes["virtual_children"])
-		}
-	}
-	if isVirtualOAuthAuth(auth) {
-		entry["virtual"] = true
-		if parentID := geminiVirtualParentID(auth); parentID != "" {
-			entry["virtual_parent_id"] = parentID
-		}
-		if projectID := geminiVirtualProjectID(auth); projectID != "" {
-			entry["virtual_project"] = projectID
-			entry["project_id"] = projectID
-		}
-	}
 	if email := stringFromAny(auth.Metadata["email"]); email != "" {
 		entry["email"] = email
 	}
@@ -649,53 +547,7 @@ func authFileName(auth *coreauth.Auth) string {
 
 // authFileDisplayName returns a stable management-list name for the auth entry.
 func authFileDisplayName(auth *coreauth.Auth) string {
-	name := authFileName(auth)
-	if !isVirtualOAuthAuth(auth) {
-		return name
-	}
-	projectID := geminiVirtualProjectID(auth)
-	if projectID == "" {
-		return name
-	}
-	baseName := strings.TrimSpace(name)
-	if baseName == "" {
-		baseName = strings.TrimSpace(auth.ID) + ".json"
-	}
-	return baseName + "::" + sanitizeVirtualDisplayPart(projectID)
-}
-
-// sanitizeVirtualDisplayPart normalizes virtual auth display suffixes.
-func sanitizeVirtualDisplayPart(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "project"
-	}
-	replacer := strings.NewReplacer("/", "_", "\\", "_", " ", "_")
-	return replacer.Replace(value)
-}
-
-// geminiVirtualParentID returns the parent auth id for a virtual Gemini auth.
-func geminiVirtualParentID(auth *coreauth.Auth) string {
-	if auth == nil || auth.Attributes == nil {
-		return ""
-	}
-	return strings.TrimSpace(auth.Attributes["gemini_virtual_parent"])
-}
-
-// geminiVirtualProjectID returns the project id for a virtual Gemini auth.
-func geminiVirtualProjectID(auth *coreauth.Auth) string {
-	if auth == nil {
-		return ""
-	}
-	if auth.Attributes != nil {
-		if projectID := strings.TrimSpace(auth.Attributes["gemini_virtual_project"]); projectID != "" {
-			return projectID
-		}
-	}
-	if auth.Metadata != nil {
-		return stringFromAny(auth.Metadata["project_id"])
-	}
-	return ""
+	return authFileName(auth)
 }
 
 // applyOAuthFieldPatch applies an o auth field patch.
@@ -1046,18 +898,6 @@ func stringFromAny(value any) string {
 		return strings.TrimSpace(typed.String())
 	default:
 		return ""
-	}
-}
-
-// boolFromAny derives bool from any.
-func boolFromAny(value any) bool {
-	switch typed := value.(type) {
-	case bool:
-		return typed
-	case string:
-		return typed == "1" || strings.EqualFold(typed, "true")
-	default:
-		return false
 	}
 }
 

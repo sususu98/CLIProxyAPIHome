@@ -93,29 +93,6 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 
 | Method | Path |
 | --- | --- |
-| `GET` | `/ampcode` |
-| `GET` | `/ampcode/force-model-mappings` |
-| `PATCH` | `/ampcode/force-model-mappings` |
-| `PUT` | `/ampcode/force-model-mappings` |
-| `DELETE` | `/ampcode/model-mappings` |
-| `GET` | `/ampcode/model-mappings` |
-| `PATCH` | `/ampcode/model-mappings` |
-| `PUT` | `/ampcode/model-mappings` |
-| `GET` | `/ampcode/restrict-management-to-localhost` |
-| `PATCH` | `/ampcode/restrict-management-to-localhost` |
-| `PUT` | `/ampcode/restrict-management-to-localhost` |
-| `DELETE` | `/ampcode/upstream-api-key` |
-| `GET` | `/ampcode/upstream-api-key` |
-| `PATCH` | `/ampcode/upstream-api-key` |
-| `PUT` | `/ampcode/upstream-api-key` |
-| `DELETE` | `/ampcode/upstream-api-keys` |
-| `GET` | `/ampcode/upstream-api-keys` |
-| `PATCH` | `/ampcode/upstream-api-keys` |
-| `PUT` | `/ampcode/upstream-api-keys` |
-| `DELETE` | `/ampcode/upstream-url` |
-| `GET` | `/ampcode/upstream-url` |
-| `PATCH` | `/ampcode/upstream-url` |
-| `PUT` | `/ampcode/upstream-url` |
 | `GET` | `/anthropic-auth-url` |
 | `GET` | `/antigravity-auth-url` |
 | `POST` | `/api-call` |
@@ -183,7 +160,6 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/gemini-api-key` |
 | `PATCH` | `/gemini-api-key` |
 | `PUT` | `/gemini-api-key` |
-| `GET` | `/gemini-cli-auth-url` |
 | `GET` | `/get-auth-status` |
 | `GET` | `/kimi-auth-url` |
 | `GET` | `/latest-version` |
@@ -283,7 +259,6 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 {
   "proxy-url": "http://127.0.0.1:7890",
   "disable-image-generation": false,
-  "enable-gemini-cli-endpoint": false,
   "force-model-prefix": false,
   "request-log": false,
   "api-keys": ["client-key"],
@@ -345,14 +320,6 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
   },
   "openai-compatibility": [],
   "vertex-api-key": [],
-  "ampcode": {
-    "upstream-url": "",
-    "upstream-api-key": "",
-    "upstream-api-keys": [],
-    "restrict-management-to-localhost": false,
-    "model-mappings": [],
-    "force-model-mappings": false
-  },
   "oauth-excluded-models": {
     "claude": ["model-id"]
   },
@@ -1487,8 +1454,6 @@ Query 参数：
 }
 ```
 
-Gemini virtual auth records 还可能返回 `virtual_primary`、`virtual_children`、`virtual`、`virtual_parent_id`、`virtual_project` 和 `project_id`。
-
 ### GET `/auth-files/models?name=<name-or-id>`
 
 返回指定 auth file 或 auth ID 对应的模型。
@@ -1673,7 +1638,6 @@ Selector 字段：
 ```text
 GET /anthropic-auth-url
 GET /codex-auth-url
-GET /gemini-cli-auth-url
 GET /antigravity-auth-url
 GET /kimi-auth-url
 GET /xai-auth-url
@@ -1688,12 +1652,6 @@ GET /xai-auth-url
   "state": "oauth-state"
 }
 ```
-
-`GET /gemini-cli-auth-url` 接受：
-
-| Query | 类型 | 说明 |
-| --- | --- | --- |
-| `project_id` | string | 请求的 GCP project ID。特殊值包括 `ALL` 和 `GOOGLE_ONE`；空值表示自动选择。 |
 
 `GET /kimi-auth-url` 会启动 device flow 并返回验证 URL，Home 在后台等待完成。
 
@@ -1733,7 +1691,7 @@ Query 参数：
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `provider` | string | 是 | 支持 alias：`anthropic`/`claude`、`codex`/`openai`、`gemini`/`google`、`antigravity`/`anti-gravity`、`xai`/`x-ai`/`grok`。`kimi` 不通过该 route 完成。 |
+| `provider` | string | 是 | 支持 alias：`anthropic`/`claude`、`codex`/`openai`、`antigravity`/`anti-gravity`、`xai`/`x-ai`/`grok`。`kimi` 不通过该 route 完成。 |
 | `redirect_url` | string | 否 | 完整 callback URL；缺失的 `code`、`state` 或 `error` 可以从中提取。 |
 | `code` | string | 条件必填 | OAuth authorization code；除非提供 `error`，否则必填。 |
 | `state` | string | 是 | OAuth state token。 |
@@ -2059,7 +2017,6 @@ Query 参数：
 claude
 gemini
 vertex
-gemini-cli
 codex
 codex-free
 codex-team
@@ -2462,54 +2419,6 @@ Query 参数：
 { "status": "ok" }
 ```
 
-## AmpCode
-
-以下 route 读写 `ampcode` 配置。
-
-`AmpCode` object：
-
-```json
-{
-  "upstream-url": "https://amp.example.com",
-  "upstream-api-key": "upstream-key",
-  "upstream-api-keys": [
-    {
-      "upstream-api-key": "upstream-key",
-      "api-keys": ["client-key"]
-    }
-  ],
-  "restrict-management-to-localhost": false,
-  "model-mappings": [
-    { "from": "claude-opus-4.5", "to": "claude-sonnet-4", "regex": false }
-  ],
-  "force-model-mappings": false
-}
-```
-
-Routes：
-
-| Method | Path | 输入 | 输出 |
-| --- | --- | --- | --- |
-| `GET` | `/ampcode` | 无 | `{ "ampcode": AmpCode }` |
-| `GET` | `/ampcode/upstream-url` | 无 | `{ "upstream-url": string }` |
-| `PUT/PATCH` | `/ampcode/upstream-url` | `{ "value": string }` | `{ "status": "ok" }` |
-| `DELETE` | `/ampcode/upstream-url` | 无 | `{ "status": "ok" }` |
-| `GET` | `/ampcode/upstream-api-key` | 无 | `{ "upstream-api-key": string }` |
-| `PUT/PATCH` | `/ampcode/upstream-api-key` | `{ "value": string }` | `{ "status": "ok" }` |
-| `DELETE` | `/ampcode/upstream-api-key` | 无 | `{ "status": "ok" }` |
-| `GET` | `/ampcode/restrict-management-to-localhost` | 无 | `{ "restrict-management-to-localhost": boolean }` |
-| `PUT/PATCH` | `/ampcode/restrict-management-to-localhost` | `{ "value": boolean }` | `{ "status": "ok" }` |
-| `GET` | `/ampcode/model-mappings` | 无 | `{ "model-mappings": AmpModelMapping[] }` |
-| `PUT` | `/ampcode/model-mappings` | `{ "value": AmpModelMapping[] }` | `{ "status": "ok" }` |
-| `PATCH` | `/ampcode/model-mappings` | `{ "value": AmpModelMapping[] }`；按 `from` upsert | `{ "status": "ok" }` |
-| `DELETE` | `/ampcode/model-mappings` | `{ "value": ["from-model"] }`；body 无效或缺失时清空全部 | `{ "status": "ok" }` |
-| `GET` | `/ampcode/force-model-mappings` | 无 | `{ "force-model-mappings": boolean }` |
-| `PUT/PATCH` | `/ampcode/force-model-mappings` | `{ "value": boolean }` | `{ "status": "ok" }` |
-| `GET` | `/ampcode/upstream-api-keys` | 无 | `{ "upstream-api-keys": AmpUpstreamAPIKeyEntry[] }` |
-| `PUT` | `/ampcode/upstream-api-keys` | `{ "value": AmpUpstreamAPIKeyEntry[] }` | `{ "status": "ok" }` |
-| `PATCH` | `/ampcode/upstream-api-keys` | `{ "value": AmpUpstreamAPIKeyEntry[] }`；按 `upstream-api-key` upsert | `{ "status": "ok" }` |
-| `DELETE` | `/ampcode/upstream-api-keys` | `{ "value": [] }` 清空全部；`{ "value": ["key"] }` 删除匹配的 upstream keys | `{ "status": "ok" }` |
-
 ## OAuth 模型规则
 
 ### `/oauth-excluded-models`
@@ -2636,7 +2545,6 @@ DELETE query：
 | `auth-dir` | string | 本地 auth token 目录。 |
 | `proxy-url` | string | 全局出站代理 URL。 |
 | `disable-image-generation` | boolean or `"chat"` | `false` 启用图像生成；`true` 全局禁用；`"chat"` 只对非 image endpoints 禁用注入。 |
-| `enable-gemini-cli-endpoint` | boolean | 启用 Gemini CLI internal endpoints。 |
 | `force-model-prefix` | boolean | 对带 prefix 的凭证要求显式模型 prefix。 |
 | `request-log` | boolean | 启用详细 request logging。 |
 | `api-keys` | array of string | Home 接受的客户端 API keys。 |
@@ -2681,7 +2589,6 @@ DELETE query：
 | `claude-header-defaults.stabilize-device-profile` | boolean pointer | 启用固定 Claude device profile baseline。 |
 | `openai-compatibility` | array of `OpenAICompatibility` | OpenAI-compatible providers；应使用 provider-key routes。 |
 | `vertex-api-key` | array of `VertexCompatKey` | Vertex-compatible API-key credentials；应使用 provider-key routes。 |
-| `ampcode` | `AmpCode` | Amp CLI integration settings。 |
 | `oauth-excluded-models` | object string to array of string | 每个 provider 的 OAuth/file-backed auth 排除模型。 |
 | `oauth-model-alias` | object string to array of `OAuthModelAlias` | 每个 channel 的 OAuth model aliases。 |
 | `payload.default` | array of `PayloadRule` | 设置缺失的 JSON payload params。 |

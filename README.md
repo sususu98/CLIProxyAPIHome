@@ -9,7 +9,7 @@ It serves as a centralized hub for managing and scheduling API credentials in la
 ## Key Features
 
 - **Scalable Node Management**: Supports connecting an unlimited number of CLIProxyAPI nodes for credential distribution, ideal for large-scale deployments.
-- **Multi-Provider OAuth2 Support**: Manages OAuth2 credentials for various AI model providers, including OpenAI, Gemini, Claude, Codex, and more.
+- **Multi-Provider OAuth2 Support**: Manages OAuth2 credentials for various AI model providers, including OpenAI, Claude, Codex, Antigravity, Kimi, xAI, and more.
 - **High Availability**: Supports multi-account management and round-robin load balancing to ensure optimal performance and reliability.
 - **Secure Access**: Provides a streamlined CLI authentication flow to ensure secure access to APIs.
 - **Flexible Upstream Integration**: Easily integrate upstream providers via configuration, including:
