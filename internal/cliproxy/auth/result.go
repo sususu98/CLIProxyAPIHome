@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -16,14 +18,17 @@ const (
 	quotaBackoffMax  = 30 * time.Minute
 )
 
+var usageRetryDelayPattern = regexp.MustCompile(`(?i)\b(?:resets in|after)\s+([0-9]+(?:\.[0-9]+)?(?:h|m|s)(?:[0-9]+(?:\.[0-9]+)?(?:h|m|s))*)`)
+
 // Result captures an upstream execution result reported by a downstream CPA node.
 type Result struct {
-	AuthID    string
-	AuthIndex string
-	Provider  string
-	Model     string
-	Success   bool
-	Error     *Error
+	AuthID     string
+	AuthIndex  string
+	Provider   string
+	Model      string
+	Success    bool
+	Error      *Error
+	RetryAfter *time.Duration
 }
 
 // MarkResult records a downstream execution result and updates auth cooldown state.
@@ -120,15 +125,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 								shouldSuspendModel = true
 							}
 						case http.StatusTooManyRequests:
-							var next time.Time
-							backoffLevel := state.Quota.BackoffLevel
-							if !disableCooling {
-								cooldown, nextLevel := nextQuotaCooldown(backoffLevel, disableCooling)
-								if cooldown > 0 {
-									next = now.Add(cooldown)
-								}
-								backoffLevel = nextLevel
-							}
+							next, backoffLevel := nextQuotaRecoverAt(now, result.RetryAfter, state.Quota.BackoffLevel, disableCooling)
 							state.NextRetryAfter = next
 							state.Quota = QuotaState{
 								Exceeded:      true,
@@ -161,7 +158,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					}
 				}
 			} else {
-				applyAuthFailureState(m, auth, result.Error, now)
+				applyAuthFailureState(m, auth, result.Error, result.RetryAfter, now)
 			}
 		}
 
@@ -450,7 +447,7 @@ func isRequestScopedNotFoundResultError(err *Error) bool {
 }
 
 // applyAuthFailureState applies an auth failure state.
-func applyAuthFailureState(m *Manager, auth *Auth, resultErr *Error, now time.Time) {
+func applyAuthFailureState(m *Manager, auth *Auth, resultErr *Error, retryAfter *time.Duration, now time.Time) {
 	// Normalize auth state before updating runtime indexes.
 	if auth == nil {
 		return
@@ -490,14 +487,8 @@ func applyAuthFailureState(m *Manager, auth *Auth, resultErr *Error, now time.Ti
 		auth.StatusMessage = "quota exhausted"
 		auth.Quota.Exceeded = true
 		auth.Quota.Reason = "quota"
-		var next time.Time
-		if !disableCooling {
-			cooldown, nextLevel := nextQuotaCooldown(auth.Quota.BackoffLevel, disableCooling)
-			if cooldown > 0 {
-				next = now.Add(cooldown)
-			}
-			auth.Quota.BackoffLevel = nextLevel
-		}
+		next, backoffLevel := nextQuotaRecoverAt(now, retryAfter, auth.Quota.BackoffLevel, disableCooling)
+		auth.Quota.BackoffLevel = backoffLevel
 		auth.Quota.NextRecoverAt = next
 		auth.NextRetryAfter = next
 	case http.StatusRequestTimeout, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
@@ -566,6 +557,20 @@ func nextQuotaCooldown(prevLevel int, disableCooling bool) (time.Duration, int) 
 	return cooldown, prevLevel + 1
 }
 
+func nextQuotaRecoverAt(now time.Time, retryAfter *time.Duration, prevLevel int, disableCooling bool) (time.Time, int) {
+	if disableCooling {
+		return time.Time{}, prevLevel
+	}
+	if retryAfter != nil && *retryAfter > 0 {
+		return now.Add(*retryAfter), prevLevel
+	}
+	cooldown, nextLevel := nextQuotaCooldown(prevLevel, disableCooling)
+	if cooldown <= 0 {
+		return time.Time{}, nextLevel
+	}
+	return now.Add(cooldown), nextLevel
+}
+
 // NewUsageResult creates a new usage result.
 func NewUsageResult(authIndex, provider, model string, statusCode int, body string) Result {
 	// Keep validation before state changes so failures leave existing data intact.
@@ -592,13 +597,81 @@ func NewUsageResult(authIndex, provider, model string, statusCode int, body stri
 		message = fmt.Sprintf("request failed with status %d", statusCode)
 	}
 	return Result{
-		AuthIndex: authIndex,
-		Provider:  provider,
-		Model:     model,
-		Success:   false,
+		AuthIndex:  authIndex,
+		Provider:   provider,
+		Model:      model,
+		Success:    false,
+		RetryAfter: parseUsageRetryAfter(body, statusCode),
 		Error: &Error{
 			Message:    message,
 			HTTPStatus: statusCode,
 		},
 	}
+}
+
+func parseUsageRetryAfter(body string, statusCode int) *time.Duration {
+	if statusCode != http.StatusTooManyRequests {
+		return nil
+	}
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return nil
+	}
+	if gjson.Valid(body) {
+		if retryAfter := parseGoogleRetryDelay(body); retryAfter != nil {
+			return retryAfter
+		}
+		if retryAfter := parseRetryDelayFromMessage(gjson.Get(body, "error.message").String()); retryAfter != nil {
+			return retryAfter
+		}
+	}
+	return parseRetryDelayFromMessage(body)
+}
+
+func parseGoogleRetryDelay(body string) *time.Duration {
+	details := gjson.Get(body, "error.details")
+	if !details.Exists() || !details.IsArray() {
+		return nil
+	}
+	for _, detail := range details.Array() {
+		if detail.Get("@type").String() != "type.googleapis.com/google.rpc.RetryInfo" {
+			continue
+		}
+		if retryAfter := parseDurationPointer(detail.Get("retryDelay").String()); retryAfter != nil {
+			return retryAfter
+		}
+	}
+	for _, detail := range details.Array() {
+		if detail.Get("@type").String() != "type.googleapis.com/google.rpc.ErrorInfo" {
+			continue
+		}
+		if retryAfter := parseDurationPointer(detail.Get("metadata.quotaResetDelay").String()); retryAfter != nil {
+			return retryAfter
+		}
+	}
+	return nil
+}
+
+func parseRetryDelayFromMessage(message string) *time.Duration {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return nil
+	}
+	matches := usageRetryDelayPattern.FindStringSubmatch(message)
+	if len(matches) < 2 {
+		return nil
+	}
+	return parseDurationPointer(matches[1])
+}
+
+func parseDurationPointer(value string) *time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	duration, errParse := time.ParseDuration(value)
+	if errParse != nil || duration <= 0 {
+		return nil
+	}
+	return &duration
 }
