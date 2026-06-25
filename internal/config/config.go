@@ -43,6 +43,9 @@ type Config struct {
 	// RemoteManagement nests management-related options under 'remote-management'.
 	RemoteManagement RemoteManagement `yaml:"remote-management" json:"-"`
 
+	// Plugins configures dynamic plugin distribution for downstream CPA nodes.
+	Plugins PluginsConfig `yaml:"plugins" json:"plugins"`
+
 	// AuthDir is the directory where authentication token files are stored.
 	AuthDir string `yaml:"auth-dir" json:"-"`
 
@@ -587,6 +590,8 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 		}
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
+
+	cfg.NormalizePluginsConfig()
 
 	normalizedSecret, secretChanged, errNormalizeSecret := NormalizeRemoteManagementSecret(cfg.RemoteManagement.SecretKey)
 	if errNormalizeSecret != nil {

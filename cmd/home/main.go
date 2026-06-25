@@ -211,6 +211,14 @@ func run() int {
 			rt.PublishConfigYAML(payload)
 			return nil
 		}
+		if strings.EqualFold(strings.TrimSpace(event.Scope), "plugin-task") {
+			_, payload, errConfig := repo.LoadConfigAsRuntimeConfig(eventCtx)
+			if errConfig != nil {
+				return errConfig
+			}
+			rt.PublishConfigYAML(payload)
+			return nil
+		}
 		if errApplyEvent := adapter.ApplyEvent(eventCtx, event); errApplyEvent != nil {
 			return errApplyEvent
 		}

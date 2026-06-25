@@ -716,7 +716,18 @@ func (r *Repository) ReplaceConfigSnapshot(ctx context.Context, values map[strin
 	if errDB != nil {
 		return errDB
 	}
+	apiKeys, clean, errPrepare := prepareConfigSnapshotReplace(values)
+	if errPrepare != nil {
+		return errPrepare
+	}
 
+	ctx = contextOrBackground(ctx)
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return replaceConfigSnapshotTx(ctx, tx, apiKeys, clean)
+	})
+}
+
+func prepareConfigSnapshotReplace(values map[string]any) ([]string, map[string]json.RawMessage, error) {
 	apiKeys := normalizeAPIKeysFromAny(values[configAPIKeysRootKey])
 	clean := make(map[string]json.RawMessage, len(values))
 	for key, value := range values {
@@ -729,65 +740,68 @@ func (r *Repository) ReplaceConfigSnapshot(ctx context.Context, values map[strin
 		}
 		rawJSON, errMarshal := json.Marshal(value)
 		if errMarshal != nil {
-			return errMarshal
+			return nil, nil, errMarshal
 		}
 		clean[key] = rawJSON
 	}
+	return apiKeys, clean, nil
+}
 
-	ctx = contextOrBackground(ctx)
-	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if errReplaceAPIKeys := replaceAPIKeysTx(ctx, tx, apiKeys); errReplaceAPIKeys != nil {
-			return errReplaceAPIKeys
-		}
+func replaceConfigSnapshotTx(ctx context.Context, tx *gorm.DB, apiKeys []string, clean map[string]json.RawMessage) error {
+	if tx == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	if errReplaceAPIKeys := replaceAPIKeysTx(ctx, tx, apiKeys); errReplaceAPIKeys != nil {
+		return errReplaceAPIKeys
+	}
 
-		var existing []ConfigRecord
-		if errFind := tx.Find(&existing).Error; errFind != nil {
-			return errFind
-		}
+	var existing []ConfigRecord
+	if errFind := tx.Find(&existing).Error; errFind != nil {
+		return errFind
+	}
 
-		seen := make(map[string]struct{}, len(clean))
-		eventVersion := int64(0)
-		for key, rawJSON := range clean {
-			seen[key] = struct{}{}
-			record := ConfigRecord{}
-			errFirst := tx.Where("key = ?", key).First(&record).Error
-			switch {
-			case errors.Is(errFirst, gorm.ErrRecordNotFound):
-				record = ConfigRecord{Key: key, Value: JSONB(rawJSON), Version: 1}
-				if errCreate := tx.Create(&record).Error; errCreate != nil {
-					return errCreate
-				}
-			case errFirst != nil:
-				return errFirst
-			default:
-				record.Value = JSONB(rawJSON)
-				record.Version++
-				if errSave := tx.Save(&record).Error; errSave != nil {
-					return errSave
-				}
+	seen := make(map[string]struct{}, len(clean))
+	eventVersion := int64(0)
+	for key, rawJSON := range clean {
+		seen[key] = struct{}{}
+		record := ConfigRecord{}
+		errFirst := tx.Where("key = ?", key).First(&record).Error
+		switch {
+		case errors.Is(errFirst, gorm.ErrRecordNotFound):
+			record = ConfigRecord{Key: key, Value: JSONB(rawJSON), Version: 1}
+			if errCreate := tx.Create(&record).Error; errCreate != nil {
+				return errCreate
 			}
-			if record.Version > eventVersion {
-				eventVersion = record.Version
+		case errFirst != nil:
+			return errFirst
+		default:
+			record.Value = JSONB(rawJSON)
+			record.Version++
+			if errSave := tx.Save(&record).Error; errSave != nil {
+				return errSave
 			}
 		}
+		if record.Version > eventVersion {
+			eventVersion = record.Version
+		}
+	}
 
-		for _, record := range existing {
-			if _, ok := seen[record.Key]; ok {
-				continue
-			}
-			nextVersion := record.Version + 1
-			if errDelete := tx.Delete(&ConfigRecord{}, "key = ?", record.Key).Error; errDelete != nil {
-				return errDelete
-			}
-			if nextVersion > eventVersion {
-				eventVersion = nextVersion
-			}
+	for _, record := range existing {
+		if _, ok := seen[record.Key]; ok {
+			continue
 		}
-		if eventVersion == 0 {
-			eventVersion = 1
+		nextVersion := record.Version + 1
+		if errDelete := tx.Delete(&ConfigRecord{}, "key = ?", record.Key).Error; errDelete != nil {
+			return errDelete
 		}
-		return appendEvent(tx, "config", "replace", "config", eventVersion)
-	})
+		if nextVersion > eventVersion {
+			eventVersion = nextVersion
+		}
+	}
+	if eventVersion == 0 {
+		eventVersion = 1
+	}
+	return appendEvent(tx, "config", "replace", "config", eventVersion)
 }
 
 // LoadConfigSnapshot loads a config snapshot.

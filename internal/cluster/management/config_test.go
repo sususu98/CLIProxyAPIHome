@@ -213,6 +213,20 @@ remote-management:
   disable-control-panel: false
 api-keys:
   - user-key
+plugins:
+  enabled: true
+  configs:
+    sample-provider:
+      enabled: true
+      priority: 3
+      load-in-home: true
+      store:
+        id: sample-provider
+        name: Sample Provider
+        version: 0.1.0
+        release-tag: v0.1.0
+        repository: https://example.test/sample-provider
+      custom-option: keep-me
 `
 
 	resp := httptest.NewRecorder()
@@ -242,6 +256,28 @@ api-keys:
 	}
 	if cfg["ws-auth"] != false {
 		t.Fatalf("ws-auth = %v, want false", cfg["ws-auth"])
+	}
+	plugins, ok := cfg["plugins"].(map[string]any)
+	if !ok {
+		t.Fatalf("plugins = %#v, want object", cfg["plugins"])
+	}
+	configs, ok := plugins["configs"].(map[string]any)
+	if !ok {
+		t.Fatalf("plugins.configs = %#v, want object", plugins["configs"])
+	}
+	sample, ok := configs["sample-provider"].(map[string]any)
+	if !ok {
+		t.Fatalf("sample-provider config = %#v, want object", configs["sample-provider"])
+	}
+	if sample["load-in-home"] != true || sample["custom-option"] != "keep-me" {
+		t.Fatalf("sample-provider config = %#v, want raw plugin fields preserved", sample)
+	}
+	store, ok := sample["store"].(map[string]any)
+	if !ok {
+		t.Fatalf("sample-provider.store = %#v, want object", sample["store"])
+	}
+	if store["repository"] != "https://example.test/sample-provider" || store["release-tag"] != "v0.1.0" {
+		t.Fatalf("sample-provider.store = %#v, want plugin store manifest preserved", store)
 	}
 	entries, errEntries := repo.ListAPIKeyEntries(context.Background())
 	if errEntries != nil {

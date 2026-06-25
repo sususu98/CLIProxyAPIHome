@@ -1,12 +1,24 @@
 package synthesizer
 
 import (
+	"context"
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 )
+
+// PluginAuthParser lets provider plugins parse auth file payloads.
+type PluginAuthParser interface {
+	ParseAuth(context.Context, pluginapi.AuthParseRequest) (*coreauth.Auth, bool, error)
+}
+
+// PluginMultiAuthParser expands one auth file payload into multiple plugin auth records.
+type PluginMultiAuthParser interface {
+	ParseAuths(context.Context, pluginapi.AuthParseRequest) ([]*coreauth.Auth, bool, error)
+}
 
 // SynthesisContext provides the context needed for auth synthesis.
 type SynthesisContext struct {
@@ -22,6 +34,8 @@ type SynthesisContext struct {
 	ClusterMode bool
 	// UUIDForAuth returns the cluster UUID for an auth entry.
 	UUIDForAuth func(auth *coreauth.Auth) string
+	// PluginAuthParser parses provider-specific plugin auth files.
+	PluginAuthParser PluginAuthParser
 }
 
 // applyClusterUUID applies a cluster uuid.

@@ -8,5 +8,6 @@ func Register(reg *dispatch.Registry) {
 		return
 	}
 	_ = reg.RegisterDirect("GET", "config", handleConfig)
+	_ = reg.RegisterDirect("GET", "plugin-tasks", handlePluginTasks)
 	_ = reg.SetDirectDefault("GET", handleDefault)
 }

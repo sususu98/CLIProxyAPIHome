@@ -13,12 +13,14 @@ import (
 	"sync"
 	"time"
 
+	sdkpluginhost "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginhost"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/access"
 	configaccess "github.com/router-for-me/CLIProxyAPIHome/internal/access/config_access"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	homeerrors "github.com/router-for-me/CLIProxyAPIHome/internal/errors"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/managementasset"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/registry"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/watcher/synthesizer"
@@ -38,11 +40,14 @@ type Runtime struct {
 	nextConfigSubID uint64
 	configSubs      map[uint64]func(payload []byte) error
 
-	accessManager  *access.Manager
-	coreManager    *coreauth.Manager
-	clusterAdapter ClusterAdapter
-	clusterRefresh func(context.Context, string) ([]byte, error)
-	originalStore  coreauth.Store
+	accessManager   *access.Manager
+	coreManager     *coreauth.Manager
+	pluginHost      *sdkpluginhost.Host
+	pluginSyncMu    sync.Mutex
+	pluginStoreSync map[string]pluginStoreSyncState
+	clusterAdapter  ClusterAdapter
+	clusterRefresh  func(context.Context, string) ([]byte, error)
+	originalStore   coreauth.Store
 
 	clusterUsageQueueMu sync.Mutex
 	clusterUsageQueue   *usagePayloadQueue
@@ -85,6 +90,11 @@ type kvStore interface {
 	KVPurgeExpired(ctx context.Context, now time.Time, limit int) (int64, error)
 }
 
+type pluginStatusStore interface {
+	ReplacePluginStatus(ctx context.Context, nodeType string, status node.PluginTaskStatus) error
+	ListPendingPluginTasks(ctx context.Context, nodeType string, nodeID string) ([]node.PluginTask, error)
+}
+
 type channelScopedAuthStore interface {
 	AllowedAuthIDsForAPIKey(ctx context.Context, apiKey string) ([]string, error)
 }
@@ -122,6 +132,7 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 	coreManager.SetRoundTripperProvider(newDefaultRoundTripperProvider())
 	coreManager.SetConfig(cfg)
 	coreManager.SetOAuthModelAlias(cfg.OAuthModelAlias)
+	pluginHost := newPluginHostForRuntime(cfg)
 
 	accessManager := access.NewManager()
 	configaccess.Register(&cfg.SDKConfig)
@@ -131,8 +142,11 @@ func NewRuntime(cfg *config.Config) (*Runtime, error) {
 		authDir:       cfg.AuthDir,
 		accessManager: accessManager,
 		coreManager:   coreManager,
+		pluginHost:    pluginHost,
 		originalStore: store,
 	}
+	coreManager.SetPluginAuthRefresher(runtime)
+	coreManager.SetPluginScheduler(runtime)
 	runtime.refreshAccessProviders()
 	return runtime, nil
 }
@@ -205,6 +219,11 @@ func (r *Runtime) Start(ctx context.Context, configPath string) error {
 	managementasset.SetCurrentConfig(r.cfg)
 	managementasset.StartAutoUpdater(context.Background(), configPath)
 
+	if errPluginSync := r.syncPluginStoreManifests(runCtx, r.Config()); errPluginSync != nil {
+		return errPluginSync
+	}
+	r.applyPluginConfig(runCtx, r.Config())
+
 	if errLoad := r.loadAuths(runCtx); errLoad != nil {
 		return errLoad
 	}
@@ -240,6 +259,9 @@ func (r *Runtime) Stop() {
 	if r.fileWatcher != nil {
 		_ = r.fileWatcher.Stop()
 		r.fileWatcher = nil
+	}
+	if r.pluginHost != nil {
+		r.pluginHost.ShutdownAll()
 	}
 	r.StopAutoRefresh()
 	if r.coreManager != nil {
@@ -446,6 +468,30 @@ func (r *Runtime) kvStore() (kvStore, error) {
 	return store, nil
 }
 
+// ReplacePluginStatus stores the latest plugin status report in the cluster store.
+func (r *Runtime) ReplacePluginStatus(ctx context.Context, nodeType string, status node.PluginTaskStatus) error {
+	if r == nil || r.clusterAdapter == nil || !r.clusterAdapter.Enabled() {
+		return fmt.Errorf("plugin status store unavailable")
+	}
+	store, ok := r.clusterAdapter.(pluginStatusStore)
+	if !ok || store == nil {
+		return fmt.Errorf("plugin status store unavailable")
+	}
+	return store.ReplacePluginStatus(ctx, nodeType, status)
+}
+
+// ListPendingPluginTasks returns pending plugin tasks for a node.
+func (r *Runtime) ListPendingPluginTasks(ctx context.Context, nodeType string, nodeID string) ([]node.PluginTask, error) {
+	if r == nil || r.clusterAdapter == nil || !r.clusterAdapter.Enabled() {
+		return nil, fmt.Errorf("plugin task store unavailable")
+	}
+	store, ok := r.clusterAdapter.(pluginStatusStore)
+	if !ok || store == nil {
+		return nil, fmt.Errorf("plugin task store unavailable")
+	}
+	return store.ListPendingPluginTasks(ctx, nodeType, nodeID)
+}
+
 func (r *Runtime) startKVCleanupLoop(ctx context.Context) {
 	store, errStore := r.kvStore()
 	if errStore != nil {
@@ -544,10 +590,11 @@ func (r *Runtime) loadAuths(ctx context.Context) error {
 
 	now := time.Now()
 	sctx := &synthesizer.SynthesisContext{
-		Config:      cfg,
-		AuthDir:     authDir,
-		Now:         now,
-		IDGenerator: synthesizer.NewStableIDGenerator(),
+		Config:           cfg,
+		AuthDir:          authDir,
+		Now:              now,
+		IDGenerator:      synthesizer.NewStableIDGenerator(),
+		PluginAuthParser: r,
 	}
 
 	ctxSkipPersist := coreauth.WithSkipPersist(ctx)
@@ -827,10 +874,11 @@ func (r *Runtime) applyAuthFile(ctx context.Context, fullPath string, data []byt
 	}
 
 	sctx := &synthesizer.SynthesisContext{
-		Config:      cfg,
-		AuthDir:     authDir,
-		Now:         time.Now(),
-		IDGenerator: synthesizer.NewStableIDGenerator(),
+		Config:           cfg,
+		AuthDir:          authDir,
+		Now:              time.Now(),
+		IDGenerator:      synthesizer.NewStableIDGenerator(),
+		PluginAuthParser: r,
 	}
 
 	auths := synthesizer.SynthesizeAuthFile(sctx, fullPath, data)

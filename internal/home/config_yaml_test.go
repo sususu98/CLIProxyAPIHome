@@ -36,6 +36,16 @@ oauth-model-alias:
 oauth-excluded-models:
   codex:
     - "gpt-5-codex-mini"
+plugins:
+  enabled: true
+  dir: "plugins"
+  configs:
+    sample:
+      enabled: true
+      priority: 7
+      mode: fast
+      nested:
+        value: keep
 `) + "\n"
 
 	out, err := sanitizeConfigYAMLForDownstream([]byte(input))
@@ -62,6 +72,10 @@ oauth-excluded-models:
 	assertContains("usage-statistics-enabled: true")
 	assertContains("disable-cooling: true")
 	assertContains("ws-auth: false")
+	assertContains("plugins:")
+	assertContains("sample:")
+	assertContains("mode: fast")
+	assertContains("value: keep")
 
 	assertNotContains("tls:")
 	assertNotContains("remote-management:")

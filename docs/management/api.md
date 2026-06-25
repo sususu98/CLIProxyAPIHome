@@ -206,6 +206,9 @@ The table below is extracted from the final Home route registry built by `intern
 | `GET` | `/payload` |
 | `PATCH` | `/payload` |
 | `PUT` | `/payload` |
+| `GET` | `/plugin-store` |
+| `POST` | `/plugin-store/:id/install` |
+| `POST` | `/plugin-store/:id/uninstall` |
 | `DELETE` | `/proxy-url` |
 | `GET` | `/proxy-url` |
 | `PATCH` | `/proxy-url` |
@@ -461,10 +464,40 @@ Example response:
 
 ```json
 {
+  "plugin_report_required": true,
+  "plugin_report_statuses": [
+    {
+      "schema_version": 1,
+      "task": "plugin-sync",
+      "node_type": "cpa",
+      "node_id": "node-1",
+      "client_ip": "10.0.0.12",
+      "status": "success",
+      "phase": "load",
+      "ok": true,
+      "updated_at": "2026-05-27T10:29:59Z",
+      "platform": { "goos": "linux", "goarch": "amd64" },
+      "plugins": [
+        { "id": "sample-provider", "install_status": "installed", "load_status": "loaded" }
+      ]
+    }
+  ],
   "nodes": [
     {
       "ip": "10.0.0.12",
-      "connected_time": "2026-05-27T10:30:00Z"
+      "node_id": "node-1",
+      "connected_time": "2026-05-27T10:30:00Z",
+      "client_count": 1,
+      "healthy": true,
+      "plugin_report_state": "reported_ok",
+      "plugin_report_statuses": [
+        {
+          "node_id": "node-1",
+          "status": "success",
+          "phase": "load",
+          "ok": true
+        }
+      ]
     }
   ]
 }
@@ -473,8 +506,21 @@ Example response:
 | Field | Type | Description |
 | --- | --- | --- |
 | `nodes` | array | Active node list. |
+| `plugin_report_required` | boolean | Whether the current Home config expects CPA plugin reports because at least one enabled plugin has a pinned store manifest. |
+| `plugin_report_statuses` | array | Latest plugin reports stored in the shared database, grouped by reporting node and report metadata. Delete reports for one plugin can coexist with preserved status rows for other plugins. These are retained until the node reports again or is explicitly cleaned up; they do not expire by TTL and are self-reported observations, not authoritative install proof. |
+| `nodes[].node_id` | string | CPA node ID derived from the Home client certificate when available. |
 | `nodes[].ip` | string | Node IP address. |
 | `nodes[].connected_time` | string | First connection time for the active node entry. |
+| `nodes[].client_count` | integer | Active RESP subscription connection count from this IP. |
+| `nodes[].healthy` | boolean | Whether the node has an active RESP subscription connection. Plugin reports do not make this field unhealthy. |
+| `nodes[].plugin_report_state` | string | Current configured plugin observation state: `not_required`, `missing_report`, `reported_partial`, `reported_failed`, or `reported_ok`. Failed reports for plugins that are not currently required do not make this state failed. |
+| `nodes[].plugin_report_statuses` | array | Plugin reports associated with this active node, matched by node ID when possible and IP as a fallback. |
+| `plugin_report_statuses[].node_type` | string | Reporting node type, currently `cpa` for CPA node reports and reserved for `home` reports. |
+| `plugin_report_statuses[].node_id` | string | CPA node ID derived from its Home client certificate. |
+| `plugin_report_statuses[].status` | string | Reported plugin task status for this report group, currently `success` or `failed`. |
+| `plugin_report_statuses[].phase` | string | Reported task phase for this report group, such as `install`, `load`, or `delete`. |
+| `plugin_report_statuses[].ok` | boolean | Whether the node reported the task as successful. |
+| `plugin_report_statuses[].plugins` | array | Per-plugin install/load/delete results belonging to this report group. |
 
 ### GET `/latest-version`
 
@@ -496,6 +542,142 @@ Common error codes:
 { "error": "unexpected_status", "message": "status 502: detail" }
 { "error": "decode_failed", "message": "detail" }
 { "error": "invalid_response", "message": "missing release version" }
+```
+
+## Plugin Store
+
+Plugin store routes list registry entries and install a selected plugin into the DB-backed Home config. Install writes `plugins.configs.<pluginID>.store` with a pinned manifest containing the plugin repository, version, and exact release tag. Home-mode CPA nodes then install their own current-platform artifact from that manifest during runtime config application. Store-installed plugins are not downloaded or loaded by the Home process by default; set `plugins.configs.<pluginID>.load-in-home: true` only for trusted provider/auth plugins that must run inside Home.
+
+### GET `/plugin-store`
+
+Lists plugin entries from the built-in official registry plus any configured `plugins.store-sources`.
+
+Input: none.
+
+Example response:
+
+```json
+{
+  "plugins_enabled": true,
+  "plugins_dir": "plugins",
+  "sources": [
+    {
+      "id": "official",
+      "name": "Official",
+      "url": "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI-Plugins-Store/main/registry.json"
+    }
+  ],
+  "plugins": [
+    {
+      "store_id": "official/sample-provider",
+      "source_id": "official",
+      "source_name": "Official",
+      "source_url": "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI-Plugins-Store/main/registry.json",
+      "id": "sample-provider",
+      "name": "Sample Provider",
+      "description": "Adds sample provider support.",
+      "author": "author-name",
+      "version": "0.2.0",
+      "repository": "https://github.com/author-name/sample-provider",
+      "installed": true,
+      "installed_version": "0.2.0",
+      "configured": true,
+      "registered": false,
+      "enabled": true,
+      "effective_enabled": true,
+      "update_available": false
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `plugins_enabled` | boolean | Current global `plugins.enabled` value. |
+| `plugins_dir` | string | Local plugin artifact directory configured for each node. |
+| `sources` | array | Plugin store registry sources queried for the response. |
+| `source_errors` | array | Per-source registry fetch errors when some sources fail. |
+| `plugins[].installed` | boolean | True when config contains a store manifest for this plugin ID. |
+| `plugins[].installed_version` | string | Version pinned in the configured manifest. |
+| `plugins[].enabled` | boolean | Per-plugin `plugins.configs.<id>.enabled` value. |
+| `plugins[].effective_enabled` | boolean | True only when both global plugins and this plugin are enabled. |
+| `plugins[].update_available` | boolean | True when the registry version is newer than the configured manifest version. |
+
+Common errors:
+
+```json
+{ "error": "plugin_store_source_invalid", "message": "detail" }
+{ "error": "plugin_store_registry_failed", "message": "detail" }
+```
+
+### POST `/plugin-store/:id/install`
+
+Installs a plugin config manifest from a registry entry. If multiple configured sources contain the same plugin ID, pass `?source=<source_id>`.
+
+Input body: none.
+
+Query:
+
+| Query | Type | Required | Description |
+| --- | --- | --- | --- |
+| `source` | string | no | Registry source ID when the plugin ID is ambiguous across sources. |
+
+Example response:
+
+```json
+{
+  "status": "installed",
+  "source_id": "official",
+  "source_name": "Official",
+  "source_url": "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI-Plugins-Store/main/registry.json",
+  "id": "sample-provider",
+  "version": "0.2.0",
+  "path": "",
+  "plugins_enabled": true,
+  "restart_required": false
+}
+```
+
+Common errors:
+
+```json
+{ "error": "plugin_not_found", "message": "plugin not found in registry" }
+{ "error": "plugin_store_source_required", "message": "multiple plugin store sources contain this plugin id; specify source" }
+{ "error": "plugin_release_failed", "message": "detail" }
+{ "error": "plugin_release_invalid", "message": "detail" }
+{ "error": "invalid_config", "message": "detail" }
+```
+
+### POST `/plugin-store/:id/uninstall`
+
+Uninstalls a plugin from the whole Home/CPA cluster. The route removes the plugin store manifest from the shared Home config and creates a delete task for all CPA nodes; active Home nodes also delete their local current-platform artifact when they apply the config change.
+
+Input body/query: none.
+
+Example response:
+
+```json
+{
+  "status": "uninstalled",
+  "id": "sample-provider",
+  "configured_removed": true,
+  "target_node_type": "all",
+  "restart_required": false,
+  "task": {
+    "id": 12,
+    "operation": "delete",
+    "plugin_id": "sample-provider",
+    "target_node_type": "all"
+  }
+}
+```
+
+Common errors:
+
+```json
+{ "error": "invalid_plugin_id", "message": "invalid plugin id" }
+{ "error": "plugin_task_create_failed", "message": "detail" }
+{ "error": "invalid_config", "message": "detail" }
 ```
 
 ### POST `/certificates/clients`
@@ -2559,6 +2741,10 @@ These fields are accepted by Home YAML config. `PUT /config.yaml` accepts non-cr
 | `logging-to-file` | boolean | Writes app logs to files instead of stdout. |
 | `logs-max-total-size-mb` | integer | Total log file size limit in MB; `0` disables cleanup. |
 | `error-logs-max-files` | integer | Retained request error log file count. |
+| `plugins.enabled` | boolean | Enables trusted in-process plugins on Home and downstream CPA nodes. |
+| `plugins.dir` | string | Local plugin artifact directory used by each node. |
+| `plugins.store-sources` | array of string | Additional plugin store registry URLs. The built-in official registry is always included. |
+| `plugins.configs` | object | Per-plugin config keyed by plugin ID. Store installs write a pinned `store` manifest under each plugin entry. Home-mode CPA nodes download store entries from that manifest; Home downloads and loads them only when `load-in-home: true` is explicitly set. |
 | `usage-statistics-enabled` | boolean | Enables in-memory usage aggregation. Home forces this to `true` for downstream CPA nodes and rejects disabling it through Management API updates. |
 | `redis-usage-queue-retention-seconds` | integer | Usage queue retention window. Default `60`, max `3600`. |
 | `disable-cooling` | boolean | Globally disables quota cooldown scheduling. Home forces this to `true` for downstream CPA nodes. |

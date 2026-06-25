@@ -1,6 +1,7 @@
 package home
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"time"
@@ -151,6 +152,9 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 		}
 	}
 	configModels := modelInfosFromAuthMetadata(a, homeConfigModelsMetadataKey)
+	if r.tryRegisterPluginModelsForAuth(context.Background(), a, provider, authKind, excluded) {
+		return
+	}
 
 	var models []*ModelInfo
 	switch provider {
@@ -335,12 +339,14 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 		}
 	}
 
+	key := provider
+	if key == "" {
+		key = strings.ToLower(strings.TrimSpace(a.Provider))
+	}
+	models = r.appendPluginModels(key, models)
+	models = applyExcludedModels(models, excluded)
 	models = applyOAuthModelAlias(cfg, provider, authKind, models)
 	if len(models) > 0 {
-		key := provider
-		if key == "" {
-			key = strings.ToLower(strings.TrimSpace(a.Provider))
-		}
 		forcePrefix := cfg != nil && cfg.ForceModelPrefix
 		r.registerResolvedModelsForAuth(a, key, applyModelPrefixes(models, a.Prefix, forcePrefix))
 		return
