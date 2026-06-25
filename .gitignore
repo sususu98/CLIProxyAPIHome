@@ -4,7 +4,8 @@ docs/*
 !docs/user/
 !docs/user/**
 logs/
-static/
+static/*
+!static/.gitkeep
 config.yaml
 cluster.yaml
 .env

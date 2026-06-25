@@ -280,8 +280,8 @@ type BuildResult struct {
 	AuthManager *cpacoreauth.Manager
 }
 
-// serveManagementControlPanel serves a management control panel.
-func serveManagementControlPanel(cfg *cpaconfig.Config, configFilePath string) gin.HandlerFunc {
+// serveManagementControlPanel serves an embedded control panel asset.
+func serveManagementControlPanel(cfg *cpaconfig.Config, configFilePath string, assetName string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c == nil {
 			return
@@ -290,7 +290,7 @@ func serveManagementControlPanel(cfg *cpaconfig.Config, configFilePath string) g
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
-		filePath := managementasset.FilePath(configFilePath)
+		filePath := managementasset.FilePathFor(configFilePath, assetName)
 		if strings.TrimSpace(filePath) == "" {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
@@ -298,11 +298,8 @@ func serveManagementControlPanel(cfg *cpaconfig.Config, configFilePath string) g
 
 		if _, err := os.Stat(filePath); err != nil {
 			if os.IsNotExist(err) {
-				// Control panel bootstrap should not be canceled by client disconnects.
-				if !managementasset.EnsureLatestManagementHTML(context.Background(), managementasset.StaticDir(configFilePath), cfg.ProxyURL, cfg.RemoteManagement.PanelGitHubRepository) {
-					c.AbortWithStatus(http.StatusNotFound)
-					return
-				}
+				c.AbortWithStatus(http.StatusNotFound)
+				return
 			} else {
 				log.WithError(err).Error("failed to stat management control panel asset")
 				c.AbortWithStatus(http.StatusInternalServerError)
@@ -310,20 +307,78 @@ func serveManagementControlPanel(cfg *cpaconfig.Config, configFilePath string) g
 			}
 		}
 
+		c.Header("Cache-Control", "no-cache")
 		c.File(filePath)
 	}
 }
 
-// serveManagementControlPanelFromRuntime derives serve management control panel from runtime.
-func serveManagementControlPanelFromRuntime(opt *ClusterManagementOption, configFilePath string) gin.HandlerFunc {
+// serveManagementControlPanelAsset serves hashed static assets referenced by the embedded panel HTML.
+func serveManagementControlPanelAsset(cfg *cpaconfig.Config, configFilePath string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c == nil {
+			return
+		}
+		if cfg == nil || cfg.RemoteManagement.DisableControlPanel {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+
+		filePath := managementasset.AssetPathFor(configFilePath, c.Param("filepath"))
+		if strings.TrimSpace(filePath) == "" {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+
+		if _, err := os.Stat(filePath); err != nil {
+			if os.IsNotExist(err) {
+				c.AbortWithStatus(http.StatusNotFound)
+				return
+			} else {
+				log.WithError(err).Error("failed to stat management control panel static asset")
+				c.AbortWithStatus(http.StatusInternalServerError)
+				return
+			}
+		}
+
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		c.File(filePath)
+	}
+}
+
+// serveManagementControlPanelFromRuntime derives embedded control panel serving from runtime.
+func serveManagementControlPanelFromRuntime(opt *ClusterManagementOption, configFilePath string, assetName string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if opt == nil || !opt.Enabled || opt.Runtime == nil {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
-		handler := serveManagementControlPanel(cpaConfigFromHomeConfig(opt.Runtime.Config()), configFilePath)
+		handler := serveManagementControlPanel(cpaConfigFromHomeConfig(opt.Runtime.Config()), configFilePath, assetName)
 		handler(c)
 	}
+}
+
+// serveManagementControlPanelAssetFromRuntime derives embedded asset serving from runtime.
+func serveManagementControlPanelAssetFromRuntime(opt *ClusterManagementOption, configFilePath string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if opt == nil || !opt.Enabled || opt.Runtime == nil {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		handler := serveManagementControlPanelAsset(cpaConfigFromHomeConfig(opt.Runtime.Config()), configFilePath)
+		handler(c)
+	}
+}
+
+// registerManagementControlPanelRoutes registers the embedded control panel HTML assets.
+func registerManagementControlPanelRoutes(engine *gin.Engine, handlerFor func(assetName string) gin.HandlerFunc, assetsHandler gin.HandlerFunc) {
+	if engine == nil || handlerFor == nil || assetsHandler == nil {
+		return
+	}
+	engine.GET("/", handlerFor(managementasset.IndexFileName))
+	engine.GET("/index.html", handlerFor(managementasset.IndexFileName))
+	engine.GET("/management.html", handlerFor(managementasset.ManagementFileName))
+	engine.GET("/user.html", handlerFor(managementasset.UserFileName))
+	engine.GET("/assets/*filepath", assetsHandler)
 }
 
 // Build builds a build.
@@ -393,9 +448,13 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 	engine.Use(corsMiddleware())
 
 	if clusterEnabled {
-		engine.GET("/management.html", serveManagementControlPanelFromRuntime(clusterOpt, configFilePath))
+		registerManagementControlPanelRoutes(engine, func(assetName string) gin.HandlerFunc {
+			return serveManagementControlPanelFromRuntime(clusterOpt, configFilePath, assetName)
+		}, serveManagementControlPanelAssetFromRuntime(clusterOpt, configFilePath))
 	} else {
-		engine.GET("/management.html", serveManagementControlPanel(cfg, configFilePath))
+		registerManagementControlPanelRoutes(engine, func(assetName string) gin.HandlerFunc {
+			return serveManagementControlPanel(cfg, configFilePath, assetName)
+		}, serveManagementControlPanelAsset(cfg, configFilePath))
 	}
 
 	if clusterEnabled {

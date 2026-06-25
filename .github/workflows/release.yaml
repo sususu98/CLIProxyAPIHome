@@ -150,6 +150,19 @@ jobs:
           restore-keys: |
             go-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-
             go-${{ runner.os }}-${{ runner.arch }}-
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.0'
+      - name: Build embedded management panel
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/router-for-me/Home-Management-Center.git /tmp/home-management-center
+          cd /tmp/home-management-center
+          bun install --frozen-lockfile
+          bun run build:embedded
+          mkdir -p "${GITHUB_WORKSPACE}/static"
+          cp -R dist/. "${GITHUB_WORKSPACE}/static/"
       - name: Generate Build Metadata
         shell: bash
         run: |
@@ -182,10 +195,11 @@ jobs:
             -o "$archive_dir/$binary_name" ./cmd/home/
 
           cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
+          cp -R static "$archive_dir/"
           if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
             powershell -NoProfile -Command "Compress-Archive -Path '${archive_dir}/*' -DestinationPath 'dist/${archive_name}' -Force"
           else
-            tar -C "$archive_dir" -czf "dist/$archive_name" "$binary_name" LICENSE README.md README_CN.md config.example.yaml
+            tar -C "$archive_dir" -czf "dist/$archive_name" "$binary_name" LICENSE README.md README_CN.md config.example.yaml static
           fi
       - uses: actions/upload-artifact@v4
         with:
@@ -238,6 +252,19 @@ jobs:
       - name: Fetch tags
         shell: bash
         run: git fetch --force --tags
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.0'
+      - name: Build embedded management panel
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/router-for-me/Home-Management-Center.git /tmp/home-management-center
+          cd /tmp/home-management-center
+          bun install --frozen-lockfile
+          bun run build:embedded
+          mkdir -p "${GITHUB_WORKSPACE}/static"
+          cp -R dist/. "${GITHUB_WORKSPACE}/static/"
       - name: Generate Build Metadata
         shell: bash
         run: |
@@ -292,7 +319,8 @@ jobs:
             '
 
           cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
-          tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml
+          cp -R static "$archive_dir/"
+          tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml static
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -353,6 +381,19 @@ jobs:
           restore-keys: |
             go-linux-no-plugin-${{ matrix.goarch }}-
             go-linux-no-plugin-
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.0'
+      - name: Build embedded management panel
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/router-for-me/Home-Management-Center.git /tmp/home-management-center
+          cd /tmp/home-management-center
+          bun install --frozen-lockfile
+          bun run build:embedded
+          mkdir -p "${GITHUB_WORKSPACE}/static"
+          cp -R dist/. "${GITHUB_WORKSPACE}/static/"
       - name: Generate Build Metadata
         shell: bash
         run: |
@@ -385,7 +426,8 @@ jobs:
           fi
 
           cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
-          tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml
+          cp -R static "$archive_dir/"
+          tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml static
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -452,6 +494,19 @@ jobs:
           restore-keys: |
             go-freebsd-${{ matrix.goarch }}-
             go-freebsd-
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.0'
+      - name: Build embedded management panel
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/router-for-me/Home-Management-Center.git /tmp/home-management-center
+          cd /tmp/home-management-center
+          bun install --frozen-lockfile
+          bun run build:embedded
+          mkdir -p "${GITHUB_WORKSPACE}/static"
+          cp -R dist/. "${GITHUB_WORKSPACE}/static/"
       - name: Generate Build Metadata
         id: metadata
         run: |
@@ -512,7 +567,8 @@ jobs:
           echo "Packaging ${archive_name}"
           cp "dist/${TARGET}/bin/cli-proxy-api" "$archive_dir/cli-proxy-api"
           cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
-          tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml
+          cp -R static "$archive_dir/"
+          tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml static
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
