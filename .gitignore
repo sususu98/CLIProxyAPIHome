@@ -6,7 +6,14 @@ docs/*
 logs/
 static/*
 !static/.gitkeep
+internal/managementasset/static/*
+!internal/managementasset/static/.gitkeep
+dist/
+.tmp/
+test-output
+CLIProxyAPIHome
 config.yaml
 cluster.yaml
 .env
 AGENTS.md
+plugins

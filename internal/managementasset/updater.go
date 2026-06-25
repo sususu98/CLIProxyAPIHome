@@ -2,7 +2,10 @@ package managementasset
 
 import (
 	"context"
+	"embed"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -12,10 +15,10 @@ import (
 )
 
 const (
-	assetsDirName = "assets"
-	indexAssetName = "index.html"
+	assetsDirName       = "assets"
+	indexAssetName      = "index.html"
 	managementAssetName = "management.html"
-	userAssetName = "user.html"
+	userAssetName       = "user.html"
 )
 
 // AssetsDirName is the directory that stores hashed static assets.
@@ -32,6 +35,9 @@ const UserFileName = userAssetName
 
 // PanelFileNames lists all embedded control panel assets.
 var PanelFileNames = []string{IndexFileName, ManagementFileName, UserFileName}
+
+//go:embed all:static
+var embeddedStaticFS embed.FS
 
 // SetCurrentConfig is retained for compatibility with runtime wiring.
 func SetCurrentConfig(cfg *config.Config) {
@@ -73,7 +79,7 @@ func FilePath(configFilePath string) string {
 	return FilePathFor(configFilePath, ManagementFileName)
 }
 
-// FilePathFor resolves the absolute path to a specific embedded control panel asset.
+// FilePathFor resolves the absolute path to a specific control panel asset.
 func FilePathFor(configFilePath string, assetName string) string {
 	assetName = normalizePanelAssetName(assetName)
 	if assetName == "" {
@@ -87,18 +93,13 @@ func FilePathFor(configFilePath string, assetName string) string {
 	return filepath.Join(dir, assetName)
 }
 
-// AssetPathFor resolves a path under the embedded control panel assets directory.
+// AssetPathFor resolves a path under the control panel static assets directory.
 func AssetPathFor(configFilePath string, assetPath string) string {
-	assetPath = strings.TrimSpace(assetPath)
-	if assetPath == "" {
+	cleanedSlash := normalizeStaticAssetPath(assetPath)
+	if cleanedSlash == "" {
 		return ""
 	}
-
-	assetPath = strings.TrimPrefix(assetPath, "/")
-	cleaned := filepath.Clean(filepath.FromSlash(assetPath))
-	if cleaned == "." || filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-		return ""
-	}
+	cleaned := filepath.Clean(filepath.FromSlash(cleanedSlash))
 
 	dir := StaticDir(configFilePath)
 	if dir == "" {
@@ -111,6 +112,50 @@ func AssetPathFor(configFilePath string, assetPath string) string {
 		return ""
 	}
 	return resolved
+}
+
+// OpenPanelAsset opens a control panel HTML asset from the local override, embedded bundle, or legacy static directory.
+func OpenPanelAsset(configFilePath string, assetName string) (fs.File, error) {
+	assetName = normalizePanelAssetName(assetName)
+	if assetName == "" {
+		return nil, fs.ErrNotExist
+	}
+
+	if hasStaticDirOverride() {
+		return openDiskFile(FilePathFor(configFilePath, assetName))
+	}
+
+	file, errOpen := openEmbeddedFile(assetName)
+	if errOpen == nil {
+		return file, nil
+	}
+	if !os.IsNotExist(errOpen) {
+		return nil, errOpen
+	}
+
+	return openDiskFile(FilePathFor(configFilePath, assetName))
+}
+
+// OpenStaticAsset opens a hashed static asset from the local override, embedded bundle, or legacy static directory.
+func OpenStaticAsset(configFilePath string, assetPath string) (fs.File, error) {
+	assetPath = normalizeStaticAssetPath(assetPath)
+	if assetPath == "" {
+		return nil, fs.ErrNotExist
+	}
+
+	if hasStaticDirOverride() {
+		return openDiskFile(AssetPathFor(configFilePath, assetPath))
+	}
+
+	file, errOpen := openEmbeddedFile(path.Join(AssetsDirName, assetPath))
+	if errOpen == nil {
+		return file, nil
+	}
+	if !os.IsNotExist(errOpen) {
+		return nil, errOpen
+	}
+
+	return openDiskFile(AssetPathFor(configFilePath, assetPath))
 }
 
 func normalizePanelAssetName(assetName string) string {
@@ -126,4 +171,78 @@ func normalizePanelAssetName(assetName string) string {
 		}
 	}
 	return ""
+}
+
+func normalizeStaticAssetPath(assetPath string) string {
+	assetPath = strings.TrimSpace(assetPath)
+	if assetPath == "" {
+		return ""
+	}
+
+	assetPath = strings.TrimPrefix(assetPath, "/")
+	cleaned := path.Clean(assetPath)
+	if cleaned == "." || path.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return ""
+	}
+	return cleaned
+}
+
+func hasStaticDirOverride() bool {
+	return strings.TrimSpace(os.Getenv("MANAGEMENT_STATIC_PATH")) != ""
+}
+
+func openEmbeddedFile(assetPath string) (fs.File, error) {
+	assetPath = normalizeStaticAssetPath(assetPath)
+	if assetPath == "" {
+		return nil, fs.ErrNotExist
+	}
+
+	file, errOpen := embeddedStaticFS.Open(path.Join("static", assetPath))
+	if errOpen != nil {
+		return nil, errOpen
+	}
+
+	fileInfo, errStat := file.Stat()
+	if errStat != nil {
+		if errClose := file.Close(); errClose != nil {
+			log.WithError(errClose).Warn("failed to close embedded management asset after stat error")
+		}
+		return nil, errStat
+	}
+	if fileInfo.IsDir() {
+		if errClose := file.Close(); errClose != nil {
+			log.WithError(errClose).Warn("failed to close embedded management asset directory")
+		}
+		return nil, fs.ErrNotExist
+	}
+
+	return file, nil
+}
+
+func openDiskFile(filePath string) (fs.File, error) {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return nil, fs.ErrNotExist
+	}
+
+	file, errOpen := os.Open(filePath)
+	if errOpen != nil {
+		return nil, errOpen
+	}
+
+	fileInfo, errStat := file.Stat()
+	if errStat != nil {
+		if errClose := file.Close(); errClose != nil {
+			log.WithError(errClose).Warn("failed to close management asset after stat error")
+		}
+		return nil, errStat
+	}
+	if fileInfo.IsDir() {
+		if errClose := file.Close(); errClose != nil {
+			log.WithError(errClose).Warn("failed to close management asset directory")
+		}
+		return nil, fs.ErrNotExist
+	}
+
+	return file, nil
 }

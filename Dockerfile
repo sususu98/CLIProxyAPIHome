@@ -14,6 +14,8 @@ ARG VERSION=dev
 ARG COMMIT=none
 ARG BUILD_DATE=unknown
 
+RUN test -s internal/managementasset/static/management.html
+
 RUN CGO_ENABLED=1 GOOS=linux go build -buildvcs=false -ldflags="-s -w -X 'main.Version=${VERSION}' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" -o ./CLIProxyAPIHome ./cmd/home/
 
 FROM debian:bookworm
@@ -25,7 +27,6 @@ RUN mkdir /CLIProxyAPIHome
 COPY --from=builder ./app/CLIProxyAPIHome /CLIProxyAPIHome/CLIProxyAPIHome
 
 COPY config.example.yaml /CLIProxyAPIHome/config.example.yaml
-COPY static /CLIProxyAPIHome/static
 
 WORKDIR /CLIProxyAPIHome
 

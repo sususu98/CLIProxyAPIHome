@@ -3,9 +3,14 @@ package managementhttp
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"mime"
 	"net/http"
 	"os"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -290,25 +295,13 @@ func serveManagementControlPanel(cfg *cpaconfig.Config, configFilePath string, a
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
-		filePath := managementasset.FilePathFor(configFilePath, assetName)
-		if strings.TrimSpace(filePath) == "" {
-			c.AbortWithStatus(http.StatusNotFound)
+		file, errOpen := managementasset.OpenPanelAsset(configFilePath, assetName)
+		if errOpen != nil {
+			abortManagementAssetOpenError(c, errOpen, "failed to open management control panel asset")
 			return
 		}
 
-		if _, err := os.Stat(filePath); err != nil {
-			if os.IsNotExist(err) {
-				c.AbortWithStatus(http.StatusNotFound)
-				return
-			} else {
-				log.WithError(err).Error("failed to stat management control panel asset")
-				c.AbortWithStatus(http.StatusInternalServerError)
-				return
-			}
-		}
-
-		c.Header("Cache-Control", "no-cache")
-		c.File(filePath)
+		serveManagementAssetFile(c, file, "no-cache")
 	}
 }
 
@@ -323,26 +316,63 @@ func serveManagementControlPanelAsset(cfg *cpaconfig.Config, configFilePath stri
 			return
 		}
 
-		filePath := managementasset.AssetPathFor(configFilePath, c.Param("filepath"))
-		if strings.TrimSpace(filePath) == "" {
-			c.AbortWithStatus(http.StatusNotFound)
+		file, errOpen := managementasset.OpenStaticAsset(configFilePath, c.Param("filepath"))
+		if errOpen != nil {
+			abortManagementAssetOpenError(c, errOpen, "failed to open management control panel static asset")
 			return
 		}
 
-		if _, err := os.Stat(filePath); err != nil {
-			if os.IsNotExist(err) {
-				c.AbortWithStatus(http.StatusNotFound)
-				return
-			} else {
-				log.WithError(err).Error("failed to stat management control panel static asset")
-				c.AbortWithStatus(http.StatusInternalServerError)
-				return
-			}
-		}
-
-		c.Header("Cache-Control", "public, max-age=31536000, immutable")
-		c.File(filePath)
+		serveManagementAssetFile(c, file, "public, max-age=31536000, immutable")
 	}
+}
+
+func abortManagementAssetOpenError(c *gin.Context, err error, message string) {
+	if c == nil {
+		return
+	}
+	if errors.Is(err, fs.ErrNotExist) || os.IsNotExist(err) {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	log.WithError(err).Error(message)
+	c.AbortWithStatus(http.StatusInternalServerError)
+}
+
+func serveManagementAssetFile(c *gin.Context, file fs.File, cacheControl string) {
+	if c == nil || file == nil {
+		return
+	}
+	defer func() {
+		if errClose := file.Close(); errClose != nil {
+			log.WithError(errClose).Warn("failed to close management control panel asset")
+		}
+	}()
+
+	fileInfo, errStat := file.Stat()
+	if errStat != nil {
+		log.WithError(errStat).Error("failed to stat management control panel asset")
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	c.Header("Cache-Control", cacheControl)
+	if readSeeker, ok := file.(io.ReadSeeker); ok {
+		http.ServeContent(c.Writer, c.Request, fileInfo.Name(), fileInfo.ModTime(), readSeeker)
+		return
+	}
+
+	data, errRead := io.ReadAll(file)
+	if errRead != nil {
+		log.WithError(errRead).Error("failed to read management control panel asset")
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	contentType := mime.TypeByExtension(path.Ext(fileInfo.Name()))
+	if contentType == "" {
+		contentType = http.DetectContentType(data)
+	}
+	c.Data(http.StatusOK, contentType, data)
 }
 
 // serveManagementControlPanelFromRuntime derives embedded control panel serving from runtime.

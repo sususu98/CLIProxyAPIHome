@@ -40,13 +40,15 @@ jobs:
           cd /tmp/home-management-center
           bun install --frozen-lockfile
           bun run build:embedded
-          rm -rf "${GITHUB_WORKSPACE}/static"
-          mkdir -p "${GITHUB_WORKSPACE}/static"
-          cp -R dist/. "${GITHUB_WORKSPACE}/static/"
+          rm -rf "${GITHUB_WORKSPACE}/internal/managementasset/static"
+          mkdir -p "${GITHUB_WORKSPACE}/internal/managementasset/static"
+          touch "${GITHUB_WORKSPACE}/internal/managementasset/static/.gitkeep"
+          cp -R dist/. "${GITHUB_WORKSPACE}/internal/managementasset/static/"
+          test -s "${GITHUB_WORKSPACE}/internal/managementasset/static/management.html"
       - uses: actions/upload-artifact@v4
         with:
           name: management-panel-static
-          path: static/**
+          path: internal/managementasset/static/**
           if-no-files-found: error
 
   prepare-release:
@@ -189,7 +191,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: management-panel-static
-          path: static
+          path: internal/managementasset/static
       - name: Generate Build Metadata
         shell: bash
         run: |
@@ -222,11 +224,10 @@ jobs:
             -o "$archive_dir/$binary_name" ./cmd/home/
 
           cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
-          cp -R static "$archive_dir/"
           if [[ "$ARCHIVE_FORMAT" == "zip" ]]; then
             powershell -NoProfile -Command "Compress-Archive -Path '${archive_dir}/*' -DestinationPath 'dist/${archive_name}' -Force"
           else
-            tar -C "$archive_dir" -czf "dist/$archive_name" "$binary_name" LICENSE README.md README_CN.md config.example.yaml static
+            tar -C "$archive_dir" -czf "dist/$archive_name" "$binary_name" LICENSE README.md README_CN.md config.example.yaml
           fi
       - uses: actions/upload-artifact@v4
         with:
@@ -282,7 +283,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: management-panel-static
-          path: static
+          path: internal/managementasset/static
       - name: Generate Build Metadata
         shell: bash
         run: |
@@ -337,8 +338,7 @@ jobs:
             '
 
           cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
-          cp -R static "$archive_dir/"
-          tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml static
+          tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -402,7 +402,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: management-panel-static
-          path: static
+          path: internal/managementasset/static
       - name: Generate Build Metadata
         shell: bash
         run: |
@@ -435,8 +435,7 @@ jobs:
           fi
 
           cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
-          cp -R static "$archive_dir/"
-          tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml static
+          tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -506,7 +505,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: management-panel-static
-          path: static
+          path: internal/managementasset/static
       - name: Generate Build Metadata
         id: metadata
         run: |
@@ -567,8 +566,7 @@ jobs:
           echo "Packaging ${archive_name}"
           cp "dist/${TARGET}/bin/cli-proxy-api" "$archive_dir/cli-proxy-api"
           cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
-          cp -R static "$archive_dir/"
-          tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml static
+          tar -C "$archive_dir" -czf "dist/$archive_name" cli-proxy-api LICENSE README.md README_CN.md config.example.yaml
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}

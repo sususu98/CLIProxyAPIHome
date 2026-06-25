@@ -11,8 +11,14 @@ http://<host>:<port>/v0/management
 Optional management panel:
 
 ```text
+GET /
+GET /index.html
 GET /management.html
+GET /user.html
+GET /assets/*
 ```
+
+The panel assets are embedded into the binary at build time.
 
 Home examples usually use port `8327`. The effective listen address comes from runtime config, `cluster.yaml`, or the final `-addr` value.
 
@@ -2721,9 +2727,9 @@ These fields are accepted by Home YAML config. `PUT /config.yaml` accepts non-cr
 | `tls.key` | string | TLS private key path. |
 | `remote-management.allow-remote` | boolean | Allows non-localhost Management API requests when true. |
 | `remote-management.secret-key` | string | Management key. In local config mode, plaintext is hashed at startup. |
-| `remote-management.disable-control-panel` | boolean | Disables `/management.html` and panel syncing. |
-| `remote-management.disable-auto-update-panel` | boolean | Disables periodic background panel asset updates. |
-| `remote-management.panel-github-repository` | string | Management panel GitHub repository URL or releases API URL. |
+| `remote-management.disable-control-panel` | boolean | Disables the embedded panel routes: `/`, `/index.html`, `/management.html`, `/user.html`, and `/assets/*`. |
+| `remote-management.disable-auto-update-panel` | boolean | Legacy compatibility flag; embedded panel assets are not updated at runtime. |
+| `remote-management.panel-github-repository` | string | Legacy compatibility field for the embedded panel source repository. |
 | `auth-dir` | string | Local auth token directory. |
 | `proxy-url` | string | Global outbound proxy URL. |
 | `disable-image-generation` | boolean or `"chat"` | `false` enables image generation; `true` disables it globally; `"chat"` disables injection for non-image endpoints. |

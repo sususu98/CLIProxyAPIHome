@@ -197,6 +197,28 @@ func TestManagementControlPanelRoutesServeEmbeddedAssets(t *testing.T) {
 	}
 }
 
+func TestManagementControlPanelRoutesDoNotCaptureManagementEndpoints(t *testing.T) {
+	engine := gin.New()
+	cfg := &cpaconfig.Config{}
+	registerManagementControlPanelRoutes(engine, func(assetName string) gin.HandlerFunc {
+		return serveManagementControlPanel(cfg, "", assetName)
+	}, serveManagementControlPanelAsset(cfg, ""))
+	engine.GET("/v0/management/ping", func(c *gin.Context) {
+		c.String(http.StatusOK, "pong")
+	})
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/ping", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusOK)
+	}
+	if got := resp.Body.String(); got != "pong" {
+		t.Fatalf("body = %q, want pong", got)
+	}
+}
+
 func assertCORSHeaders(t *testing.T, resp *httptest.ResponseRecorder) {
 	t.Helper()
 

@@ -11,8 +11,14 @@ http://<host>:<port>/v0/management
 可选管理面板：
 
 ```text
+GET /
+GET /index.html
 GET /management.html
+GET /user.html
+GET /assets/*
 ```
+
+Panel assets 会在构建时内嵌到二进制中。
 
 Home 示例端口通常为 `8327`。实际监听地址来自 runtime config、`cluster.yaml` 或 `-addr` 的最终值。
 
@@ -2721,9 +2727,9 @@ DELETE query：
 | `tls.key` | string | TLS private key 路径。 |
 | `remote-management.allow-remote` | boolean | 为 `true` 时允许非 localhost Management API 请求。 |
 | `remote-management.secret-key` | string | Management key；本地配置模式下明文会在启动时 hash。 |
-| `remote-management.disable-control-panel` | boolean | 禁用 `/management.html` 和 panel syncing。 |
-| `remote-management.disable-auto-update-panel` | boolean | 禁用后台周期性 panel asset 更新。 |
-| `remote-management.panel-github-repository` | string | Management panel GitHub repository URL 或 releases API URL。 |
+| `remote-management.disable-control-panel` | boolean | 禁用内嵌 panel routes：`/`、`/index.html`、`/management.html`、`/user.html`、`/assets/*`。 |
+| `remote-management.disable-auto-update-panel` | boolean | 兼容旧配置的字段；内嵌 panel assets 不会在运行时更新。 |
+| `remote-management.panel-github-repository` | string | 兼容旧配置的内嵌 panel 源仓库字段。 |
 | `auth-dir` | string | 本地 auth token 目录。 |
 | `proxy-url` | string | 全局出站代理 URL。 |
 | `disable-image-generation` | boolean or `"chat"` | `false` 启用图像生成；`true` 全局禁用；`"chat"` 只对非 image endpoints 禁用注入。 |
