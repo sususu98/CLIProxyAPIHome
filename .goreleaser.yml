@@ -29,6 +29,7 @@ archives:
       - README.md
       - README_CN.md
       - config.example.yaml
+      - static/**/*
 
 checksum:
   name_template: 'checksums.txt'

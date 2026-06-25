@@ -5,9 +5,12 @@ import (
 	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	cpaconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 	clustermanagement "github.com/router-for-me/CLIProxyAPIHome/internal/cluster/management"
 )
 
@@ -123,6 +126,74 @@ func TestClusterManagementProxyPoolRoutesRegistered(t *testing.T) {
 		if reg.routes[route] != nil {
 			t.Fatalf("route %s %s should not be registered", route.Method, route.Path)
 		}
+	}
+}
+
+func TestManagementControlPanelRoutesServeEmbeddedAssets(t *testing.T) {
+	staticDir := t.TempDir()
+	t.Setenv("MANAGEMENT_STATIC_PATH", staticDir)
+
+	for _, asset := range []struct {
+		name string
+		body string
+	}{
+		{name: "index.html", body: "bridge"},
+		{name: "management.html", body: "management"},
+		{name: "user.html", body: "user"},
+	} {
+		if err := os.WriteFile(filepath.Join(staticDir, asset.name), []byte(asset.body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", asset.name, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(staticDir, "assets", "js"), 0o755); err != nil {
+		t.Fatalf("mkdir assets: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(staticDir, "assets", "js", "app.1234.js"), []byte("asset"), 0o644); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+
+	engine := gin.New()
+	cfg := &cpaconfig.Config{}
+	registerManagementControlPanelRoutes(engine, func(assetName string) gin.HandlerFunc {
+		return serveManagementControlPanel(cfg, filepath.Join(staticDir, "config.yaml"), assetName)
+	}, serveManagementControlPanelAsset(cfg, filepath.Join(staticDir, "config.yaml")))
+
+	for _, tc := range []struct {
+		path string
+		body string
+	}{
+		{path: "/", body: "bridge"},
+		{path: "/index.html", body: "bridge"},
+		{path: "/management.html", body: "management"},
+		{path: "/user.html", body: "user"},
+	} {
+		resp := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		engine.ServeHTTP(resp, req)
+
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want %d", tc.path, resp.Code, http.StatusOK)
+		}
+		if got := resp.Body.String(); got != tc.body {
+			t.Fatalf("%s body = %q, want %q", tc.path, got, tc.body)
+		}
+		if got := resp.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Fatalf("%s Cache-Control = %q, want no-cache", tc.path, got)
+		}
+	}
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/assets/js/app.1234.js", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("asset status = %d, want %d", resp.Code, http.StatusOK)
+	}
+	if got := resp.Body.String(); got != "asset" {
+		t.Fatalf("asset body = %q, want asset", got)
+	}
+	if got := resp.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Fatalf("asset Cache-Control = %q, want immutable cache", got)
 	}
 }
 
