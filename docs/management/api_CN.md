@@ -65,6 +65,7 @@ Home 管理接口会额外写入以下响应头：
 | `x-cpa-home-version` | Home 构建版本。 |
 | `x-cpa-home-commit` | Home 构建 commit。 |
 | `x-cpa-home-build-date` | Home 构建日期。 |
+| `X-CPA-SUPPORT-PLUGIN` | `1` 表示当前二进制在启用 CGO 的情况下构建；否则为 `0`。语义与 CPA 管理接口一致。 |
 
 ## 通用响应
 
