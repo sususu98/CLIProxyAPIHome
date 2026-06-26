@@ -618,15 +618,20 @@ Common errors:
 
 ### POST `/plugin-store/:id/install`
 
-Installs a plugin config manifest from a registry entry. If multiple configured sources contain the same plugin ID, pass `?source=<source_id>`.
+Installs a plugin config manifest from a registry entry. If multiple configured sources contain the same plugin ID, pass `?source=<source_id>`. By default the latest GitHub release is installed. Pass `version` to pin a specific release tag such as `1.0.3` or `v1.0.3`.
 
-Input body: none.
+Input body: optional JSON.
+
+```json
+{ "version": "1.0.3" }
+```
 
 Query:
 
 | Query | Type | Required | Description |
 | --- | --- | --- | --- |
 | `source` | string | no | Registry source ID when the plugin ID is ambiguous across sources. |
+| `version` | string | no | Plugin version to install. Values with or without a leading `v` are accepted. |
 
 Example response:
 

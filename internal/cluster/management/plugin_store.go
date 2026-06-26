@@ -2,7 +2,10 @@ package management
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -73,6 +76,10 @@ type pluginInstallResponse struct {
 	Path            string `json:"path"`
 	PluginsEnabled  bool   `json:"plugins_enabled"`
 	RestartRequired bool   `json:"restart_required"`
+}
+
+type pluginInstallRequest struct {
+	Version string `json:"version"`
 }
 
 type pluginUninstallResponse struct {
@@ -210,6 +217,11 @@ func (h *Handler) InstallPluginFromStore(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "invalid_plugin_id", fmt.Errorf("plugin id is required"))
 		return
 	}
+	requestedVersion, errVersionRequest := pluginInstallRequestedVersion(c)
+	if errVersionRequest != nil {
+		respondError(c, http.StatusBadRequest, "invalid_request", errVersionRequest)
+		return
+	}
 	ctx, cancel := h.pluginStoreRequestContext(c)
 	defer cancel()
 
@@ -227,7 +239,7 @@ func (h *Handler) InstallPluginFromStore(c *gin.Context) {
 	if !okPlugin {
 		return
 	}
-	release, errRelease := client.FetchLatestRelease(ctx, plugin)
+	release, errRelease := fetchPluginStoreInstallRelease(ctx, client, plugin, requestedVersion)
 	if errRelease != nil {
 		respondError(c, http.StatusBadGateway, "plugin_release_failed", errRelease)
 		return
@@ -263,6 +275,68 @@ func (h *Handler) InstallPluginFromStore(c *gin.Context) {
 		PluginsEnabled:  cfg != nil && cfg.Plugins.Enabled,
 		RestartRequired: false,
 	})
+}
+
+func pluginInstallRequestedVersion(c *gin.Context) (string, error) {
+	requestedVersion := strings.TrimSpace(c.Query("version"))
+	if c == nil || c.Request == nil || c.Request.Body == nil || c.Request.Body == http.NoBody {
+		return requestedVersion, nil
+	}
+	body, errRead := io.ReadAll(c.Request.Body)
+	if errRead != nil {
+		return "", fmt.Errorf("read install request: %w", errRead)
+	}
+	if strings.TrimSpace(string(body)) == "" {
+		return requestedVersion, nil
+	}
+	var req pluginInstallRequest
+	if errDecode := json.Unmarshal(body, &req); errDecode != nil {
+		return "", fmt.Errorf("decode install request: %w", errDecode)
+	}
+	bodyVersion := strings.TrimSpace(req.Version)
+	if requestedVersion == "" {
+		return bodyVersion, nil
+	}
+	if bodyVersion == "" || normalizePluginStoreRequestedVersion(bodyVersion) == normalizePluginStoreRequestedVersion(requestedVersion) {
+		return requestedVersion, nil
+	}
+	return "", fmt.Errorf("version query %q does not match request body version %q", requestedVersion, bodyVersion)
+}
+
+func fetchPluginStoreInstallRelease(ctx context.Context, client pluginstore.Client, plugin pluginstore.Plugin, version string) (pluginstore.Release, error) {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return client.FetchLatestRelease(ctx, plugin)
+	}
+	tags := pluginStoreReleaseTagCandidates(version)
+	errs := make([]error, 0, len(tags))
+	for _, tag := range tags {
+		release, errRelease := client.FetchReleaseByTag(ctx, plugin, tag)
+		if errRelease == nil {
+			return release, nil
+		}
+		errs = append(errs, fmt.Errorf("%s: %w", tag, errRelease))
+	}
+	return pluginstore.Release{}, fmt.Errorf("fetch release by tag: %w", errors.Join(errs...))
+}
+
+func pluginStoreReleaseTagCandidates(version string) []string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return nil
+	}
+	if strings.HasPrefix(strings.ToLower(version), "v") {
+		return []string{version, strings.TrimSpace(version[1:])}
+	}
+	return []string{version, "v" + version}
+}
+
+func normalizePluginStoreRequestedVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if strings.HasPrefix(strings.ToLower(version), "v") {
+		return strings.TrimSpace(version[1:])
+	}
+	return version
 }
 
 func (h *Handler) pluginStoreRequestContext(c *gin.Context) (context.Context, context.CancelFunc) {
