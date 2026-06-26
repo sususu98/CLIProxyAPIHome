@@ -114,7 +114,7 @@ func (r *Runtime) syncPluginStoreManifests(ctx context.Context, cfg *config.Conf
 		if errKey != nil {
 			return errKey
 		}
-		if r.pluginStoreArtifactCurrent(root, manifest.ID, syncKey) {
+		if r.pluginStoreArtifactCurrent(root, manifest, syncKey) {
 			continue
 		}
 		result, errInstall := r.installPluginStoreManifest(ctx, client, manifest, root, platform)
@@ -298,16 +298,16 @@ func pluginStoreManifestKey(root string, platform PluginPlatform, manifest plugi
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func (r *Runtime) pluginStoreArtifactCurrent(root string, id string, key string) bool {
+func (r *Runtime) pluginStoreArtifactCurrent(root string, manifest pluginstore.Manifest, key string) bool {
 	if r == nil || r.pluginStoreSync == nil {
 		return false
 	}
-	id = strings.TrimSpace(id)
+	id := strings.TrimSpace(manifest.ID)
 	state, ok := r.pluginStoreSync[id]
 	if !ok || state.Key != key {
 		return false
 	}
-	path, errPath := currentPluginFilePath(root, id)
+	path, errPath := currentPluginFilePath(root, id, manifest.Version)
 	if errPath != nil || strings.TrimSpace(path) == "" {
 		return false
 	}
@@ -332,7 +332,7 @@ func (r *Runtime) markPluginStoreSynced(root string, manifest pluginstore.Manife
 	path := strings.TrimSpace(result.Path)
 	if path == "" {
 		var errPath error
-		path, errPath = currentPluginFilePath(root, id)
+		path, errPath = currentPluginFilePath(root, id, manifest.Version)
 		if errPath != nil {
 			return fmt.Errorf("home plugins: locate synced artifact %s: %w", id, errPath)
 		}
@@ -392,15 +392,24 @@ func pluginFileDigestForPath(path string) (pluginFileDigest, error) {
 	}, nil
 }
 
-func currentPluginFilePath(root string, id string) (string, error) {
-	paths, errPaths := pluginFilePaths(root, id)
-	if errPaths != nil {
-		return "", errPaths
+func currentPluginFilePath(root string, id string, desiredVersions ...string) (string, error) {
+	files, errFiles := pluginFileInfos(root, id)
+	if errFiles != nil {
+		return "", errFiles
 	}
-	if len(paths) == 0 {
+	if len(files) == 0 {
 		return "", nil
 	}
-	return paths[0], nil
+	desiredVersion := normalizeDesiredPluginFileVersion(desiredVersions...)
+	if desiredVersion != "" {
+		for _, file := range files {
+			if file.Version == desiredVersion {
+				return file.Path, nil
+			}
+		}
+		return "", nil
+	}
+	return files[0].Path, nil
 }
 
 func pluginFilePaths(root string, id string) ([]string, error) {
@@ -470,6 +479,19 @@ func pluginFileInfos(root string, id string) ([]pluginFileInfo, error) {
 		out = append(out, candidate)
 	}
 	return out, nil
+}
+
+func normalizeDesiredPluginFileVersion(versions ...string) string {
+	for _, version := range versions {
+		version = strings.TrimSpace(version)
+		if len(version) > 1 && (version[0] == 'v' || version[0] == 'V') {
+			version = version[1:]
+		}
+		if validPluginFileVersion(version) {
+			return version
+		}
+	}
+	return ""
 }
 
 func pluginCandidateDirs(root string, goos string, goarch string, variant string) []string {

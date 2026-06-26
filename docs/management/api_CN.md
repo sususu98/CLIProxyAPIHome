@@ -619,15 +619,20 @@ openai-compatibility
 
 ### POST `/plugin-store/:id/install`
 
-从 registry 条目安装插件配置 manifest。如果多个来源包含同一插件 ID，传入 `?source=<source_id>` 指定来源。
+从 registry 条目安装插件配置 manifest。如果多个来源包含同一插件 ID，传入 `?source=<source_id>` 指定来源。默认安装 GitHub 最新 release；传入 `version` 可固定安装指定 release tag，例如 `1.0.3` 或 `v1.0.3`。
 
-输入 body：无。
+输入 body：可选 JSON。
+
+```json
+{ "version": "1.0.3" }
+```
 
 Query：
 
 | Query | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `source` | string | 否 | 插件 ID 在多个 registry 中有歧义时指定来源 ID。 |
+| `version` | string | 否 | 要安装的插件版本；支持带或不带前导 `v`。 |
 
 输出示例：
 
