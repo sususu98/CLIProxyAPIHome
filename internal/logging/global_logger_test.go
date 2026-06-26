@@ -25,6 +25,52 @@ func TestLogFormatterAddsCLIProxyAPIHomePrefix(t *testing.T) {
 	}
 }
 
+func TestLogFormatterPrintsPluginFields(t *testing.T) {
+	entry := log.NewEntry(log.StandardLogger())
+	entry.Time = time.Date(2026, 6, 25, 21, 21, 2, 0, time.Local)
+	entry.Level = log.InfoLevel
+	entry.Message = "pluginhost: plugin registered"
+	entry.Data["plugin_id"] = "sample-provider"
+	entry.Data["plugin_name"] = "Sample Provider"
+	entry.Data["version"] = "0.2.0"
+	entry.Data["path"] = "plugins/windows/amd64/sample-provider-v0.2.0.dll"
+
+	raw, errFormat := (&LogFormatter{}).Format(entry)
+	if errFormat != nil {
+		t.Fatalf("Format error: %v", errFormat)
+	}
+
+	got := string(raw)
+	for _, want := range []string{
+		"plugin_id=sample-provider",
+		"plugin_name=Sample Provider",
+		"version=0.2.0",
+		"path=plugins/windows/amd64/sample-provider-v0.2.0.dll",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatted log = %q, missing %s", got, want)
+		}
+	}
+}
+
+func TestLogFormatterOmitsGenericPathField(t *testing.T) {
+	entry := log.NewEntry(log.StandardLogger())
+	entry.Time = time.Date(2026, 6, 25, 21, 25, 0, 0, time.Local)
+	entry.Level = log.WarnLevel
+	entry.Message = "failed to load local file"
+	entry.Data["path"] = "auths/private-token.json"
+
+	raw, errFormat := (&LogFormatter{}).Format(entry)
+	if errFormat != nil {
+		t.Fatalf("Format error: %v", errFormat)
+	}
+
+	got := string(raw)
+	if strings.Contains(got, "path=") {
+		t.Fatalf("formatted log = %q, want generic path omitted", got)
+	}
+}
+
 func TestFormatLogSourcePrefixAlignsHomeIPv4AndIPv6(t *testing.T) {
 	home := FormatLogSourcePrefix("CLIProxyAPIHome")
 	ipv4 := FormatLogSourcePrefix("255.255.255.255")
