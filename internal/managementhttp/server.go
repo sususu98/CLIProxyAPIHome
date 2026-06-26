@@ -177,6 +177,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodPut, "/api-keys", handler.PutAPIKeys)
 	r.Set(http.MethodPatch, "/api-keys", handler.PatchAPIKeys)
 	r.Set(http.MethodDelete, "/api-keys", handler.DeleteAPIKeys)
+	r.Set(http.MethodGet, "/api-key-usage", handler.GetAPIKeyUsage)
 	r.Set(http.MethodGet, "/billing/overview", handler.GetBillingOverview)
 	r.Set(http.MethodGet, "/billing/charges", handler.ListBillingCharges)
 	r.Set(http.MethodGet, "/billing/balance-records", handler.ListBillingBalanceRecords)

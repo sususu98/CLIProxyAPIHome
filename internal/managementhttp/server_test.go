@@ -102,6 +102,17 @@ func TestClusterManagementBillingWriteRoutesRegistered(t *testing.T) {
 	}
 }
 
+func TestClusterManagementAPIKeyUsageRouteRegistered(t *testing.T) {
+	reg := newRouteRegistry()
+	handler := clustermanagement.NewHandler(nil, nil, "", 0)
+	registerClusterManagementRoutes(reg, handler)
+
+	route := RouteKey{Method: http.MethodGet, Path: "/api-key-usage"}
+	if reg.routes[route] == nil {
+		t.Fatalf("route %s %s was not registered", route.Method, route.Path)
+	}
+}
+
 func TestClusterManagementProxyPoolRoutesRegistered(t *testing.T) {
 	reg := newRouteRegistry()
 	handler := clustermanagement.NewHandler(nil, nil, "", 0)
