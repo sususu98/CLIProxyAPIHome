@@ -321,6 +321,52 @@ func TestCurrentPluginFilePathPrefersHighestVersionedFile(t *testing.T) {
 	}
 }
 
+func TestCurrentPluginFilePathPrefersDesiredVersionOverHigherVersion(t *testing.T) {
+	root := t.TempDir()
+	platform := CurrentPluginPlatform()
+	targetDir := filepath.Join(root, platform.GOOS, platform.GOARCH)
+	if errMkdir := os.MkdirAll(targetDir, 0o755); errMkdir != nil {
+		t.Fatalf("MkdirAll() error = %v", errMkdir)
+	}
+	extension := pluginExtension(platform.GOOS)
+	desired := filepath.Join(targetDir, "sample-v0.1.0"+extension)
+	higher := filepath.Join(targetDir, "sample-v0.2.0"+extension)
+	for _, path := range []string{desired, higher} {
+		if errWrite := os.WriteFile(path, []byte("library-data"), 0o644); errWrite != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, errWrite)
+		}
+	}
+
+	got, errPath := currentPluginFilePath(root, "sample", "0.1.0")
+	if errPath != nil {
+		t.Fatalf("currentPluginFilePath() error = %v", errPath)
+	}
+	if got != desired {
+		t.Fatalf("currentPluginFilePath() = %q, want %q", got, desired)
+	}
+}
+
+func TestCurrentPluginFilePathReturnsEmptyWhenDesiredVersionIsMissing(t *testing.T) {
+	root := t.TempDir()
+	platform := CurrentPluginPlatform()
+	targetDir := filepath.Join(root, platform.GOOS, platform.GOARCH)
+	if errMkdir := os.MkdirAll(targetDir, 0o755); errMkdir != nil {
+		t.Fatalf("MkdirAll() error = %v", errMkdir)
+	}
+	target := filepath.Join(targetDir, "sample-v0.2.0"+pluginExtension(platform.GOOS))
+	if errWrite := os.WriteFile(target, []byte("library-data"), 0o644); errWrite != nil {
+		t.Fatalf("WriteFile() error = %v", errWrite)
+	}
+
+	got, errPath := currentPluginFilePath(root, "sample", "0.1.0")
+	if errPath != nil {
+		t.Fatalf("currentPluginFilePath() error = %v", errPath)
+	}
+	if got != "" {
+		t.Fatalf("currentPluginFilePath() = %q, want empty path", got)
+	}
+}
+
 func TestCurrentPluginFilePathFallsBackToUnversionedFile(t *testing.T) {
 	root := t.TempDir()
 	platform := CurrentPluginPlatform()
