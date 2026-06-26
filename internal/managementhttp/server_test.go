@@ -7,9 +7,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	cpasdkapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/api"
+	cpacoreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cpaconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 	clustermanagement "github.com/router-for-me/CLIProxyAPIHome/internal/cluster/management"
 )
@@ -219,6 +222,44 @@ func TestManagementControlPanelRoutesDoNotCaptureManagementEndpoints(t *testing.
 	}
 }
 
+func TestMiddlewareSetsSupportPluginHeader(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "test-secret")
+	cfg := &cpaconfig.Config{}
+	handler := cpasdkapi.NewHandler(cfg, "", cpacoreauth.NewManager(nil, nil, nil))
+	middleware := handler.Middleware()
+
+	invalidResp := httptest.NewRecorder()
+	invalidCtx, _ := gin.CreateTestContext(invalidResp)
+	invalidReq := httptest.NewRequest(http.MethodGet, "/v0/management/ping", nil)
+	invalidReq.RemoteAddr = "127.0.0.1:12345"
+	invalidReq.Header.Set("X-Management-Key", "wrong-secret")
+	invalidCtx.Request = invalidReq
+	middleware(invalidCtx)
+
+	want := invalidResp.Header().Get("X-CPA-SUPPORT-PLUGIN")
+	if want != "0" && want != "1" {
+		t.Fatalf("X-CPA-SUPPORT-PLUGIN = %q, want 0 or 1", want)
+	}
+
+	engine := gin.New()
+	engine.GET("/v0/management/ping", middleware, func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/ping", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("X-Management-Key", "test-secret")
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusOK)
+	}
+	if got := resp.Header().Get("X-CPA-SUPPORT-PLUGIN"); got != want {
+		t.Fatalf("X-CPA-SUPPORT-PLUGIN = %q, want %q", got, want)
+	}
+}
+
 func assertCORSHeaders(t *testing.T, resp *httptest.ResponseRecorder) {
 	t.Helper()
 
@@ -230,5 +271,9 @@ func assertCORSHeaders(t *testing.T, resp *httptest.ResponseRecorder) {
 	}
 	if got := resp.Header().Get("Access-Control-Allow-Headers"); got != "*" {
 		t.Fatalf("Access-Control-Allow-Headers = %q, want *", got)
+	}
+	expose := resp.Header().Get("Access-Control-Expose-Headers")
+	if !strings.Contains(expose, "X-CPA-SUPPORT-PLUGIN") {
+		t.Fatalf("Access-Control-Expose-Headers = %q, want X-CPA-SUPPORT-PLUGIN", expose)
 	}
 }

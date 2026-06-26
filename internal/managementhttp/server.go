@@ -100,6 +100,20 @@ type ClusterManagementOption struct {
 
 type DatabaseManagementOption = ClusterManagementOption
 
+var corsExposedResponseHeaders = []string{
+	"X-CPA-VERSION",
+	"X-CPA-COMMIT",
+	"X-CPA-BUILD-DATE",
+	"X-CPA-SUPPORT-PLUGIN",
+	"X-CPA-HOME-VERSION",
+	"X-CPA-HOME-COMMIT",
+	"X-CPA-HOME-BUILD-DATE",
+	"X-SERVER-VERSION",
+	"X-SERVER-BUILD-DATE",
+}
+
+var corsExposedResponseHeadersJoined = strings.Join(corsExposedResponseHeaders, ", ")
+
 // WithDatabaseManagement applies the database-backed management option.
 func WithDatabaseManagement(opt DatabaseManagementOption) RouteOption {
 	return func(r *RouteRegistry) {
@@ -546,6 +560,7 @@ func corsMiddleware() gin.HandlerFunc {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "*")
+		c.Header("Access-Control-Expose-Headers", corsExposedResponseHeadersJoined)
 
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
@@ -562,9 +577,9 @@ func withBuildInfoHeaders() gin.HandlerFunc {
 		if c == nil {
 			return
 		}
-		c.Writer.Header().Set("x-cpa-home-version", buildinfo.Version)
-		c.Writer.Header().Set("x-cpa-home-commit", buildinfo.Commit)
-		c.Writer.Header().Set("x-cpa-home-build-date", buildinfo.BuildDate)
+		c.Writer.Header().Set("X-CPA-HOME-VERSION", buildinfo.Version)
+		c.Writer.Header().Set("X-CPA-HOME-COMMIT", buildinfo.Commit)
+		c.Writer.Header().Set("X-CPA-HOME-BUILD-DATE", buildinfo.BuildDate)
 		c.Next()
 	}
 }

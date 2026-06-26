@@ -65,6 +65,7 @@ Home also adds these response headers on management routes:
 | `x-cpa-home-version` | Home build version. |
 | `x-cpa-home-commit` | Home build commit. |
 | `x-cpa-home-build-date` | Home build date. |
+| `X-CPA-SUPPORT-PLUGIN` | `1` when the current binary was built with CGO enabled; `0` otherwise. Same semantics as CPA management API. |
 
 ## Response Conventions
 
