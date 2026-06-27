@@ -1048,10 +1048,19 @@ func billingChargeAmount(usage *UsageRecord, snapshot BillingPriceSnapshot) floa
 	if usage == nil {
 		return 0
 	}
+	inputTokens := usage.InputTokens
+	cacheReadTokens := usage.CacheReadTokens
+	if cacheReadTokens == 0 && usage.CacheCreationTokens == 0 && usage.CachedTokens > 0 {
+		cacheReadTokens = usage.CachedTokens
+		inputTokens -= cacheReadTokens
+		if inputTokens < 0 {
+			inputTokens = 0
+		}
+	}
 	return snapshot.RequestPrice +
-		float64(usage.InputTokens)*snapshot.InputPricePerMillion/1000000 +
+		float64(inputTokens)*snapshot.InputPricePerMillion/1000000 +
 		float64(usage.OutputTokens)*snapshot.OutputPricePerMillion/1000000 +
-		float64(usage.CacheReadTokens)*snapshot.CacheReadPricePerMillion/1000000 +
+		float64(cacheReadTokens)*snapshot.CacheReadPricePerMillion/1000000 +
 		float64(usage.CacheCreationTokens)*snapshot.CacheWritePricePerMillion/1000000
 }
 

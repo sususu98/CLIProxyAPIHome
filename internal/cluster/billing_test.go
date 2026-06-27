@@ -382,6 +382,57 @@ func TestAppendUsageCreatesBillingChargeAndDeductsCredits(t *testing.T) {
 	}
 }
 
+func TestAppendUsageChargesCachedTokensWithCacheReadPrice(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	username := "alice@example.com"
+	credits := 10.0
+	user, errCreateUser := repo.CreateUser(ctx, UserUpdate{Username: &username, Credits: &credits})
+	if errCreateUser != nil {
+		t.Fatalf("CreateUser() error = %v", errCreateUser)
+	}
+	clientKey := "client-key"
+	if _, errCreateKey := repo.CreateAPIKeyForUser(ctx, user.ID, APIKeyUserUpdate{APIKey: &clientKey}); errCreateKey != nil {
+		t.Fatalf("CreateAPIKeyForUser() error = %v", errCreateKey)
+	}
+	if _, errCreatePrice := repo.CreateBillingModelPrice(ctx, BillingModelPriceUpdate{
+		Provider:                 "openai",
+		Model:                    "gpt-4.1-mini",
+		InputPricePerMillion:     2,
+		CacheReadPricePerMillion: 0.5,
+		Enabled:                  true,
+	}); errCreatePrice != nil {
+		t.Fatalf("CreateBillingModelPrice() error = %v", errCreatePrice)
+	}
+
+	payload := `{"timestamp":"2026-06-10T01:02:03Z","provider":"openai","model":"gpt-4.1-mini","api_key":"client-key","request_id":"req-cached","tokens":{"input_tokens":1000000,"cached_tokens":250000,"total_tokens":1000000}}`
+	if _, errUsage := repo.AppendUsage(ctx, payload, "192.0.2.10"); errUsage != nil {
+		t.Fatalf("AppendUsage() error = %v", errUsage)
+	}
+
+	charges, errCharges := repo.ListBillingCharges(ctx, BillingChargeQuery{UserID: &user.ID, Limit: 10})
+	if errCharges != nil {
+		t.Fatalf("ListBillingCharges() error = %v", errCharges)
+	}
+	if len(charges.Records) != 1 {
+		t.Fatalf("charge count = %d, want 1", len(charges.Records))
+	}
+	charge := charges.Records[0]
+	if charge.Amount != 1.625 {
+		t.Fatalf("charge amount = %v, want 1.625", charge.Amount)
+	}
+	if charge.CacheTokens != 250000 {
+		t.Fatalf("cache tokens = %d, want 250000", charge.CacheTokens)
+	}
+	if charge.BalanceBefore != 10 || charge.BalanceAfter != 8.375 {
+		t.Fatalf("charge balances = %v -> %v, want 10 -> 8.375", charge.BalanceBefore, charge.BalanceAfter)
+	}
+}
+
 func TestAppendUsageDuplicatePayloadDoesNotDoubleCharge(t *testing.T) {
 	t.Parallel()
 
