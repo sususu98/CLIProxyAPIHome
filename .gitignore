@@ -17,3 +17,19 @@ cluster.yaml
 .env
 AGENTS.md
 plugins
+
+# Local agent / IDE tooling (project-specific; skills, settings, worktrees)
+.agents
+.agents/*
+.agent
+.agent/*
+.claude
+.claude/*
+.codex
+.codex/*
+.cursor
+.cursor/*
+.cursorrules
+.gemini
+.gemini/*
+.worktrees/
