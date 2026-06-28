@@ -553,7 +553,7 @@ openai-compatibility
 
 ## Plugin Store
 
-插件商店接口用于列出 registry 中的插件，并把选中的插件写入数据库驱动的 Home 配置。安装接口写入的是 `plugins.configs.<pluginID>.store` 固定 manifest，包含 repository、version 和 release tag；Home-mode CPA 节点随后根据这份 manifest 自行下载当前平台产物。通过 store 安装的插件默认不会被 Home 进程下载或加载；只有可信的 provider/auth 插件确实需要在 Home 内运行时，才显式设置 `plugins.configs.<pluginID>.load-in-home: true`。
+插件商店接口用于列出 registry 中的插件，并把选中的插件写入数据库驱动的 Home 配置。安装接口写入的是 `plugins.configs.<pluginID>.store` 固定 manifest。GitHub release 安装会固定 repository、version 和 release tag；direct 安装会固定 version 和来源 registry URL，Home-mode CPA 节点随后在应用配置时从该 registry 解析当前平台的 artifact URL 与 SHA-256。通过 store 安装的插件默认不会被 Home 进程下载或加载；只有可信的 provider/auth 插件确实需要在 Home 内运行时，才显式设置 `plugins.configs.<pluginID>.load-in-home: true`。
 
 ### GET `/plugin-store`
 
@@ -586,6 +586,9 @@ openai-compatibility
       "author": "author-name",
       "version": "0.2.0",
       "repository": "https://github.com/author-name/sample-provider",
+      "install_type": "github-release",
+      "auth_required": false,
+      "auth_configured": false,
       "installed": true,
       "installed_version": "0.2.0",
       "configured": true,
@@ -604,6 +607,10 @@ openai-compatibility
 | `plugins_dir` | string | 各节点本地插件产物目录。 |
 | `sources` | array | 本次查询使用的插件 registry 来源。 |
 | `source_errors` | array | 部分 registry 查询失败时的来源级错误。 |
+| `plugins[].install_type` | string | registry 安装类型，目前为 `github-release` 或 `direct`。 |
+| `plugins[].auth_required` | boolean | registry 声明该插件来源可能需要认证。 |
+| `plugins[].auth_configured` | boolean | `plugins.store-auth` 存在匹配规则且引用的环境变量已设置时为 true。 |
+| `plugins[].platforms` | array | direct registry 条目声明的可用平台；GitHub release 条目为空。 |
 | `plugins[].installed` | boolean | 当前配置中是否存在该插件的 store manifest。 |
 | `plugins[].installed_version` | string | 当前配置 manifest 固定的版本。 |
 | `plugins[].enabled` | boolean | `plugins.configs.<id>.enabled` 值。 |
@@ -619,7 +626,7 @@ openai-compatibility
 
 ### POST `/plugin-store/:id/install`
 
-从 registry 条目安装插件配置 manifest。如果多个来源包含同一插件 ID，传入 `?source=<source_id>` 指定来源。默认安装 GitHub 最新 release；传入 `version` 可固定安装指定 release tag，例如 `1.0.3` 或 `v1.0.3`。
+从 registry 条目安装插件配置 manifest。如果多个来源包含同一插件 ID，传入 `?source=<source_id>` 指定来源。`github-release` 条目默认安装 GitHub 最新 release；传入 `version` 可固定安装指定 release tag，例如 `1.0.3` 或 `v1.0.3`。`direct` 条目会写入 source-backed v2 manifest；如果传入 `version`，必须匹配 registry 条目的顶层版本或 `versions[]` 中的某个版本。
 
 输入 body：可选 JSON。
 
@@ -644,6 +651,7 @@ Query：
   "source_url": "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI-Plugins-Store/main/registry.json",
   "id": "sample-provider",
   "version": "0.2.0",
+  "install_type": "github-release",
   "path": "",
   "plugins_enabled": true,
   "restart_required": false
@@ -657,6 +665,7 @@ Query：
 { "error": "plugin_store_source_required", "message": "multiple plugin store sources contain this plugin id; specify source" }
 { "error": "plugin_release_failed", "message": "detail" }
 { "error": "plugin_release_invalid", "message": "detail" }
+{ "error": "plugin_manifest_invalid", "message": "detail" }
 { "error": "invalid_config", "message": "detail" }
 ```
 
@@ -2756,6 +2765,7 @@ DELETE query：
 | `plugins.enabled` | boolean | 在 Home 和下游 CPA 节点启用受信任的进程内插件。 |
 | `plugins.dir` | string | 每个节点本地插件产物目录。 |
 | `plugins.store-sources` | array of string | 额外插件商店 registry URL；内置官方 registry 始终包含。 |
+| `plugins.store-auth` | array | 插件商店 `registry`、`metadata`、`artifact` 请求的可选认证规则。规则只引用环境变量名；token 值不会写入 manifest。 |
 | `plugins.configs` | object | 以插件 ID 为 key 的单插件配置。插件商店安装会在插件条目下写入固定 `store` manifest；Home-mode CPA 节点根据该 manifest 下载产物，Home 仅在显式设置 `load-in-home: true` 时下载并加载。 |
 | `usage-statistics-enabled` | boolean | 启用内存 usage aggregation。Home 会向下游 CPA 强制为 `true`，并拒绝通过 Management API 关闭。 |
 | `redis-usage-queue-retention-seconds` | integer | Usage queue 保留窗口；默认 `60`，最大 `3600`。 |

@@ -161,7 +161,6 @@ type PluginStatusRecord struct {
 	ReportedAt    time.Time  `gorm:"column:reported_at;index"`
 	GOOS          string     `gorm:"column:goos;index"`
 	GOARCH        string     `gorm:"column:goarch;index"`
-	Variant       string     `gorm:"column:variant"`
 	Version       string     `gorm:"column:version"`
 	ReleaseTag    string     `gorm:"column:release_tag"`
 	Repository    string     `gorm:"column:repository;type:text"`
