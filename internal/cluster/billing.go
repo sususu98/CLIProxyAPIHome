@@ -1050,6 +1050,8 @@ func billingChargeAmount(usage *UsageRecord, snapshot BillingPriceSnapshot) floa
 	}
 	inputTokens := usage.InputTokens
 	cacheReadTokens := usage.CacheReadTokens
+	// OpenAI-style cached_tokens are included in input_tokens. Claude reports
+	// cache_read_tokens/cache_creation_tokens as separate billing buckets.
 	if cacheReadTokens == 0 && usage.CacheCreationTokens == 0 && usage.CachedTokens > 0 {
 		cacheReadTokens = usage.CachedTokens
 		inputTokens -= cacheReadTokens
