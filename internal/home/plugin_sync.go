@@ -21,14 +21,12 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/util"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/sys/cpu"
 	"gopkg.in/yaml.v3"
 )
 
 type PluginPlatform struct {
-	GOOS    string `json:"goos"`
-	GOARCH  string `json:"goarch"`
-	Variant string `json:"variant,omitempty"`
+	GOOS   string `json:"goos"`
+	GOARCH string `json:"goarch"`
 }
 
 type pluginStoreSyncState struct {
@@ -39,14 +37,15 @@ type pluginStoreSyncState struct {
 }
 
 type pluginStoreManifestSyncKey struct {
-	ID         string         `json:"id"`
-	Version    string         `json:"version"`
-	ReleaseTag string         `json:"release_tag"`
-	Repository string         `json:"repository"`
-	SourceID   string         `json:"source_id,omitempty"`
-	SourceURL  string         `json:"source_url,omitempty"`
-	PluginsDir string         `json:"plugins_dir"`
-	Platform   PluginPlatform `json:"platform"`
+	ID         string                  `json:"id"`
+	Version    string                  `json:"version"`
+	ReleaseTag string                  `json:"release_tag"`
+	Repository string                  `json:"repository"`
+	Install    pluginstore.InstallPlan `json:"install"`
+	SourceID   string                  `json:"source_id,omitempty"`
+	SourceURL  string                  `json:"source_url,omitempty"`
+	PluginsDir string                  `json:"plugins_dir"`
+	Platform   PluginPlatform          `json:"platform"`
 }
 
 type pluginFileDigest struct {
@@ -70,9 +69,8 @@ type pluginArtifactRuntime interface {
 // CurrentPluginPlatform reports the platform used by Home plugin discovery.
 func CurrentPluginPlatform() PluginPlatform {
 	return PluginPlatform{
-		GOOS:    goruntime.GOOS,
-		GOARCH:  goruntime.GOARCH,
-		Variant: currentPluginCPUVariant(),
+		GOOS:   goruntime.GOOS,
+		GOARCH: goruntime.GOARCH,
 	}
 }
 
@@ -278,13 +276,13 @@ func pluginStoreManifestKey(root string, platform PluginPlatform, manifest plugi
 		Version:    strings.TrimSpace(manifest.Version),
 		ReleaseTag: strings.TrimSpace(manifest.ReleaseTag),
 		Repository: strings.TrimSpace(manifest.Repository),
+		Install:    manifest.Install,
 		SourceID:   strings.TrimSpace(manifest.SourceID),
 		SourceURL:  strings.TrimSpace(manifest.SourceURL),
 		PluginsDir: filepath.Clean(strings.TrimSpace(root)),
 		Platform: PluginPlatform{
-			GOOS:    strings.TrimSpace(platform.GOOS),
-			GOARCH:  strings.TrimSpace(platform.GOARCH),
-			Variant: strings.TrimSpace(platform.Variant),
+			GOOS:   strings.TrimSpace(platform.GOOS),
+			GOARCH: strings.TrimSpace(platform.GOARCH),
 		},
 	}
 	if key.PluginsDir == "." {
@@ -432,7 +430,7 @@ func pluginFileInfos(root string, id string) ([]pluginFileInfo, error) {
 	id = strings.TrimSpace(id)
 	extension := pluginExtension(goruntime.GOOS)
 	candidates := make([]pluginFileInfo, 0)
-	for _, dir := range pluginCandidateDirs(root, goruntime.GOOS, goruntime.GOARCH, currentPluginCPUVariant()) {
+	for _, dir := range pluginCandidateDirs(root, goruntime.GOOS, goruntime.GOARCH) {
 		entries, errReadDir := os.ReadDir(dir)
 		if errReadDir != nil {
 			if errors.Is(errReadDir, os.ErrNotExist) {
@@ -494,11 +492,8 @@ func normalizeDesiredPluginFileVersion(versions ...string) string {
 	return ""
 }
 
-func pluginCandidateDirs(root string, goos string, goarch string, variant string) []string {
-	dirs := make([]string, 0, 3)
-	if variant != "" {
-		dirs = append(dirs, filepath.Join(root, goos, goarch+"-"+variant))
-	}
+func pluginCandidateDirs(root string, goos string, goarch string) []string {
+	dirs := make([]string, 0, 2)
 	dirs = append(dirs, filepath.Join(root, goos, goarch))
 	dirs = append(dirs, root)
 	return dirs
@@ -667,26 +662,14 @@ func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
 
 var newPluginStoreClient = func(cfg *config.Config) pluginstore.Client {
 	client := &http.Client{}
+	var storeAuth []pluginstore.AuthConfig
 	if cfg != nil && strings.TrimSpace(cfg.ProxyURL) != "" {
 		util.SetProxy(&config.SDKConfig{ProxyURL: strings.TrimSpace(cfg.ProxyURL)}, client)
 	}
-	return pluginstore.NewClient(client, "")
-}
-
-func currentPluginCPUVariant() string {
-	if goruntime.GOARCH != "amd64" {
-		return ""
+	if cfg != nil {
+		storeAuth = cfg.Plugins.StoreAuth
 	}
-	if cpu.X86.HasAVX512F && cpu.X86.HasAVX512BW && cpu.X86.HasAVX512CD && cpu.X86.HasAVX512DQ && cpu.X86.HasAVX512VL {
-		return "v4"
-	}
-	if cpu.X86.HasAVX && cpu.X86.HasAVX2 && cpu.X86.HasBMI1 && cpu.X86.HasBMI2 && cpu.X86.HasFMA {
-		return "v3"
-	}
-	if cpu.X86.HasSSE3 && cpu.X86.HasSSSE3 && cpu.X86.HasSSE41 && cpu.X86.HasSSE42 && cpu.X86.HasPOPCNT {
-		return "v2"
-	}
-	return "v1"
+	return pluginstore.NewClientWithAuth(client, "", storeAuth)
 }
 
 func pluginExtension(goos string) string {

@@ -137,6 +137,150 @@ func TestInstallPluginFromStoreHonorsBodyVersion(t *testing.T) {
 	assertInstalledPluginStoreManifest(t, repo, "sample-provider", "0.4.0", "v0.4.0")
 }
 
+func TestInstallPluginFromStorePreservesGitHubReleaseErrorCodes(t *testing.T) {
+	_, engine := setupPluginStoreInstallTest(t, fakePluginStoreHTTPClient{})
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/plugin-store/sample-provider/install?version=0.6.0", nil)
+	engine.ServeHTTP(resp, req)
+	assertPluginStoreInstallError(t, resp, http.StatusBadGateway, "plugin_release_failed")
+
+	_, invalidEngine := setupPluginStoreInstallTest(t, fakePluginStoreHTTPClient{
+		"https://api.github.com/repos/author-name/sample-provider/releases/tags/v0.6.0": []byte(`{
+			"tag_name": "not-a-version",
+			"assets": []
+		}`),
+	})
+	invalidResp := httptest.NewRecorder()
+	invalidReq := httptest.NewRequest(http.MethodPost, "/plugin-store/sample-provider/install?version=0.6.0", nil)
+	invalidEngine.ServeHTTP(invalidResp, invalidReq)
+	assertPluginStoreInstallError(t, invalidResp, http.StatusBadGateway, "plugin_release_invalid")
+}
+
+func TestInstallPluginFromStoreWritesDirectManifestConfig(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	if errReplace := repo.ReplaceConfigSnapshot(context.Background(), map[string]any{
+		"plugins": map[string]any{
+			"enabled": true,
+			"dir":     t.TempDir(),
+		},
+	}); errReplace != nil {
+		t.Fatalf("ReplaceConfigSnapshot() error = %v", errReplace)
+	}
+
+	artifactURL := "https://downloads.example/sample-provider.zip"
+	handler := NewHandler(repo, nil, "127.0.0.1", 0)
+	handler.SetPluginStoreHTTPClient(fakePluginStoreHTTPClient{
+		pluginstore.DefaultRegistryURL: directRegistryJSON(artifactURL, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+	})
+	engine := gin.New()
+	engine.POST("/plugin-store/:id/install", handler.InstallPluginFromStore)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/plugin-store/sample-provider/install", nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	var body pluginInstallResponse
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if body.InstallType != pluginstore.InstallTypeDirect || body.Version != "0.4.0" {
+		t.Fatalf("install response = %#v, want direct 0.4.0", body)
+	}
+
+	cfg, _, errConfig := repo.LoadConfigAsRuntimeConfig(context.Background())
+	if errConfig != nil {
+		t.Fatalf("LoadConfigAsRuntimeConfig() error = %v", errConfig)
+	}
+	item := cfg.Plugins.Configs["sample-provider"]
+	storeNode := yamlMappingValue(&item.Raw, "store")
+	if storeNode == nil {
+		t.Fatal("plugin store manifest missing")
+	}
+	var manifest pluginstore.Manifest
+	if errDecode := storeNode.Decode(&manifest); errDecode != nil {
+		t.Fatalf("decode manifest: %v", errDecode)
+	}
+	if manifest.SchemaVersion != pluginstore.SchemaVersionV2 || manifest.InstallType() != pluginstore.InstallTypeDirect {
+		t.Fatalf("manifest = %+v, want v2 direct", manifest)
+	}
+	if manifest.ReleaseTag != "" || manifest.Repository != "" {
+		t.Fatalf("manifest release fields = %q/%q, want empty", manifest.ReleaseTag, manifest.Repository)
+	}
+	if manifest.SourceURL != pluginstore.DefaultRegistryURL {
+		t.Fatalf("manifest source-url = %q, want default registry", manifest.SourceURL)
+	}
+	if len(manifest.Install.Artifacts) != 0 {
+		t.Fatalf("manifest artifacts = %+v, want source-backed direct manifest", manifest.Install.Artifacts)
+	}
+}
+
+func TestInstallPluginFromStoreWritesDirectManifestVersionFromVersions(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	if errReplace := repo.ReplaceConfigSnapshot(context.Background(), map[string]any{
+		"plugins": map[string]any{
+			"enabled": true,
+			"dir":     t.TempDir(),
+		},
+	}); errReplace != nil {
+		t.Fatalf("ReplaceConfigSnapshot() error = %v", errReplace)
+	}
+
+	handler := NewHandler(repo, nil, "127.0.0.1", 0)
+	handler.SetPluginStoreHTTPClient(fakePluginStoreHTTPClient{
+		pluginstore.DefaultRegistryURL: directRegistryJSONWithVersions(
+			"https://downloads.example/sample-provider-0.4.0.zip",
+			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			"https://downloads.example/sample-provider-0.3.0.zip",
+			"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+		),
+	})
+	engine := gin.New()
+	engine.POST("/plugin-store/:id/install", handler.InstallPluginFromStore)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/plugin-store/sample-provider/install?version=0.3.0", nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	var body pluginInstallResponse
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if body.InstallType != pluginstore.InstallTypeDirect || body.Version != "0.3.0" {
+		t.Fatalf("install response = %#v, want direct 0.3.0", body)
+	}
+
+	cfg, _, errConfig := repo.LoadConfigAsRuntimeConfig(context.Background())
+	if errConfig != nil {
+		t.Fatalf("LoadConfigAsRuntimeConfig() error = %v", errConfig)
+	}
+	item := cfg.Plugins.Configs["sample-provider"]
+	storeNode := yamlMappingValue(&item.Raw, "store")
+	if storeNode == nil {
+		t.Fatal("plugin store manifest missing")
+	}
+	var manifest pluginstore.Manifest
+	if errDecode := storeNode.Decode(&manifest); errDecode != nil {
+		t.Fatalf("decode manifest: %v", errDecode)
+	}
+	if manifest.Version != "0.3.0" || manifest.InstallType() != pluginstore.InstallTypeDirect {
+		t.Fatalf("manifest = %+v, want direct 0.3.0", manifest)
+	}
+	if len(manifest.Install.Artifacts) != 0 {
+		t.Fatalf("manifest artifacts = %+v, want source-backed direct manifest", manifest.Install.Artifacts)
+	}
+}
+
 type fakePluginStoreHTTPClient map[string][]byte
 
 func (c fakePluginStoreHTTPClient) Do(req *http.Request) (*http.Response, error) {
@@ -155,6 +299,49 @@ func (c fakePluginStoreHTTPClient) Do(req *http.Request) (*http.Response, error)
 		Header:     make(http.Header),
 		Request:    req,
 	}, nil
+}
+
+func directRegistryJSON(artifactURL string, checksum string) []byte {
+	return directRegistryJSONWithVersions(artifactURL, checksum, "", "")
+}
+
+func directRegistryJSONWithVersions(artifactURL string, checksum string, versionArtifactURL string, versionChecksum string) []byte {
+	versionBlock := ""
+	if versionArtifactURL != "" {
+		versionBlock = `,
+			"versions": [{
+				"version": "0.3.0",
+				"install": {
+					"type": "direct",
+					"artifacts": [{
+						"goos": "linux",
+						"goarch": "amd64",
+						"url": "` + versionArtifactURL + `",
+						"sha256": "` + versionChecksum + `"
+					}]
+				}
+			}]`
+	}
+	return []byte(`{
+		"schema_version": 2,
+		"plugins": [{
+			"id": "sample-provider",
+			"name": "Sample Provider",
+			"description": "Adds sample provider support.",
+			"author": "author-name",
+			"version": "0.4.0"` + versionBlock + `,
+			"auth_required": true,
+			"install": {
+				"type": "direct",
+				"artifacts": [{
+					"goos": "linux",
+					"goarch": "amd64",
+					"url": "` + artifactURL + `",
+					"sha256": "` + checksum + `"
+				}]
+			}
+		}]
+	}`)
 }
 
 func setupPluginStoreInstallTest(t *testing.T, httpClient fakePluginStoreHTTPClient) (*cluster.Repository, *gin.Engine) {
@@ -199,6 +386,23 @@ func assertPluginStoreInstallResponseVersion(t *testing.T, resp *httptest.Respon
 	}
 	if body.Version != want {
 		t.Fatalf("response version = %q, want %q", body.Version, want)
+	}
+}
+
+func assertPluginStoreInstallError(t *testing.T, resp *httptest.ResponseRecorder, wantStatus int, wantCode string) {
+	t.Helper()
+
+	if resp.Code != wantStatus {
+		t.Fatalf("status = %d, body = %s, want %d", resp.Code, resp.Body.String(), wantStatus)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode error response: %v", errDecode)
+	}
+	if body.Error != wantCode {
+		t.Fatalf("error = %q, want %q; body = %s", body.Error, wantCode, resp.Body.String())
 	}
 }
 
@@ -318,6 +522,170 @@ func TestListPluginStoreReportsManifestStatus(t *testing.T) {
 	entry := body.Plugins[0]
 	if entry.ID != "sample-provider" || !entry.Installed || entry.InstalledVersion != "0.2.0" || !entry.Enabled || !entry.EffectiveEnabled {
 		t.Fatalf("plugin entry = %+v, want manifest installed status", entry)
+	}
+}
+
+func TestListPluginStoreReportsDirectMetadataAndAuth(t *testing.T) {
+	t.Setenv("PLUGIN_STORE_TOKEN", "secret-token")
+
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	if errReplace := repo.ReplaceConfigSnapshot(context.Background(), map[string]any{
+		"plugins": map[string]any{
+			"enabled": true,
+			"store-auth": []any{
+				map[string]any{
+					"match":     pluginstore.DefaultRegistryURL,
+					"apply-to":  []any{pluginstore.RequestKindRegistry},
+					"type":      pluginstore.AuthTypeBearer,
+					"token-env": "PLUGIN_STORE_TOKEN",
+				},
+			},
+		},
+	}); errReplace != nil {
+		t.Fatalf("ReplaceConfigSnapshot() error = %v", errReplace)
+	}
+
+	handler := NewHandler(repo, nil, "127.0.0.1", 0)
+	handler.SetPluginStoreHTTPClient(fakePluginStoreHTTPClient{
+		pluginstore.DefaultRegistryURL: directRegistryJSON("https://downloads.example/sample-provider.zip", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+	})
+	engine := gin.New()
+	engine.GET("/plugin-store", handler.ListPluginStore)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/plugin-store", nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	var body pluginStoreListResponse
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if len(body.Plugins) != 1 {
+		t.Fatalf("plugins len = %d, want 1", len(body.Plugins))
+	}
+	entry := body.Plugins[0]
+	if entry.InstallType != pluginstore.InstallTypeDirect || !entry.AuthRequired || !entry.AuthConfigured {
+		t.Fatalf("plugin entry = %+v, want direct auth metadata", entry)
+	}
+	if len(entry.Platforms) != 1 || entry.Platforms[0].GOOS != "linux" || entry.Platforms[0].GOARCH != "amd64" {
+		t.Fatalf("platforms = %+v, want linux/amd64", entry.Platforms)
+	}
+}
+
+func TestListPluginStoreReportsGitHubReleaseMetadataAuth(t *testing.T) {
+	t.Setenv("PLUGIN_STORE_TOKEN", "secret-token")
+
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	if errReplace := repo.ReplaceConfigSnapshot(context.Background(), map[string]any{
+		"plugins": map[string]any{
+			"enabled": true,
+			"store-auth": []any{
+				map[string]any{
+					"match":     "https://api.github.com/repos/author-name/sample-provider/releases/",
+					"apply-to":  []any{pluginstore.RequestKindMetadata},
+					"type":      pluginstore.AuthTypeBearer,
+					"token-env": "PLUGIN_STORE_TOKEN",
+				},
+			},
+		},
+	}); errReplace != nil {
+		t.Fatalf("ReplaceConfigSnapshot() error = %v", errReplace)
+	}
+
+	handler := NewHandler(repo, nil, "127.0.0.1", 0)
+	handler.SetPluginStoreHTTPClient(fakePluginStoreHTTPClient{
+		pluginstore.DefaultRegistryURL: []byte(`{
+			"schema_version": 1,
+			"plugins": [{
+				"id": "sample-provider",
+				"name": "Sample Provider",
+				"description": "Adds sample provider support.",
+				"author": "author-name",
+				"repository": "https://github.com/author-name/sample-provider",
+				"auth_required": true
+			}]
+		}`),
+	})
+	engine := gin.New()
+	engine.GET("/plugin-store", handler.ListPluginStore)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/plugin-store", nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	var body pluginStoreListResponse
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if len(body.Plugins) != 1 {
+		t.Fatalf("plugins len = %d, want 1", len(body.Plugins))
+	}
+	entry := body.Plugins[0]
+	if entry.InstallType != pluginstore.InstallTypeGitHubRelease || !entry.AuthRequired || !entry.AuthConfigured {
+		t.Fatalf("plugin entry = %+v, want github-release metadata auth", entry)
+	}
+}
+
+func TestListPluginStoreReportsVersionArtifactAuth(t *testing.T) {
+	t.Setenv("PLUGIN_STORE_TOKEN", "secret-token")
+
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	if errReplace := repo.ReplaceConfigSnapshot(context.Background(), map[string]any{
+		"plugins": map[string]any{
+			"enabled": true,
+			"store-auth": []any{
+				map[string]any{
+					"match":     "https://versioned.example/",
+					"apply-to":  []any{pluginstore.RequestKindArtifact},
+					"type":      pluginstore.AuthTypeBearer,
+					"token-env": "PLUGIN_STORE_TOKEN",
+				},
+			},
+		},
+	}); errReplace != nil {
+		t.Fatalf("ReplaceConfigSnapshot() error = %v", errReplace)
+	}
+
+	handler := NewHandler(repo, nil, "127.0.0.1", 0)
+	handler.SetPluginStoreHTTPClient(fakePluginStoreHTTPClient{
+		pluginstore.DefaultRegistryURL: directRegistryJSONWithVersions(
+			"https://downloads.example/sample-provider-0.4.0.zip",
+			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			"https://versioned.example/sample-provider-0.3.0.zip",
+			"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+		),
+	})
+	engine := gin.New()
+	engine.GET("/plugin-store", handler.ListPluginStore)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/plugin-store", nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	var body pluginStoreListResponse
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if len(body.Plugins) != 1 {
+		t.Fatalf("plugins len = %d, want 1", len(body.Plugins))
+	}
+	if !body.Plugins[0].AuthConfigured {
+		t.Fatalf("auth_configured = false, want true for version artifact auth")
 	}
 }
 

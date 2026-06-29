@@ -75,7 +75,6 @@ func (r *Repository) ReplacePluginStatus(ctx context.Context, nodeType string, s
 					"reported_at",
 					"goos",
 					"goarch",
-					"variant",
 					"version",
 					"release_tag",
 					"repository",
@@ -214,7 +213,6 @@ func pluginStatusRecordFromTask(nodeType string, status node.PluginTaskStatus, p
 		ReportedAt:    status.UpdatedAt.UTC(),
 		GOOS:          strings.TrimSpace(status.Platform.GOOS),
 		GOARCH:        strings.TrimSpace(status.Platform.GOARCH),
-		Variant:       strings.TrimSpace(status.Platform.Variant),
 		Version:       strings.TrimSpace(plugin.Version),
 		ReleaseTag:    strings.TrimSpace(plugin.ReleaseTag),
 		Repository:    strings.TrimSpace(plugin.Repository),
@@ -287,7 +285,6 @@ type pluginTaskStatusRecordGroup struct {
 	reportedAt    time.Time
 	goos          string
 	goarch        string
-	variant       string
 }
 
 func pluginTaskStatusRecordGroupKey(record PluginStatusRecord) pluginTaskStatusRecordGroup {
@@ -314,7 +311,6 @@ func pluginTaskStatusRecordGroupKey(record PluginStatusRecord) pluginTaskStatusR
 		reportedAt:    record.ReportedAt.UTC(),
 		goos:          strings.TrimSpace(record.GOOS),
 		goarch:        strings.TrimSpace(record.GOARCH),
-		variant:       strings.TrimSpace(record.Variant),
 	}
 }
 
@@ -337,9 +333,8 @@ func pluginTaskStatusFromRecord(record PluginStatusRecord) node.PluginTaskStatus
 		FinishedAt:    finishedAt,
 		UpdatedAt:     record.ReportedAt.UTC(),
 		Platform: node.PluginTaskPlatform{
-			GOOS:    strings.TrimSpace(record.GOOS),
-			GOARCH:  strings.TrimSpace(record.GOARCH),
-			Variant: strings.TrimSpace(record.Variant),
+			GOOS:   strings.TrimSpace(record.GOOS),
+			GOARCH: strings.TrimSpace(record.GOARCH),
 		},
 		Plugins: []node.PluginTaskPlugin{},
 		Error:   strings.TrimSpace(record.TaskError),

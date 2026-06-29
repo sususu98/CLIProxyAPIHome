@@ -553,7 +553,7 @@ Common error codes:
 
 ## Plugin Store
 
-Plugin store routes list registry entries and install a selected plugin into the DB-backed Home config. Install writes `plugins.configs.<pluginID>.store` with a pinned manifest containing the plugin repository, version, and exact release tag. Home-mode CPA nodes then install their own current-platform artifact from that manifest during runtime config application. Store-installed plugins are not downloaded or loaded by the Home process by default; set `plugins.configs.<pluginID>.load-in-home: true` only for trusted provider/auth plugins that must run inside Home.
+Plugin store routes list registry entries and install a selected plugin into the DB-backed Home config. Install writes `plugins.configs.<pluginID>.store` with a pinned manifest. GitHub-release installs pin the repository, version, and exact release tag; direct installs pin the version and source registry URL, then Home-mode CPA nodes resolve the current-platform artifact URL and SHA-256 from that registry during runtime config application. Store-installed plugins are not downloaded or loaded by the Home process by default; set `plugins.configs.<pluginID>.load-in-home: true` only for trusted provider/auth plugins that must run inside Home.
 
 ### GET `/plugin-store`
 
@@ -586,6 +586,9 @@ Example response:
       "author": "author-name",
       "version": "0.2.0",
       "repository": "https://github.com/author-name/sample-provider",
+      "install_type": "github-release",
+      "auth_required": false,
+      "auth_configured": false,
       "installed": true,
       "installed_version": "0.2.0",
       "configured": true,
@@ -604,6 +607,10 @@ Example response:
 | `plugins_dir` | string | Local plugin artifact directory configured for each node. |
 | `sources` | array | Plugin store registry sources queried for the response. |
 | `source_errors` | array | Per-source registry fetch errors when some sources fail. |
+| `plugins[].install_type` | string | Registry install type, currently `github-release` or `direct`. |
+| `plugins[].auth_required` | boolean | Registry-declared hint that this plugin source may need authentication. |
+| `plugins[].auth_configured` | boolean | True when `plugins.store-auth` has a matching rule whose referenced environment variables are present. |
+| `plugins[].platforms` | array | Platforms declared by a direct registry entry. Empty for GitHub-release entries. |
 | `plugins[].installed` | boolean | True when config contains a store manifest for this plugin ID. |
 | `plugins[].installed_version` | string | Version pinned in the configured manifest. |
 | `plugins[].enabled` | boolean | Per-plugin `plugins.configs.<id>.enabled` value. |
@@ -619,7 +626,7 @@ Common errors:
 
 ### POST `/plugin-store/:id/install`
 
-Installs a plugin config manifest from a registry entry. If multiple configured sources contain the same plugin ID, pass `?source=<source_id>`. By default the latest GitHub release is installed. Pass `version` to pin a specific release tag such as `1.0.3` or `v1.0.3`.
+Installs a plugin config manifest from a registry entry. If multiple configured sources contain the same plugin ID, pass `?source=<source_id>`. `github-release` entries install the latest GitHub release by default; pass `version` to pin a specific release tag such as `1.0.3` or `v1.0.3`. `direct` entries write a source-backed v2 manifest; when `version` is supplied it must match either the registry entry version or an item in `versions[]`.
 
 Input body: optional JSON.
 
@@ -644,6 +651,7 @@ Example response:
   "source_url": "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI-Plugins-Store/main/registry.json",
   "id": "sample-provider",
   "version": "0.2.0",
+  "install_type": "github-release",
   "path": "",
   "plugins_enabled": true,
   "restart_required": false
@@ -657,6 +665,7 @@ Common errors:
 { "error": "plugin_store_source_required", "message": "multiple plugin store sources contain this plugin id; specify source" }
 { "error": "plugin_release_failed", "message": "detail" }
 { "error": "plugin_release_invalid", "message": "detail" }
+{ "error": "plugin_manifest_invalid", "message": "detail" }
 { "error": "invalid_config", "message": "detail" }
 ```
 
@@ -2756,6 +2765,7 @@ These fields are accepted by Home YAML config. `PUT /config.yaml` accepts non-cr
 | `plugins.enabled` | boolean | Enables trusted in-process plugins on Home and downstream CPA nodes. |
 | `plugins.dir` | string | Local plugin artifact directory used by each node. |
 | `plugins.store-sources` | array of string | Additional plugin store registry URLs. The built-in official registry is always included. |
+| `plugins.store-auth` | array | Optional auth rules for plugin store `registry`, `metadata`, and `artifact` requests. Rules reference environment variable names only; token values are never stored in manifests. |
 | `plugins.configs` | object | Per-plugin config keyed by plugin ID. Store installs write a pinned `store` manifest under each plugin entry. Home-mode CPA nodes download store entries from that manifest; Home downloads and loads them only when `load-in-home: true` is explicitly set. |
 | `usage-statistics-enabled` | boolean | Enables in-memory usage aggregation. Home forces this to `true` for downstream CPA nodes and rejects disabling it through Management API updates. |
 | `redis-usage-queue-retention-seconds` | integer | Usage queue retention window. Default `60`, max `3600`. |

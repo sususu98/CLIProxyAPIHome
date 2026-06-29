@@ -76,6 +76,74 @@ store:
 	}
 }
 
+func TestSyncPluginStoreManifestsInstallsDirectArtifact(t *testing.T) {
+	root := t.TempDir()
+	platform := CurrentPluginPlatform()
+	archiveData := makePluginStoreZip(t, map[string]string{"sample" + pluginExtension(platform.GOOS): "direct-library-data"})
+	checksum := sha256.Sum256(archiveData)
+	artifactURL := "https://downloads.example/sample_0.4.0.zip"
+	sourceURL := "https://plugins.example/registry.json"
+	restore := replaceHomePluginStoreClientForTest(pluginStoreHTTPDoer{
+		sourceURL: []byte(`{
+			"schema_version": 2,
+			"plugins": [{
+				"id": "sample",
+				"name": "Sample",
+				"description": "Adds sample support.",
+				"author": "owner",
+				"version": "0.4.0",
+				"install": {
+					"type": "direct",
+					"artifacts": [{
+						"goos": "` + platform.GOOS + `",
+						"goarch": "` + platform.GOARCH + `",
+						"url": "` + artifactURL + `",
+						"sha256": "` + hex.EncodeToString(checksum[:]) + `"
+					}]
+				}
+			}]
+		}`),
+		artifactURL: archiveData,
+	})
+	defer restore()
+
+	rt := &Runtime{}
+	cfg := &config.Config{
+		Plugins: config.PluginsConfig{
+			Enabled: true,
+			Dir:     root,
+			Configs: map[string]config.PluginInstanceConfig{
+				"sample": homePluginConfigFromYAML(t, `
+enabled: true
+load-in-home: true
+store:
+  schema-version: 2
+  id: sample
+  name: Sample
+  description: Adds sample support.
+  author: owner
+  version: 0.4.0
+  source-url: `+sourceURL+`
+  install:
+    type: direct
+`),
+			},
+		},
+	}
+
+	if errSync := rt.syncPluginStoreManifests(context.Background(), cfg); errSync != nil {
+		t.Fatalf("syncPluginStoreManifests() error = %v", errSync)
+	}
+	target := filepath.Join(root, platform.GOOS, platform.GOARCH, "sample-v0.4.0"+pluginExtension(platform.GOOS))
+	got, errRead := os.ReadFile(target)
+	if errRead != nil {
+		t.Fatalf("read target: %v", errRead)
+	}
+	if string(got) != "direct-library-data" {
+		t.Fatalf("target data = %q, want direct-library-data", string(got))
+	}
+}
+
 func TestSyncPluginStoreManifestsSkipsCPADistributedArtifact(t *testing.T) {
 	root := t.TempDir()
 	restore := replaceHomePluginStoreClientForTest(pluginStoreFatalHTTPDoer{t: t})

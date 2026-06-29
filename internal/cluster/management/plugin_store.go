@@ -42,28 +42,37 @@ type pluginStoreSourceErr struct {
 }
 
 type pluginStoreListEntry struct {
-	StoreID          string   `json:"store_id"`
-	SourceID         string   `json:"source_id"`
-	SourceName       string   `json:"source_name"`
-	SourceURL        string   `json:"source_url"`
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	Description      string   `json:"description"`
-	Author           string   `json:"author"`
-	Version          string   `json:"version"`
-	Repository       string   `json:"repository"`
-	Logo             string   `json:"logo,omitempty"`
-	Homepage         string   `json:"homepage,omitempty"`
-	License          string   `json:"license,omitempty"`
-	Tags             []string `json:"tags,omitempty"`
-	Installed        bool     `json:"installed"`
-	InstalledVersion string   `json:"installed_version"`
-	Path             string   `json:"path"`
-	Configured       bool     `json:"configured"`
-	Registered       bool     `json:"registered"`
-	Enabled          bool     `json:"enabled"`
-	EffectiveEnabled bool     `json:"effective_enabled"`
-	UpdateAvailable  bool     `json:"update_available"`
+	StoreID          string                `json:"store_id"`
+	SourceID         string                `json:"source_id"`
+	SourceName       string                `json:"source_name"`
+	SourceURL        string                `json:"source_url"`
+	ID               string                `json:"id"`
+	Name             string                `json:"name"`
+	Description      string                `json:"description"`
+	Author           string                `json:"author"`
+	Version          string                `json:"version"`
+	Repository       string                `json:"repository"`
+	InstallType      string                `json:"install_type"`
+	AuthRequired     bool                  `json:"auth_required"`
+	AuthConfigured   bool                  `json:"auth_configured"`
+	Platforms        []pluginStorePlatform `json:"platforms,omitempty"`
+	Logo             string                `json:"logo,omitempty"`
+	Homepage         string                `json:"homepage,omitempty"`
+	License          string                `json:"license,omitempty"`
+	Tags             []string              `json:"tags,omitempty"`
+	Installed        bool                  `json:"installed"`
+	InstalledVersion string                `json:"installed_version"`
+	Path             string                `json:"path"`
+	Configured       bool                  `json:"configured"`
+	Registered       bool                  `json:"registered"`
+	Enabled          bool                  `json:"enabled"`
+	EffectiveEnabled bool                  `json:"effective_enabled"`
+	UpdateAvailable  bool                  `json:"update_available"`
+}
+
+type pluginStorePlatform struct {
+	GOOS   string `json:"goos"`
+	GOARCH string `json:"goarch"`
 }
 
 type pluginInstallResponse struct {
@@ -73,6 +82,7 @@ type pluginInstallResponse struct {
 	SourceURL       string `json:"source_url"`
 	ID              string `json:"id"`
 	Version         string `json:"version"`
+	InstallType     string `json:"install_type"`
 	Path            string `json:"path"`
 	PluginsEnabled  bool   `json:"plugins_enabled"`
 	RestartRequired bool   `json:"restart_required"`
@@ -189,6 +199,10 @@ func (h *Handler) ListPluginStore(c *gin.Context) {
 			Author:           trimString(item.plugin.Author),
 			Version:          trimString(storeVersion),
 			Repository:       trimString(item.plugin.Repository),
+			InstallType:      trimString(pluginstore.PluginInstallType(item.plugin)),
+			AuthRequired:     item.plugin.AuthRequired,
+			AuthConfigured:   pluginAuthConfigured(item.source, item.plugin, cfg),
+			Platforms:        sanitizePluginStorePlatforms(pluginstore.PluginPlatforms(item.plugin)),
 			Logo:             trimString(item.plugin.Logo),
 			Homepage:         trimString(item.plugin.Homepage),
 			License:          trimString(item.plugin.License),
@@ -239,14 +253,12 @@ func (h *Handler) InstallPluginFromStore(c *gin.Context) {
 	if !okPlugin {
 		return
 	}
-	release, errRelease := fetchPluginStoreInstallRelease(ctx, client, plugin, requestedVersion)
-	if errRelease != nil {
-		respondError(c, http.StatusBadGateway, "plugin_release_failed", errRelease)
-		return
-	}
-	manifest, errManifest := pluginstore.ManifestFromRelease(source, plugin, release)
+	manifest, errorCode, errManifest := pluginStoreInstallManifest(ctx, client, source, plugin, requestedVersion)
 	if errManifest != nil {
-		respondError(c, http.StatusBadGateway, "plugin_release_invalid", errManifest)
+		if errorCode == "" {
+			errorCode = "plugin_manifest_invalid"
+		}
+		respondError(c, http.StatusBadGateway, errorCode, errManifest)
 		return
 	}
 
@@ -271,10 +283,57 @@ func (h *Handler) InstallPluginFromStore(c *gin.Context) {
 		SourceURL:       trimString(source.URL),
 		ID:              trimString(manifest.ID),
 		Version:         trimString(manifest.Version),
+		InstallType:     trimString(manifest.InstallType()),
 		Path:            "",
 		PluginsEnabled:  cfg != nil && cfg.Plugins.Enabled,
 		RestartRequired: false,
 	})
+}
+
+func pluginStoreInstallManifest(ctx context.Context, client pluginstore.Client, source pluginstore.Source, plugin pluginstore.Plugin, requestedVersion string) (pluginstore.Manifest, string, error) {
+	switch pluginstore.PluginInstallType(plugin) {
+	case pluginstore.InstallTypeDirect:
+		manifest, errManifest := pluginStoreDirectManifest(source, plugin, requestedVersion)
+		if errManifest != nil {
+			return pluginstore.Manifest{}, "plugin_manifest_invalid", errManifest
+		}
+		return manifest, "", nil
+	case pluginstore.InstallTypeGitHubRelease:
+		release, errRelease := fetchPluginStoreInstallRelease(ctx, client, plugin, requestedVersion)
+		if errRelease != nil {
+			return pluginstore.Manifest{}, "plugin_release_failed", errRelease
+		}
+		manifest, errManifest := pluginstore.ManifestFromRelease(source, plugin, release)
+		if errManifest != nil {
+			return pluginstore.Manifest{}, "plugin_release_invalid", errManifest
+		}
+		return manifest, "", nil
+	default:
+		return pluginstore.Manifest{}, "plugin_manifest_invalid", fmt.Errorf("unsupported install type %q", plugin.Install.Type)
+	}
+}
+
+func pluginStoreDirectManifest(source pluginstore.Source, plugin pluginstore.Plugin, requestedVersion string) (pluginstore.Manifest, error) {
+	version := normalizePluginStoreRequestedVersion(requestedVersion)
+	if version == "" {
+		version = normalizePluginStoreRequestedVersion(plugin.Version)
+	}
+	if normalizePluginStoreRequestedVersion(plugin.Version) == version {
+		plugin.Version = version
+		return pluginstore.ManifestFromPlugin(source, plugin)
+	}
+	for _, candidate := range plugin.Versions {
+		if normalizePluginStoreRequestedVersion(candidate.Version) != version {
+			continue
+		}
+		plugin.Version = version
+		plugin.Install = candidate.Install
+		if strings.TrimSpace(plugin.Install.Type) == "" {
+			plugin.Install.Type = pluginstore.InstallTypeDirect
+		}
+		return pluginstore.ManifestFromPlugin(source, plugin)
+	}
+	return pluginstore.Manifest{}, fmt.Errorf("direct plugin version %q not found", version)
 }
 
 func pluginInstallRequestedVersion(c *gin.Context) (string, error) {
@@ -417,7 +476,11 @@ func (h *Handler) newPluginStoreClient(cfg *appconfig.Config, registryURL string
 		}
 		httpClient = client
 	}
-	return pluginstore.NewClient(httpClient, registryURL)
+	var storeAuth []pluginstore.AuthConfig
+	if cfg != nil {
+		storeAuth = cfg.Plugins.StoreAuth
+	}
+	return pluginstore.NewClientWithAuth(httpClient, registryURL, storeAuth)
 }
 
 func (h *Handler) fetchSourcedPlugins(ctx context.Context, cfg *appconfig.Config, sources []pluginstore.Source) ([]sourcedPlugin, []pluginStoreSourceErr) {
@@ -482,16 +545,26 @@ func removePluginConfig(root map[string]any, id string) bool {
 
 func pluginStoreManifestMap(manifest pluginstore.Manifest) map[string]any {
 	out := map[string]any{
-		"id":          strings.TrimSpace(manifest.ID),
-		"name":        strings.TrimSpace(manifest.Name),
-		"description": strings.TrimSpace(manifest.Description),
-		"author":      strings.TrimSpace(manifest.Author),
-		"version":     strings.TrimSpace(manifest.Version),
-		"release-tag": strings.TrimSpace(manifest.ReleaseTag),
-		"repository":  strings.TrimSpace(manifest.Repository),
-		"source-id":   strings.TrimSpace(manifest.SourceID),
-		"source-name": strings.TrimSpace(manifest.SourceName),
-		"source-url":  strings.TrimSpace(manifest.SourceURL),
+		"id":      strings.TrimSpace(manifest.ID),
+		"version": strings.TrimSpace(manifest.Version),
+	}
+	if manifest.SchemaVersion != 0 {
+		out["schema-version"] = manifest.SchemaVersion
+	}
+	setTrimmedString(out, "name", manifest.Name)
+	setTrimmedString(out, "description", manifest.Description)
+	setTrimmedString(out, "author", manifest.Author)
+	if strings.TrimSpace(manifest.ReleaseTag) != "" {
+		out["release-tag"] = strings.TrimSpace(manifest.ReleaseTag)
+	}
+	if strings.TrimSpace(manifest.Repository) != "" {
+		out["repository"] = strings.TrimSpace(manifest.Repository)
+	}
+	setTrimmedString(out, "source-id", manifest.SourceID)
+	setTrimmedString(out, "source-name", manifest.SourceName)
+	setTrimmedString(out, "source-url", manifest.SourceURL)
+	if strings.TrimSpace(manifest.Install.Type) != "" {
+		out["install"] = pluginStoreInstallPlanMap(manifest.Install)
 	}
 	if strings.TrimSpace(manifest.Logo) != "" {
 		out["logo"] = strings.TrimSpace(manifest.Logo)
@@ -505,6 +578,36 @@ func pluginStoreManifestMap(manifest pluginstore.Manifest) map[string]any {
 	if len(manifest.Tags) > 0 {
 		out["tags"] = append([]string(nil), manifest.Tags...)
 	}
+	return out
+}
+
+func setTrimmedString(out map[string]any, key string, value string) {
+	if strings.TrimSpace(value) != "" {
+		out[key] = strings.TrimSpace(value)
+	}
+}
+
+func pluginStoreInstallPlanMap(plan pluginstore.InstallPlan) map[string]any {
+	out := map[string]any{
+		"type": strings.TrimSpace(plan.Type),
+	}
+	if len(plan.Artifacts) == 0 {
+		return out
+	}
+	artifacts := make([]map[string]any, 0, len(plan.Artifacts))
+	for _, artifact := range plan.Artifacts {
+		item := map[string]any{
+			"goos":   strings.TrimSpace(artifact.GOOS),
+			"goarch": strings.TrimSpace(artifact.GOARCH),
+			"url":    strings.TrimSpace(artifact.URL),
+			"sha256": strings.TrimSpace(artifact.SHA256),
+		}
+		if artifact.Size > 0 {
+			item["size"] = artifact.Size
+		}
+		artifacts = append(artifacts, item)
+	}
+	out["artifacts"] = artifacts
 	return out
 }
 
@@ -626,6 +729,27 @@ func sanitizePluginStoreSourceErrors(sourceErrors []pluginStoreSourceErr) []plug
 		})
 	}
 	return out
+}
+
+func sanitizePluginStorePlatforms(platforms []pluginstore.Platform) []pluginStorePlatform {
+	if len(platforms) == 0 {
+		return nil
+	}
+	out := make([]pluginStorePlatform, 0, len(platforms))
+	for _, platform := range platforms {
+		out = append(out, pluginStorePlatform{
+			GOOS:   trimString(platform.GOOS),
+			GOARCH: trimString(platform.GOARCH),
+		})
+	}
+	return out
+}
+
+func pluginAuthConfigured(source pluginstore.Source, plugin pluginstore.Plugin, cfg *appconfig.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	return pluginstore.PluginAuthConfigured(source, plugin, cfg.Plugins.StoreAuth)
 }
 
 func trimString(value string) string {

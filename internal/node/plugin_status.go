@@ -39,9 +39,8 @@ type PluginTask struct {
 }
 
 type PluginTaskPlatform struct {
-	GOOS    string `json:"goos"`
-	GOARCH  string `json:"goarch"`
-	Variant string `json:"variant,omitempty"`
+	GOOS   string `json:"goos"`
+	GOARCH string `json:"goarch"`
 }
 
 type PluginTaskPlugin struct {
