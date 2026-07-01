@@ -113,6 +113,29 @@ func TestClusterManagementAPIKeyUsageRouteRegistered(t *testing.T) {
 	}
 }
 
+func TestClusterManagementUsageObservabilityRoutesRegistered(t *testing.T) {
+	reg := newRouteRegistry()
+	handler := clustermanagement.NewHandler(nil, nil, "", 0)
+	registerClusterManagementRoutes(reg, handler)
+
+	for _, route := range []RouteKey{
+		{Method: http.MethodGet, Path: "/capabilities"},
+		{Method: http.MethodGet, Path: "/usage/overview"},
+		{Method: http.MethodGet, Path: "/usage/records"},
+		{Method: http.MethodGet, Path: "/usage/records/:id"},
+		{Method: http.MethodGet, Path: "/usage/aggregates"},
+		{Method: http.MethodGet, Path: "/usage/export"},
+		{Method: http.MethodGet, Path: "/usage/realtime"},
+		{Method: http.MethodGet, Path: "/usage/health/providers"},
+		{Method: http.MethodGet, Path: "/usage/health/credentials"},
+		{Method: http.MethodGet, Path: "/request-logs"},
+	} {
+		if reg.routes[route] == nil {
+			t.Fatalf("route %s %s was not registered", route.Method, route.Path)
+		}
+	}
+}
+
 func TestClusterManagementProxyPoolRoutesRegistered(t *testing.T) {
 	reg := newRouteRegistry()
 	handler := clustermanagement.NewHandler(nil, nil, "", 0)

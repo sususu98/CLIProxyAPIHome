@@ -93,7 +93,7 @@ type AuthRecord struct {
 	AuthJSON         JSONB           `gorm:"column:auth_json;not null"`
 	Version          int64           `gorm:"column:version;not null;default:1"`
 	ID               string          `gorm:"column:id;index:idx_auth_active_order,priority:2"`
-	Index            string          `gorm:"column:index"`
+	Index            string          `gorm:"column:index;index:idx_auth_index_active,priority:1"`
 	Provider         string          `gorm:"column:provider"`
 	Label            string          `gorm:"column:label"`
 	Prefix           string          `gorm:"column:prefix"`
@@ -109,7 +109,7 @@ type AuthRecord struct {
 	UpdatedAt        time.Time       `gorm:"column:updated_at"`
 	LastRefreshedAt  *time.Time      `gorm:"column:last_refreshed_at"`
 	NextRefreshAfter *time.Time      `gorm:"column:next_refresh_after"`
-	DeletedAt        gorm.DeletedAt  `gorm:"column:deleted_at;index;index:idx_auth_active_order,priority:1"`
+	DeletedAt        gorm.DeletedAt  `gorm:"column:deleted_at;index;index:idx_auth_active_order,priority:1;index:idx_auth_index_active,priority:2"`
 }
 
 // TableName returns the database table name.

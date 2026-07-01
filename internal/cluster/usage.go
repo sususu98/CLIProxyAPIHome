@@ -38,7 +38,7 @@ type UsageRecord struct {
 	ServiceTier         string    `gorm:"column:service_tier"`
 	Endpoint            string    `gorm:"column:endpoint;index:idx_usage_endpoint;index:idx_usage_endpoint_time,priority:1"`
 	AuthType            string    `gorm:"column:auth_type"`
-	APIKey              string    `gorm:"column:api_key"`
+	APIKey              string    `gorm:"column:api_key;index:idx_usage_api_key"`
 	RequestID           string    `gorm:"column:request_id;index:idx_usage_request_id"`
 	HomeIP              string    `gorm:"column:home_ip;index:idx_usage_home_ip"`
 	TokensJSON          JSONB     `gorm:"column:tokens"`

@@ -104,6 +104,7 @@ The table below is extracted from the final Home route registry built by `intern
 | `GET` | `/antigravity-auth-url` |
 | `POST` | `/api-call` |
 | `GET` | `/api-key-usage` |
+| `GET` | `/capabilities` |
 | `DELETE` | `/api-keys` |
 | `GET` | `/api-keys` |
 | `PATCH` | `/api-keys` |
@@ -117,6 +118,15 @@ The table below is extracted from the final Home route registry built by `intern
 | `POST` | `/billing/model-prices` |
 | `PATCH` | `/billing/model-prices/:id` |
 | `DELETE` | `/billing/model-prices/:id` |
+| `GET` | `/usage/overview` |
+| `GET` | `/usage/records` |
+| `GET` | `/usage/records/:id` |
+| `GET` | `/usage/aggregates` |
+| `GET` | `/usage/export` |
+| `GET` | `/usage/realtime` |
+| `GET` | `/usage/health/providers` |
+| `GET` | `/usage/health/credentials` |
+| `GET` | `/request-logs` |
 | `GET` | `/proxy/proxy-pools` |
 | `POST` | `/proxy/proxy-pools` |
 | `PATCH` | `/proxy/proxy-pools/:id` |
@@ -2022,6 +2032,197 @@ Example response:
   }
 }
 ```
+
+### GET `/capabilities`
+
+返回当前 Home Management API 暴露的前端能力开关和构建信息。该接口用于管理面板判断是否可以启用用量总览、请求明细、聚合排行、导出、实时诊断、健康归因和 request log index。
+
+输出字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `capabilities.usage` | boolean | 是否支持旧版 `GET /api-key-usage` 能力。 |
+| `capabilities.usage_overview` | boolean | 是否支持 `GET /usage/overview`。 |
+| `capabilities.usage_records` | boolean | 是否支持 `GET /usage/records`。 |
+| `capabilities.usage_record_details` | boolean | 是否支持 `GET /usage/records/:id`。 |
+| `capabilities.usage_aggregates` | boolean | 是否支持 `GET /usage/aggregates`。 |
+| `capabilities.usage_export` | boolean | 是否支持 `GET /usage/export`。 |
+| `capabilities.usage_provider_health` | boolean | 是否支持 `GET /usage/health/providers`。 |
+| `capabilities.usage_credential_health` | boolean | 是否支持 `GET /usage/health/credentials`。 |
+| `capabilities.usage_realtime` | boolean | 是否支持 `GET /usage/realtime`。 |
+| `capabilities.request_log_index` | boolean | 是否支持 `GET /request-logs`。 |
+| `capabilities.oauth_usage` | boolean | OAuth/file-backed credential usage 归因是否可靠。 |
+| `capabilities.logs` | boolean | 是否支持应用日志接口。 |
+| `capabilities.request_error_logs` | boolean | 是否支持 request error log file list/download。 |
+| `server_info.home_version` | string | Home 构建版本。 |
+| `server_info.home_commit` | string | Home 构建 commit。 |
+| `server_info.home_build_date` | string | Home 构建时间。 |
+
+### 用量观测接口通用约定
+
+这些接口读取持久化 `usage`、`billing_charge`、`api_key`、`user` 和 `auth` 数据。响应不会返回 raw client access key、provider API key、OAuth token、cookie、authorization header、完整 payload 或完整失败 body。允许返回 `api_key_masked`、脱敏 `body_preview` 和 payload summary。
+
+汇总范围参数适用于 `/usage/overview`、`/usage/aggregates`、`/usage/realtime`、`/usage/health/providers`、`/usage/health/credentials`，也作为 `/usage/records` 和 `/usage/export` 的基础范围。`/usage/overview` 和 `/usage/aggregates` 在缺少 `from` 或 `to` 时会自动补齐最近 24 小时窗口；`/usage/records` 和 `/usage/export` 不自动补齐时间范围。
+
+| Query | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `from` | string | `/usage/overview` 和 `/usage/aggregates` 默认为 `to - 24h`；其他接口无 | 起始时间，支持 `YYYY-MM-DD`、RFC3339 或 Unix 秒；只有日期时按 `timezone` 解释为当天 00:00:00。 |
+| `to` | string | `/usage/overview` 和 `/usage/aggregates` 默认为当前时间；其他接口无 | 结束时间，支持 `YYYY-MM-DD`、RFC3339 或 Unix 秒；只有日期时按 `timezone` 解释并包含当天完整一天。 |
+| `timezone` | string | `UTC` | 用于日期型 `from`/`to` 和 `day`/`week` 趋势桶的统计时区。 |
+| `provider` | string | 无 | Provider 精确筛选。 |
+| `model` | string | 无 | 模型模糊筛选。 |
+| `credential_type` | string | 无 | 执行凭证类型：`provider_api_key`、`oauth`、`file_auth`、`vertex`、`unknown`。 |
+| `home_ip` | string | 无 | Home 节点 IP。 |
+| `endpoint` | string | 无 | endpoint 模糊筛选。 |
+
+金额字段使用当前 Home billing 系统中的 credits/points 口径。启用 billing 且 usage 可归因到 `billing_charge` 时，`amount` 或 `total_amount` 返回数值，`currency` 返回 `credits`，`billing_basis` 返回 `billing_charge`；无法可靠归因时金额返回 `null`，不会伪造估算金额。
+
+`UsageRecordSummary` 关键字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `upstream_request_id` | string/null | payload 中可解析到的上游 request ID。 |
+| `source` | string/null | usage payload 的来源。 |
+| `service_tier` | string/null | usage payload 的 service tier。 |
+| `reasoning_effort` | string/null | usage payload 的 reasoning effort。 |
+| `client.client_ip` | string/null | payload 中可关联的调用方 IP。 |
+| `credential.api_key_preview` | string/null | 仅 provider API key 可用时返回脱敏 preview；不会返回 raw key。 |
+| `billing.balance_before` / `billing.balance_after` | number/null | 关联 `billing_charge` 时的扣款前后余额。 |
+| `runtime.request_log_available` | boolean | 当前 Home 节点是否能找到可下载的本地 request log 文件。 |
+| `runtime.log_home_ip_required` | boolean | 下载 request log 时是否必须带上 Home IP。 |
+
+### GET `/usage/overview`
+
+返回请求用量总览，包括范围、短窗口 live snapshot、总量、趋势、默认 top groups 和 activity 桶。
+
+Query 参数除汇总范围参数外还支持：
+
+| Query | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `interval` | string | `auto` | `minute`、`hour`、`day`、`week` 或 `auto`。`day` 和 `week` 会按 `timezone` 切桶，响应时间仍为 UTC RFC3339。 |
+
+输出顶层字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `range` | object | 应用后的时间范围、timezone 和 interval。 |
+| `live` | object | 最近短窗口 RPM、TPM、错误率和延迟。 |
+| `totals` | object | 请求数、成功/失败数、token、金额、延迟和活跃主体数量。 |
+| `trend` | array | 按 `interval` 聚合的趋势桶。 |
+| `cost_breakdown` | array | 当前不伪造不可拆分的费用明细，无法可靠拆分时为空数组。 |
+| `model_efficiency` | array | 按总 token 排序的模型效率列表。 |
+| `top` | object | `users`、`client_keys`、`credentials`、`providers`、`models`、`endpoints` 和 `errors`。 |
+| `activity` | array | 与趋势桶一致的健康活动序列。 |
+
+### GET `/usage/records`
+
+返回请求明细表，服务端分页、筛选和排序。
+
+Query 参数：
+
+| Query | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `limit` | integer | `50` | 最大 `200`。 |
+| `offset` | integer | `0` | page offset。 |
+| `sort` | string | `timestamp_desc` | 支持 `timestamp_desc`、`timestamp_asc`、`tokens_desc`、`tokens_asc`、`cost_desc`、`cost_asc`、`latency_desc`、`latency_asc`、`failed_first`。 |
+| `search` | string | 无 | request ID、provider、model、endpoint、Home IP、username、masked key、credential label 的宽松搜索。 |
+| `status` | string | 无 | `success` 或 `failed`。 |
+| `status_code` | integer | 无 | HTTP/失败状态码；2xx/3xx 会匹配成功请求，其他值匹配 `fail_status_code`。 |
+| `request_id` | string | 无 | request ID 精确筛选。 |
+| `user` / `user_id` | string / integer | 无 | 用户名或用户 ID。 |
+| `client_key` / `client_key_id` | string / integer | 无 | client access key 的 masked/label/ID 筛选。 |
+| `credential_id` / `auth_index` | string | 无 | 执行凭证筛选。 |
+| `executor_type` | string | 无 | executor type 精确筛选。 |
+| `min_latency_ms` / `max_latency_ms` | integer | 无 | 延迟范围。 |
+| `min_amount` / `max_amount` | number | 无 | billing amount 范围。 |
+
+响应包含 `items`、`total`、`limit`、`offset`、`sort` 和 `sortable_fields`。`items[]` 为脱敏后的请求摘要，包含 `tokens`、`performance`、`client`、`credential`、`billing`、`runtime` 和可选 `error`。
+
+### GET `/usage/records/:id`
+
+返回单条 usage 详情。`id` 为 usage ID。
+
+Query 参数：
+
+| Query | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `include_payload` | boolean | `false` | 返回脱敏 payload summary。 |
+| `include_logs` | boolean | `false` | 找到本地 request log 时返回最多 20 行脱敏日志片段；远端节点或文件不存在时返回空数组。 |
+
+响应包含 `record`、`payload_summary`、`log_excerpt` 和 `related`。`payload_summary` 只包含 `method`、`stream`、`message_count`、`tool_count`，不会返回原始 payload。
+
+### GET `/usage/aggregates`
+
+返回服务端全量排序后的聚合排行。
+
+Query 参数：
+
+| Query | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `group_by` | string | 必填 | `user`、`client_key`、`credential`、`provider`、`model`、`endpoint`、`home_ip`、`executor_type`、`status_code`。 |
+| `metric` | string | `request_count` | `request_count`、`total_tokens`、`total_amount`、`failed_count`、`avg_latency_ms`、`p95_latency_ms`。 |
+| `direction` | string | `desc` | `desc` 或 `asc`。 |
+| `limit` | integer | `20` | 最大 `100`。 |
+| `offset` | integer | `0` | page offset。 |
+
+响应包含 `group_by`、`metric`、`direction`、`items`、`total`、`limit`、`offset` 和 `sortable_metrics`。
+
+### GET `/usage/export`
+
+按当前 records 筛选导出脱敏后的请求记录。
+
+Query 参数：
+
+| Query | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `format` | string | `csv` | `csv` 或 `jsonl`。 |
+| records filters | mixed | 无 | 与 `GET /usage/records` 相同。未显式传 `limit` 时默认最多导出 `10000` 条；显式 `limit` 也最多 `10000` 条。 |
+
+响应为 attachment。CSV 使用 `text/csv; charset=utf-8`，JSONL 使用 `application/x-ndjson`。
+
+导出字段是展平后的脱敏摘要，除 records 响应中的核心字段外，还包含 `error_status_code`、`error_message`、`error_body_preview`、`request_log_available` 和 `log_home_ip_required`。
+
+### GET `/usage/realtime`
+
+返回短窗口实时快照，适合管理面板短轮询。
+
+Query 参数：
+
+| Query | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `window_seconds` | integer | `900` | 统计窗口。 |
+| `bucket_seconds` | integer | `60` | velocity bucket 大小。 |
+| `group_by` | string | `model` | `model`、`provider`、`client_key`、`credential`。 |
+
+除上述参数外支持汇总范围参数。响应包含 `velocity`、`latency_distribution` 和按 `group_by` 聚合的 `current_usage`。
+
+### GET `/usage/health/providers`
+
+返回 provider 维度最近窗口健康状态。支持 `window_seconds` 和汇总范围参数。
+
+`items[]` 包含 `id`、`label`、`status`、`provider`、`recent_success_count`、`recent_failed_count`、`recent_error_rate`、`last_error_at`、`last_error_status`、`last_error_message`、`next_retry_at`、`avg_latency_ms` 和 `p95_latency_ms`。`next_retry_at` 来自执行凭证的 retry/cooldown 元数据，无法归因时为 `null`。`status` 为 `healthy`、`degraded`、`unavailable` 或 `unknown`。
+
+### GET `/usage/health/credentials`
+
+返回执行凭证维度最近窗口健康状态。参数与 provider health 相同，响应 `subject` 为 `credential`，`items[].credential_type` 来自 usage/auth 元数据。凭证 metadata 标记为 `disabled` 或 `unavailable` 时，`status` 优先返回该状态。
+
+### GET `/request-logs`
+
+返回 request log index。索引基于 usage 记录生成，并在当前 Home 节点本地查找匹配 request log 文件。
+
+Query 参数：
+
+| Query | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `request_id` | string | 无 | request ID 筛选。 |
+| `home_ip` | string | 无 | Home 节点筛选。 |
+| `from` / `to` | string | 无 | 时间范围。 |
+| `provider` / `model` | string | 无 | Provider/model 筛选。 |
+| `status` / `status_code` | string / integer | 无 | 状态筛选。 |
+| `limit` / `offset` | integer | `50` / `0` | 分页。 |
+| `search` | string | 无 | 对 request ID、model、provider 和 status 做 DB 侧宽松搜索；纯数字时间戳或 `.log` 文件名搜索会在最多 `10000` 条基础记录内匹配本地文件名。 |
+
+`items[]` 包含 `id`、`request_id`、`timestamp`、`home_ip`、`file_name`、`size_bytes`、`available`、`provider`、`model`、`status` 和 `download_url`。只有当前节点能找到本地文件时，`available=true` 且 `download_url` 非空；文件不存在或属于远端节点时返回 `available=false`。实际下载仍使用已有 `GET /request-log-by-id/:id`。
 
 ### GET `/usage-queue`
 
