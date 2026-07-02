@@ -223,6 +223,7 @@ The table below is extracted from the final Home route registry built by `intern
 | `GET` | `/payload` |
 | `PATCH` | `/payload` |
 | `PUT` | `/payload` |
+| `GET` | `/plugins` |
 | `GET` | `/plugin-store` |
 | `POST` | `/plugin-store/:id/install` |
 | `POST` | `/plugin-store/:id/uninstall` |
@@ -560,6 +561,58 @@ Common error codes:
 { "error": "decode_failed", "message": "detail" }
 { "error": "invalid_response", "message": "missing release version" }
 ```
+
+## Plugin Management
+
+### GET `/plugins`
+
+Lists plugin entries visible to the Home process. The response includes configured plugin entries and plugins currently registered by Home-loaded runtime plugins. Store-installed plugins only become registered in Home when their config explicitly enables Home loading, such as `plugins.configs.<pluginID>.load-in-home: true`.
+
+Input: none.
+
+Example response:
+
+```json
+{
+  "plugins_enabled": true,
+  "plugins_dir": "plugins",
+  "plugins": [
+    {
+      "id": "sample-provider",
+      "path": "",
+      "configured": true,
+      "registered": true,
+      "enabled": true,
+      "effective_enabled": true,
+      "supports_oauth": true,
+      "oauth_provider": "sample-provider",
+      "logo": "/v0/resource/plugins/sample-provider/logo.png",
+      "config_fields": [],
+      "menus": [],
+      "metadata": {
+        "name": "Sample Provider",
+        "version": "0.2.0",
+        "author": "author-name",
+        "github_repository": "https://github.com/author-name/sample-provider",
+        "logo": "/v0/resource/plugins/sample-provider/logo.png",
+        "config_fields": []
+      }
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `plugins_enabled` | boolean | Current global `plugins.enabled` value. |
+| `plugins_dir` | string | Local plugin artifact directory configured for Home and CPA nodes. |
+| `plugins[].configured` | boolean | True when `plugins.configs.<id>` exists in the Home config. |
+| `plugins[].registered` | boolean | True when the Home process has loaded the plugin and received its runtime registration. |
+| `plugins[].effective_enabled` | boolean | True only when global plugins, per-plugin enabled, and runtime registration are all active. |
+| `plugins[].supports_oauth` | boolean | True when the runtime plugin registration includes an auth provider login capability. |
+| `plugins[].oauth_provider` | string | Provider key used by OAuth UI and `GET /<provider>-auth-url`. |
+| `plugins[].menus` | array | Reserved for plugin resource menus. Home currently returns an empty list because plugin resource routes are not exposed by Home. |
+| `plugins[].metadata` | object | Plugin metadata returned by runtime registration, including display fields and config field descriptors. |
 
 ## Plugin Store
 
@@ -1854,6 +1907,7 @@ GET /codex-auth-url
 GET /antigravity-auth-url
 GET /kimi-auth-url
 GET /xai-auth-url
+GET /<plugin-provider>-auth-url
 ```
 
 Common response:
@@ -1867,6 +1921,8 @@ Common response:
 ```
 
 `GET /kimi-auth-url` starts a device flow and returns the verification URL. Completion is handled by Home in the background.
+
+`GET /<plugin-provider>-auth-url` is available for Home-loaded plugin providers returned by `GET /plugins` with `supports_oauth: true`, `effective_enabled: true`, and a non-empty `oauth_provider`. The provider segment is normalized to lowercase and must contain only letters, numbers, or hyphens.
 
 ### GET `/get-auth-status`
 
@@ -1886,6 +1942,8 @@ Example responses:
 { "status": "error", "error": "Authentication failed" }
 ```
 
+For plugin OAuth sessions, this route polls the Home-loaded plugin. When the plugin returns success, Home converts the returned auth data into DB-backed auth records, registers models for the auths, completes the OAuth session, and then returns `{ "status": "ok" }`.
+
 ### POST `/oauth-callback`
 
 Processes provider OAuth callback metadata.
@@ -1904,13 +1962,13 @@ Example request:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `provider` | string | yes | Supported aliases: `anthropic`/`claude`, `codex`/`openai`, `antigravity`/`anti-gravity`, and `xai`/`x-ai`/`grok`. `kimi` is not completed through this route. |
+| `provider` | string | yes | Built-in aliases: `anthropic`/`claude`, `codex`/`openai`, `antigravity`/`anti-gravity`, and `xai`/`x-ai`/`grok`. For plugin OAuth sessions, pass the plugin `oauth_provider` key. `kimi` is not completed through this route. |
 | `redirect_url` | string | no | Full callback URL. Missing `code`, `state`, or `error` values can be extracted from it. |
 | `code` | string | conditionally | OAuth authorization code; required unless `error` is supplied. |
 | `state` | string | yes | OAuth state token. |
 | `error` | string | conditionally | Provider error; required when `code` is absent. |
 
-Home reads session data from the DB-backed OAuth session, exchanges the code in the background, and stores resulting auth records in the DB.
+Home reads session data from the DB-backed OAuth session. Built-in OAuth sessions exchange the code in the background and store resulting auth records in the DB. Plugin OAuth sessions store callback metadata in the session; `/get-auth-status` then polls the plugin and persists the auth records returned by the plugin.
 
 Example response:
 
