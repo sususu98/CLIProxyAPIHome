@@ -281,6 +281,40 @@ func (a *RuntimeAdapter) Save(ctx context.Context, auth *coreauth.Auth) (string,
 	return auth.ID, nil
 }
 
+// MutateAuthState implements coreauth.StateMutator. It applies mutate to the
+// persisted auth row under the cluster write lock so availability transitions
+// stay atomic across Home nodes, then refreshes the local index and cache.
+func (a *RuntimeAdapter) MutateAuthState(ctx context.Context, id string, mutate func(auth *coreauth.Auth) bool) (*coreauth.Auth, error) {
+	// Keep validation before state changes so failures leave existing data intact.
+	if !a.Enabled() {
+		return nil, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	uuid := strings.TrimSpace(id)
+	if uuid == "" {
+		return nil, fmt.Errorf("cluster auth uuid is required")
+	}
+	auth, record, changed, errMutate := a.repo.MutateAuth(ctx, uuid, "update", mutate)
+	if errMutate != nil {
+		return nil, errMutate
+	}
+	if changed && auth != nil {
+		item := authIndexFromRecord(record, auth)
+		a.mu.Lock()
+		if a.index == nil {
+			a.index = make(map[string]AuthIndex)
+		}
+		item.Attributes = cloneStringMap(item.Attributes)
+		item.ModelMetadata = cloneModelMetadata(item.ModelMetadata)
+		a.index[uuid] = item
+		if a.fullCache == nil {
+			a.fullCache = make(map[string]*coreauth.Auth)
+		}
+		a.fullCache[uuid] = auth.Clone()
+		a.mu.Unlock()
+	}
+	return auth, nil
+}
+
 // Delete handles delete.
 func (a *RuntimeAdapter) Delete(ctx context.Context, id string) error {
 	if !a.Enabled() {

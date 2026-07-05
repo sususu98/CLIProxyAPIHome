@@ -11,3 +11,14 @@ type Store interface {
 	// Delete removes the auth record identified by id.
 	Delete(ctx context.Context, id string) error
 }
+
+// StateMutator is an optional Store capability. Implementations load the
+// authoritative persisted copy of the auth (typically under a database row
+// lock), apply mutate to it, and persist the result atomically when mutate
+// reports a change. The returned auth reflects the post-mutation persisted
+// state whether or not anything changed. Backends that implement this
+// interface let availability transitions such as quota backoff escalation
+// stay atomic across multiple Home nodes sharing one database.
+type StateMutator interface {
+	MutateAuthState(ctx context.Context, id string, mutate func(auth *Auth) bool) (*Auth, error)
+}
