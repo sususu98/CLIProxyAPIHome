@@ -402,10 +402,7 @@ func (m *Manager) adoptPersistedResultState(result Result, resultModel string, p
 	if local == nil {
 		return persisted.Clone()
 	}
-	local.Status = persisted.Status
-	local.StatusMessage = persisted.StatusMessage
 	local.Disabled = persisted.Disabled
-	local.LastError = cloneError(persisted.LastError)
 	local.UpdatedAt = persisted.UpdatedAt
 	if resultModel != "" {
 		if state := persisted.ModelStates[resultModel]; state != nil {
@@ -419,7 +416,19 @@ func (m *Manager) adoptPersistedResultState(result Result, resultModel string, p
 		// Recompute the aggregate from the merged local view so cooldowns that
 		// only exist locally (non-persisted transitions) are preserved.
 		updateAggregatedAvailability(local, now)
+		// The persisted copy can report a clean active state even though this
+		// node still tracks a model error that was never persisted (for
+		// example a transient 5xx). Mirror the hasModelError guard of the
+		// local success path and keep the local error view in that case.
+		if persisted.Status != StatusActive || !hasModelError(local, now) {
+			local.Status = persisted.Status
+			local.StatusMessage = persisted.StatusMessage
+			local.LastError = cloneError(persisted.LastError)
+		}
 	} else {
+		local.Status = persisted.Status
+		local.StatusMessage = persisted.StatusMessage
+		local.LastError = cloneError(persisted.LastError)
 		local.Unavailable = persisted.Unavailable
 		local.NextRetryAfter = persisted.NextRetryAfter
 		local.Quota = persisted.Quota

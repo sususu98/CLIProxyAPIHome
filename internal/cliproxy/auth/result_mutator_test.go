@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -175,6 +176,62 @@ func TestMarkResultQuotaEscalatesFromPersistedLevelAfterExpiry(t *testing.T) {
 	}
 	if !state.Quota.NextRecoverAt.After(time.Now()) {
 		t.Fatalf("expected a fresh persisted window, got %v", state.Quota.NextRecoverAt)
+	}
+}
+
+func TestAdoptPersistedStateKeepsLocalModelError(t *testing.T) {
+	const authID = "auth-adopt-local-error"
+	store := &fakeMutatorStore{
+		persisted: &Auth{
+			ID:       authID,
+			Index:    authID,
+			Provider: "codex",
+			Status:   StatusActive,
+			Metadata: map[string]any{"email": "user@example.com"},
+		},
+	}
+	node := newHomeNodeManager(t, store, authID)
+
+	// A 429 on model-b goes through the mutator and opens a shared window.
+	node.MarkResult(context.Background(), quotaResult(authID, "model-b"))
+
+	// A transient 500 on model-a stays node-local and is never persisted.
+	node.MarkResult(context.Background(), Result{
+		AuthID:   authID,
+		Provider: "codex",
+		Model:    "model-a",
+		Success:  false,
+		Error:    &Error{Message: "upstream exploded", HTTPStatus: http.StatusInternalServerError},
+	})
+	mid, _ := node.GetByID(authID)
+	if mid == nil || mid.Status != StatusError || mid.ModelStates["model-a"] == nil {
+		t.Fatalf("expected local error state after 500 on model-a, got %+v", mid)
+	}
+	if store.persistedSnapshot().ModelStates["model-a"] != nil {
+		t.Fatalf("precondition broken: model-a 500 must stay node-local, but reached the row")
+	}
+
+	// model-b succeeds; the row clears to active because it never knew about
+	// model-a's local error. The adopted state must not flip the local auth
+	// to active while that model error remains (the local path keeps
+	// StatusError via hasModelError).
+	node.MarkResult(context.Background(), Result{AuthID: authID, Provider: "codex", Model: "model-b", Success: true})
+
+	if row := store.persistedSnapshot(); row.Status != StatusActive {
+		t.Fatalf("expected persisted row to clear to active, got %q", row.Status)
+	}
+	local, _ := node.GetByID(authID)
+	if local == nil || local.ModelStates["model-a"] == nil || local.ModelStates["model-a"].LastError == nil {
+		t.Fatalf("expected model-a local error state to survive, got %+v", local)
+	}
+	if state := local.ModelStates["model-b"]; state == nil || state.Unavailable || state.Quota.Exceeded {
+		t.Fatalf("expected model-b local state to adopt the cleared row state, got %+v", state)
+	}
+	if local.Status != StatusError {
+		t.Fatalf("expected local Status to stay StatusError while model-a error remains, got %q", local.Status)
+	}
+	if local.LastError == nil || local.LastError.Message != "upstream exploded" {
+		t.Fatalf("expected local LastError to keep the model-a failure, got %+v", local.LastError)
 	}
 }
 
