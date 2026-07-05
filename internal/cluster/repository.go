@@ -353,19 +353,22 @@ func (r *Repository) ListAuthIndex(ctx context.Context) ([]AuthIndex, error) {
 	for i, record := range records {
 		auth := auths[i]
 		out = append(out, AuthIndex{
-			UUID:          record.UUID,
-			ID:            record.ID,
-			Index:         record.Index,
-			Provider:      record.Provider,
-			Label:         record.Label,
-			Prefix:        record.Prefix,
-			Status:        auth.Status,
-			Disabled:      auth.Disabled,
-			Unavailable:   auth.Unavailable,
-			BaseURL:       record.BaseURL,
-			ModelsHash:    record.ModelsHash,
-			Attributes:    auth.Attributes,
-			ModelMetadata: modelMetadataFromAuth(auth),
+			UUID:           record.UUID,
+			ID:             record.ID,
+			Index:          record.Index,
+			Provider:       record.Provider,
+			Label:          record.Label,
+			Prefix:         record.Prefix,
+			Status:         auth.Status,
+			Disabled:       auth.Disabled,
+			Unavailable:    auth.Unavailable,
+			NextRetryAfter: auth.NextRetryAfter,
+			Quota:          auth.Quota,
+			ModelStates:    auth.ModelStates,
+			BaseURL:        record.BaseURL,
+			ModelsHash:     record.ModelsHash,
+			Attributes:     auth.Attributes,
+			ModelMetadata:  modelMetadataFromAuth(auth),
 		})
 	}
 	return out, nil
