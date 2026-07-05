@@ -125,7 +125,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 								shouldSuspendModel = true
 							}
 						case http.StatusTooManyRequests:
-							next, backoffLevel := nextQuotaRecoverAt(now, result.RetryAfter, state.Quota.BackoffLevel, disableCooling)
+							next, backoffLevel := nextQuotaRecoverAt(now, result.RetryAfter, state.Quota, disableCooling)
 							state.NextRetryAfter = next
 							state.Quota = QuotaState{
 								Exceeded:      true,
@@ -487,7 +487,7 @@ func applyAuthFailureState(m *Manager, auth *Auth, resultErr *Error, retryAfter 
 		auth.StatusMessage = "quota exhausted"
 		auth.Quota.Exceeded = true
 		auth.Quota.Reason = "quota"
-		next, backoffLevel := nextQuotaRecoverAt(now, retryAfter, auth.Quota.BackoffLevel, disableCooling)
+		next, backoffLevel := nextQuotaRecoverAt(now, retryAfter, auth.Quota, disableCooling)
 		auth.Quota.BackoffLevel = backoffLevel
 		auth.Quota.NextRecoverAt = next
 		auth.NextRetryAfter = next
@@ -557,14 +557,25 @@ func nextQuotaCooldown(prevLevel int, disableCooling bool) (time.Duration, int) 
 	return cooldown, prevLevel + 1
 }
 
-func nextQuotaRecoverAt(now time.Time, retryAfter *time.Duration, prevLevel int, disableCooling bool) (time.Time, int) {
+func nextQuotaRecoverAt(now time.Time, retryAfter *time.Duration, quota QuotaState, disableCooling bool) (time.Time, int) {
 	if disableCooling {
-		return time.Time{}, prevLevel
+		return time.Time{}, quota.BackoffLevel
 	}
 	if retryAfter != nil && *retryAfter > 0 {
-		return now.Add(*retryAfter), prevLevel
+		return now.Add(*retryAfter), quota.BackoffLevel
 	}
-	cooldown, nextLevel := nextQuotaCooldown(prevLevel, disableCooling)
+	return quotaCooldownAfterFailure(quota, now)
+}
+
+// quotaCooldownAfterFailure returns the recovery deadline and backoff level for
+// a quota failure observed at now. Failures that land while a previous quota
+// window is still open reuse that window instead of escalating, so a burst of
+// concurrent failures advances the backoff ladder at most once per window.
+func quotaCooldownAfterFailure(quota QuotaState, now time.Time) (time.Time, int) {
+	if quota.NextRecoverAt.After(now) {
+		return quota.NextRecoverAt, quota.BackoffLevel
+	}
+	cooldown, nextLevel := nextQuotaCooldown(quota.BackoffLevel, false)
 	if cooldown <= 0 {
 		return time.Time{}, nextLevel
 	}
