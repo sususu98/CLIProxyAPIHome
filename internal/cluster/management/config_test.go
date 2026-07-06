@@ -162,6 +162,63 @@ vertex-api-key:
 	}
 }
 
+func TestOAuthModelAliasForceMappingRoundTrip(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	handler := NewHandler(repo, nil, "127.0.0.1", 0)
+	engine := gin.New()
+	engine.PUT("/oauth-model-alias", handler.PutOAuthModelAlias)
+	engine.GET("/oauth-model-alias", handler.GetOAuthModelAlias)
+	engine.GET("/config", handler.GetConfig)
+	engine.GET("/config.yaml", handler.GetConfigYAML)
+
+	payload := `{
+  "claude": [
+    { "name": " claude-sonnet-4 ", "alias": " sonnet ", "fork": true, "force-mapping": true },
+    { "name": "claude-haiku-4", "alias": "haiku" }
+  ]
+}`
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/oauth-model-alias", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("put status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+
+	getResp := httptest.NewRecorder()
+	getReq := httptest.NewRequest(http.MethodGet, "/oauth-model-alias", nil)
+	engine.ServeHTTP(getResp, getReq)
+	if getResp.Code != http.StatusOK {
+		t.Fatalf("get status = %d, body = %s", getResp.Code, getResp.Body.String())
+	}
+	assertOAuthModelAliasForceMapping(t, getResp.Body.Bytes())
+
+	configResp := httptest.NewRecorder()
+	configReq := httptest.NewRequest(http.MethodGet, "/config", nil)
+	engine.ServeHTTP(configResp, configReq)
+	if configResp.Code != http.StatusOK {
+		t.Fatalf("config status = %d, body = %s", configResp.Code, configResp.Body.String())
+	}
+	assertOAuthModelAliasForceMapping(t, configResp.Body.Bytes())
+
+	yamlResp := httptest.NewRecorder()
+	yamlReq := httptest.NewRequest(http.MethodGet, "/config.yaml", nil)
+	engine.ServeHTTP(yamlResp, yamlReq)
+	if yamlResp.Code != http.StatusOK {
+		t.Fatalf("yaml status = %d, body = %s", yamlResp.Code, yamlResp.Body.String())
+	}
+	if !strings.Contains(yamlResp.Body.String(), "force-mapping: true") {
+		t.Fatalf("config yaml = %s, want force-mapping true", yamlResp.Body.String())
+	}
+	if strings.Contains(yamlResp.Body.String(), "force-mapping: false") {
+		t.Fatalf("config yaml = %s, should omit false force-mapping", yamlResp.Body.String())
+	}
+}
+
 func providerKeyFirstModel(t *testing.T, raw []byte, key string) map[string]any {
 	t.Helper()
 
@@ -182,6 +239,41 @@ func providerKeyFirstModel(t *testing.T, raw []byte, key string) map[string]any 
 		t.Fatalf("%s first model = %+v, want object", key, rawModels[0])
 	}
 	return model
+}
+
+func assertOAuthModelAliasForceMapping(t *testing.T, raw []byte) {
+	t.Helper()
+
+	var root map[string]any
+	if errDecode := json.Unmarshal(raw, &root); errDecode != nil {
+		t.Fatalf("decode oauth model alias response: %v; body = %s", errDecode, string(raw))
+	}
+	aliasesRoot := root["oauth-model-alias"]
+	aliases, ok := aliasesRoot.(map[string]any)
+	if !ok {
+		t.Fatalf("oauth-model-alias = %#v, want object; body = %s", aliasesRoot, string(raw))
+	}
+	rawClaude, ok := aliases["claude"].([]any)
+	if !ok || len(rawClaude) != 2 {
+		t.Fatalf("claude aliases = %#v, want two aliases; body = %s", aliases["claude"], string(raw))
+	}
+	first, ok := rawClaude[0].(map[string]any)
+	if !ok {
+		t.Fatalf("first alias = %#v, want object", rawClaude[0])
+	}
+	if first["name"] != "claude-sonnet-4" || first["alias"] != "sonnet" {
+		t.Fatalf("first alias = %#v, want trimmed name and alias", first)
+	}
+	if first["force-mapping"] != true {
+		t.Fatalf("first force-mapping = %#v, want true; alias = %#v", first["force-mapping"], first)
+	}
+	second, ok := rawClaude[1].(map[string]any)
+	if !ok {
+		t.Fatalf("second alias = %#v, want object", rawClaude[1])
+	}
+	if _, exists := second["force-mapping"]; exists {
+		t.Fatalf("second alias = %#v, should omit false force-mapping", second)
+	}
 }
 
 func stringSliceContains(values []string, target string) bool {

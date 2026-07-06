@@ -338,6 +338,7 @@ nonstream-keepalive-interval: 0
 #   claude:
 #     - name: "claude-sonnet-4-5-20250929"
 #       alias: "cs4.5"
+#       force-mapping: true
 #   codex:
 #     - name: "gpt-5"
 #       alias: "g5"
