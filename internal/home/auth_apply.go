@@ -28,9 +28,7 @@ func (r *Runtime) applyCoreAuthAddOrUpdate(ctx context.Context, auth *coreauth.A
 		if !existing.Disabled && existing.Status != coreauth.StatusDisabled && !auth.Disabled && auth.Status != coreauth.StatusDisabled {
 			auth.LastRefreshedAt = existing.LastRefreshedAt
 			auth.NextRefreshAfter = existing.NextRefreshAfter
-			if len(auth.ModelStates) == 0 && len(existing.ModelStates) > 0 {
-				auth.ModelStates = existing.ModelStates
-			}
+			auth.ModelStates = mergeModelStates(auth.ModelStates, existing.ModelStates)
 		}
 		op = "update"
 		_, err = r.coreManager.Update(ctx, auth)
@@ -50,6 +48,30 @@ func (r *Runtime) applyCoreAuthAddOrUpdate(ctx context.Context, auth *coreauth.A
 	r.registerModelsForAuth(auth)
 	r.coreManager.ReconcileRegistryModelStates(ctx, auth.ID)
 	r.coreManager.RefreshSchedulerEntry(auth.ID)
+}
+
+// mergeModelStates merges the locally accumulated model states into the
+// incoming cluster view, keeping whichever per-model state is fresher. Local
+// states cover transitions that are not persisted to the cluster row (for
+// example transient 5xx cooldowns), while incoming states carry cooldowns
+// recorded by other Home nodes.
+func mergeModelStates(incoming, local map[string]*coreauth.ModelState) map[string]*coreauth.ModelState {
+	if len(local) == 0 {
+		return incoming
+	}
+	if len(incoming) == 0 {
+		return local
+	}
+	for model, state := range local {
+		if state == nil {
+			continue
+		}
+		current, ok := incoming[model]
+		if !ok || current == nil || state.UpdatedAt.After(current.UpdatedAt) {
+			incoming[model] = state
+		}
+	}
+	return incoming
 }
 
 // loadClusterAuths loads a cluster auths.

@@ -223,6 +223,7 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/payload` |
 | `PATCH` | `/payload` |
 | `PUT` | `/payload` |
+| `GET` | `/plugins` |
 | `GET` | `/plugin-store` |
 | `POST` | `/plugin-store/:id/install` |
 | `POST` | `/plugin-store/:id/uninstall` |
@@ -560,6 +561,58 @@ openai-compatibility
 { "error": "decode_failed", "message": "detail" }
 { "error": "invalid_response", "message": "missing release version" }
 ```
+
+## Plugin Management
+
+### GET `/plugins`
+
+列出 Home 进程可见的插件条目。响应包含 Home 配置中的插件条目，以及 Home 进程已经加载并完成 runtime registration 的插件。通过 store 安装的插件只有在配置中显式允许 Home 加载时才会在 Home 注册，例如 `plugins.configs.<pluginID>.load-in-home: true`。
+
+输入：无。
+
+输出示例：
+
+```json
+{
+  "plugins_enabled": true,
+  "plugins_dir": "plugins",
+  "plugins": [
+    {
+      "id": "sample-provider",
+      "path": "",
+      "configured": true,
+      "registered": true,
+      "enabled": true,
+      "effective_enabled": true,
+      "supports_oauth": true,
+      "oauth_provider": "sample-provider",
+      "logo": "/v0/resource/plugins/sample-provider/logo.png",
+      "config_fields": [],
+      "menus": [],
+      "metadata": {
+        "name": "Sample Provider",
+        "version": "0.2.0",
+        "author": "author-name",
+        "github_repository": "https://github.com/author-name/sample-provider",
+        "logo": "/v0/resource/plugins/sample-provider/logo.png",
+        "config_fields": []
+      }
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `plugins_enabled` | boolean | 当前全局 `plugins.enabled` 值。 |
+| `plugins_dir` | string | Home 和 CPA 节点配置的本地插件产物目录。 |
+| `plugins[].configured` | boolean | Home 配置中是否存在 `plugins.configs.<id>`。 |
+| `plugins[].registered` | boolean | Home 进程是否已经加载该插件并收到 runtime registration。 |
+| `plugins[].effective_enabled` | boolean | 全局 plugins、单插件 enabled、runtime registration 都生效时为 true。 |
+| `plugins[].supports_oauth` | boolean | runtime registration 中是否包含 auth provider 登录能力。 |
+| `plugins[].oauth_provider` | string | OAuth UI 和 `GET /<provider>-auth-url` 使用的 provider key。 |
+| `plugins[].menus` | array | 预留给插件资源菜单。Home 当前不会暴露插件资源路由，因此这里返回空列表。 |
+| `plugins[].metadata` | object | runtime registration 返回的插件 metadata，包括展示字段和配置字段描述。 |
 
 ## Plugin Store
 
@@ -1854,6 +1907,7 @@ GET /codex-auth-url
 GET /antigravity-auth-url
 GET /kimi-auth-url
 GET /xai-auth-url
+GET /<plugin-provider>-auth-url
 ```
 
 通用输出：
@@ -1867,6 +1921,8 @@ GET /xai-auth-url
 ```
 
 `GET /kimi-auth-url` 会启动 device flow 并返回验证 URL，Home 在后台等待完成。
+
+`GET /<plugin-provider>-auth-url` 可用于 `GET /plugins` 返回的 Home-loaded 插件 provider；对应条目需要 `supports_oauth: true`、`effective_enabled: true`，并且 `oauth_provider` 非空。provider 路径段会规范化为小写，且只能包含字母、数字和连字符。
 
 ### GET `/get-auth-status`
 
@@ -1886,6 +1942,8 @@ Query 参数：
 { "status": "error", "error": "Authentication failed" }
 ```
 
+对于插件 OAuth session，该接口会轮询 Home 已加载的插件。插件返回 success 后，Home 会把插件返回的 auth data 转成 DB-backed auth records，注册该 auth 的模型，完成 OAuth session，然后返回 `{ "status": "ok" }`。
+
 ### POST `/oauth-callback`
 
 处理 provider OAuth callback metadata。
@@ -1904,13 +1962,13 @@ Query 参数：
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `provider` | string | 是 | 支持 alias：`anthropic`/`claude`、`codex`/`openai`、`antigravity`/`anti-gravity`、`xai`/`x-ai`/`grok`。`kimi` 不通过该 route 完成。 |
+| `provider` | string | 是 | 内置 provider alias：`anthropic`/`claude`、`codex`/`openai`、`antigravity`/`anti-gravity`、`xai`/`x-ai`/`grok`。插件 OAuth session 传入插件的 `oauth_provider` key。`kimi` 不通过该 route 完成。 |
 | `redirect_url` | string | 否 | 完整 callback URL；缺失的 `code`、`state` 或 `error` 可以从中提取。 |
 | `code` | string | 条件必填 | OAuth authorization code；除非提供 `error`，否则必填。 |
 | `state` | string | 是 | OAuth state token。 |
 | `error` | string | 条件必填 | Provider error；缺少 `code` 时必填。 |
 
-Home 会从 DB-backed OAuth session 中读取 session data，在后台 exchange code，并把得到的 auth records 写入 DB。
+Home 会从 DB-backed OAuth session 中读取 session data。内置 OAuth session 会在后台 exchange code，并把得到的 auth records 写入 DB。插件 OAuth session 会先把 callback metadata 写入 session；随后 `/get-auth-status` 轮询插件，并持久化插件返回的 auth records。
 
 输出示例：
 
