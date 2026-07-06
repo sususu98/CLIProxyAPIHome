@@ -62,6 +62,7 @@ func (a *RuntimeAdapter) LoadIndex(ctx context.Context) error {
 		item.Index = uuid
 		item.Attributes = cloneStringMap(item.Attributes)
 		item.ModelMetadata = cloneModelMetadata(item.ModelMetadata)
+		item.ModelStates = cloneModelStateMap(item.ModelStates)
 		next[uuid] = item
 	}
 
@@ -272,6 +273,7 @@ func (a *RuntimeAdapter) Save(ctx context.Context, auth *coreauth.Auth) (string,
 	}
 	item.Attributes = cloneStringMap(item.Attributes)
 	item.ModelMetadata = cloneModelMetadata(item.ModelMetadata)
+	item.ModelStates = cloneModelStateMap(item.ModelStates)
 	a.index[auth.ID] = item
 	if a.fullCache == nil {
 		a.fullCache = make(map[string]*coreauth.Auth)
@@ -279,6 +281,41 @@ func (a *RuntimeAdapter) Save(ctx context.Context, auth *coreauth.Auth) (string,
 	a.fullCache[auth.ID] = auth.Clone()
 	a.mu.Unlock()
 	return auth.ID, nil
+}
+
+// MutateAuthState implements coreauth.StateMutator. It applies mutate to the
+// persisted auth row under the cluster write lock so availability transitions
+// stay atomic across Home nodes, then refreshes the local index and cache.
+func (a *RuntimeAdapter) MutateAuthState(ctx context.Context, id string, mutate func(auth *coreauth.Auth) bool) (*coreauth.Auth, error) {
+	// Keep validation before state changes so failures leave existing data intact.
+	if !a.Enabled() {
+		return nil, fmt.Errorf("cluster runtime adapter is disabled")
+	}
+	uuid := strings.TrimSpace(id)
+	if uuid == "" {
+		return nil, fmt.Errorf("cluster auth uuid is required")
+	}
+	auth, record, changed, errMutate := a.repo.MutateAuth(ctx, uuid, "update", mutate)
+	if errMutate != nil {
+		return nil, errMutate
+	}
+	if changed && auth != nil {
+		item := authIndexFromRecord(record, auth)
+		a.mu.Lock()
+		if a.index == nil {
+			a.index = make(map[string]AuthIndex)
+		}
+		item.Attributes = cloneStringMap(item.Attributes)
+		item.ModelMetadata = cloneModelMetadata(item.ModelMetadata)
+		item.ModelStates = cloneModelStateMap(item.ModelStates)
+		a.index[uuid] = item
+		if a.fullCache == nil {
+			a.fullCache = make(map[string]*coreauth.Auth)
+		}
+		a.fullCache[uuid] = auth.Clone()
+		a.mu.Unlock()
+	}
+	return auth, nil
 }
 
 // Delete handles delete.
@@ -324,6 +361,7 @@ func (a *RuntimeAdapter) RefreshAuthIndex(ctx context.Context, uuid string) erro
 	}
 	item.Attributes = cloneStringMap(item.Attributes)
 	item.ModelMetadata = cloneModelMetadata(item.ModelMetadata)
+	item.ModelStates = cloneModelStateMap(item.ModelStates)
 	a.index[uuid] = item
 	if a.fullCache != nil {
 		delete(a.fullCache, uuid)
@@ -481,6 +519,12 @@ func authIndexFromRecord(record *AuthRecord, auth *coreauth.Auth) AuthIndex {
 			item.ID = item.UUID
 			item.Index = item.UUID
 		}
+		item.Status = auth.Status
+		item.Disabled = auth.Disabled
+		item.Unavailable = auth.Unavailable
+		item.NextRetryAfter = auth.NextRetryAfter
+		item.Quota = auth.Quota
+		item.ModelStates = auth.ModelStates
 		item.Attributes = cloneStringMap(auth.Attributes)
 		item.ModelMetadata = modelMetadataFromAuth(auth)
 	}
@@ -510,16 +554,19 @@ func authFromIndex(item AuthIndex) *coreauth.Auth {
 	}
 	metadata := cloneModelMetadata(item.ModelMetadata)
 	return &coreauth.Auth{
-		ID:          uuid,
-		Index:       uuid,
-		Provider:    item.Provider,
-		Label:       item.Label,
-		Prefix:      item.Prefix,
-		Status:      item.Status,
-		Disabled:    item.Disabled,
-		Unavailable: item.Unavailable,
-		Attributes:  attrs,
-		Metadata:    metadata,
+		ID:             uuid,
+		Index:          uuid,
+		Provider:       item.Provider,
+		Label:          item.Label,
+		Prefix:         item.Prefix,
+		Status:         item.Status,
+		Disabled:       item.Disabled,
+		Unavailable:    item.Unavailable,
+		NextRetryAfter: item.NextRetryAfter,
+		Quota:          item.Quota,
+		ModelStates:    cloneModelStateMap(item.ModelStates),
+		Attributes:     attrs,
+		Metadata:       metadata,
 	}
 }
 
@@ -533,6 +580,18 @@ func modelMetadataFromAuth(auth *coreauth.Auth) map[string]any {
 		return nil
 	}
 	return map[string]any{homeConfigModelsMetadataKey: raw}
+}
+
+// cloneModelStateMap clones a per-model state map.
+func cloneModelStateMap(in map[string]*coreauth.ModelState) map[string]*coreauth.ModelState {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]*coreauth.ModelState, len(in))
+	for key, state := range in {
+		out[key] = state.Clone()
+	}
+	return out
 }
 
 // cloneModelMetadata clones model metadata.

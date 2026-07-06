@@ -258,6 +258,73 @@ func (r *Repository) WithAuthRefreshLock(ctx context.Context, uuid string, fn fu
 	return out, nil
 }
 
+// MutateAuth loads an auth row under a write lock, applies mutate to the
+// decoded auth, and persists the result in the same transaction when mutate
+// reports a change. Concurrent mutations from other Home nodes serialize on
+// the row lock, which keeps read-modify-write transitions such as quota
+// backoff escalation atomic across the cluster. The returned auth and record
+// reflect the post-transaction row state.
+func (r *Repository) MutateAuth(ctx context.Context, uuid string, op string, mutate func(auth *coreauth.Auth) bool) (*coreauth.Auth, *AuthRecord, bool, error) {
+	// Keep validation before state changes so failures leave existing data intact.
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, nil, false, errDB
+	}
+	uuid = strings.TrimSpace(uuid)
+	if uuid == "" {
+		return nil, nil, false, fmt.Errorf("cluster auth uuid is required")
+	}
+	if mutate == nil {
+		return nil, nil, false, fmt.Errorf("cluster auth mutate callback is nil")
+	}
+	if strings.TrimSpace(op) == "" {
+		op = "update"
+	}
+
+	var outAuth *coreauth.Auth
+	var outRecord *AuthRecord
+	changed := false
+	ctx = contextOrBackground(ctx)
+	errTransaction := db.WithContext(ctx).Transaction(func(txDB *gorm.DB) error {
+		existing := &AuthRecord{}
+		errFirst := txDB.Clauses(clause.Locking{Strength: "UPDATE"}).Where("uuid = ?", uuid).First(existing).Error
+		if errFirst != nil {
+			return errFirst
+		}
+
+		auth, errAuth := RecordToAuth(existing)
+		if errAuth != nil {
+			return errAuth
+		}
+		auth.ID = uuid
+		auth.Index = uuid
+
+		changed = mutate(auth)
+		if !changed {
+			outAuth = auth
+			outRecord = existing
+			return nil
+		}
+
+		record, errRecord := AuthToRecord(auth)
+		if errRecord != nil {
+			return errRecord
+		}
+		record.Version = existing.Version + 1
+		record.CreatedAt = existing.CreatedAt
+		if errUpdate := txDB.Select("*").Where("uuid = ?", uuid).Updates(record).Error; errUpdate != nil {
+			return errUpdate
+		}
+		outAuth = auth
+		outRecord = record
+		return appendEvent(txDB, "auth", op, uuid, record.Version)
+	})
+	if errTransaction != nil {
+		return nil, nil, false, errTransaction
+	}
+	return outAuth, outRecord, changed, nil
+}
+
 // ListAuthIndex returns an auth index.
 func (r *Repository) ListAuthIndex(ctx context.Context) ([]AuthIndex, error) {
 	// Normalize auth state before updating runtime indexes.
@@ -286,19 +353,22 @@ func (r *Repository) ListAuthIndex(ctx context.Context) ([]AuthIndex, error) {
 	for i, record := range records {
 		auth := auths[i]
 		out = append(out, AuthIndex{
-			UUID:          record.UUID,
-			ID:            record.ID,
-			Index:         record.Index,
-			Provider:      record.Provider,
-			Label:         record.Label,
-			Prefix:        record.Prefix,
-			Status:        auth.Status,
-			Disabled:      auth.Disabled,
-			Unavailable:   auth.Unavailable,
-			BaseURL:       record.BaseURL,
-			ModelsHash:    record.ModelsHash,
-			Attributes:    auth.Attributes,
-			ModelMetadata: modelMetadataFromAuth(auth),
+			UUID:           record.UUID,
+			ID:             record.ID,
+			Index:          record.Index,
+			Provider:       record.Provider,
+			Label:          record.Label,
+			Prefix:         record.Prefix,
+			Status:         auth.Status,
+			Disabled:       auth.Disabled,
+			Unavailable:    auth.Unavailable,
+			NextRetryAfter: auth.NextRetryAfter,
+			Quota:          auth.Quota,
+			ModelStates:    auth.ModelStates,
+			BaseURL:        record.BaseURL,
+			ModelsHash:     record.ModelsHash,
+			Attributes:     auth.Attributes,
+			ModelMetadata:  modelMetadataFromAuth(auth),
 		})
 	}
 	return out, nil
