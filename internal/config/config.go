@@ -248,9 +248,10 @@ type RoutingConfig struct {
 // When Fork is true, the alias is added as an additional model in listings while
 // keeping the original model ID available.
 type OAuthModelAlias struct {
-	Name  string `yaml:"name" json:"name"`
-	Alias string `yaml:"alias" json:"alias"`
-	Fork  bool   `yaml:"fork,omitempty" json:"fork,omitempty"`
+	Name         string `yaml:"name" json:"name"`
+	Alias        string `yaml:"alias" json:"alias"`
+	Fork         bool   `yaml:"fork,omitempty" json:"fork,omitempty"`
+	ForceMapping bool   `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
 }
 
 // PayloadConfig defines default and override parameter rules applied to provider payloads.
@@ -781,7 +782,7 @@ func (cfg *Config) SanitizeOAuthModelAlias() {
 				continue
 			}
 			seenAlias[aliasKey] = struct{}{}
-			clean = append(clean, OAuthModelAlias{Name: name, Alias: alias, Fork: entry.Fork})
+			clean = append(clean, OAuthModelAlias{Name: name, Alias: alias, Fork: entry.Fork, ForceMapping: entry.ForceMapping})
 		}
 		if len(clean) > 0 {
 			out[channel] = clean

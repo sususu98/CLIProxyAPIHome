@@ -345,7 +345,7 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
   },
   "oauth-model-alias": {
     "claude": [
-      { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true }
+      { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true, "force-mapping": true }
     ]
   },
   "payload": {
@@ -2880,7 +2880,7 @@ GET 输出：
 {
   "oauth-model-alias": {
     "claude": [
-      { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true }
+      { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true, "force-mapping": true }
     ]
   }
 }
@@ -2891,7 +2891,7 @@ PUT 输入：
 ```json
 {
   "claude": [
-    { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true }
+    { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true, "force-mapping": true }
   ]
 }
 ```
@@ -2902,7 +2902,7 @@ PUT 输入：
 {
   "items": {
     "claude": [
-      { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true }
+      { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true, "force-mapping": true }
     ]
   }
 }
@@ -2915,7 +2915,7 @@ PATCH 输入：
   "channel": "claude",
   "provider": "claude",
   "aliases": [
-    { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true }
+    { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true, "force-mapping": true }
   ]
 }
 ```
@@ -3000,6 +3000,7 @@ DELETE query：
 | `vertex-api-key` | array of `VertexCompatKey` | Vertex-compatible API-key credentials；应使用 provider-key routes。 |
 | `oauth-excluded-models` | object string to array of string | 每个 provider 的 OAuth/file-backed auth 排除模型。 |
 | `oauth-model-alias` | object string to array of `OAuthModelAlias` | 每个 channel 的 OAuth model aliases。 |
+| `oauth-model-alias.*[].force-mapping` | boolean | 为 `true` 时，响应中的 model 字段使用映射后的上游 model name。 |
 | `payload.default` | array of `PayloadRule` | 设置缺失的 JSON payload params。 |
 | `payload.default-raw` | array of `PayloadRule` | 设置缺失的 raw JSON payload params。 |
 | `payload.override` | array of `PayloadRule` | 覆盖 JSON payload params。 |

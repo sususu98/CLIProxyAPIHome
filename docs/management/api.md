@@ -345,7 +345,7 @@ Example response:
   },
   "oauth-model-alias": {
     "claude": [
-      { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true }
+      { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true, "force-mapping": true }
     ]
   },
   "payload": {
@@ -2880,7 +2880,7 @@ GET response:
 {
   "oauth-model-alias": {
     "claude": [
-      { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true }
+      { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true, "force-mapping": true }
     ]
   }
 }
@@ -2891,7 +2891,7 @@ PUT input:
 ```json
 {
   "claude": [
-    { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true }
+    { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true, "force-mapping": true }
   ]
 }
 ```
@@ -2902,7 +2902,7 @@ or:
 {
   "items": {
     "claude": [
-      { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true }
+      { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true, "force-mapping": true }
     ]
   }
 }
@@ -2915,7 +2915,7 @@ PATCH input:
   "channel": "claude",
   "provider": "claude",
   "aliases": [
-    { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true }
+    { "name": "claude-sonnet-4", "alias": "sonnet", "fork": true, "force-mapping": true }
   ]
 }
 ```
@@ -3000,6 +3000,7 @@ These fields are accepted by Home YAML config. `PUT /config.yaml` accepts non-cr
 | `vertex-api-key` | array of `VertexCompatKey` | Vertex-compatible API-key credentials; use provider-key routes. |
 | `oauth-excluded-models` | object string to array of string | Per-provider OAuth/file-backed auth excluded models. |
 | `oauth-model-alias` | object string to array of `OAuthModelAlias` | Per-channel OAuth model aliases. |
+| `oauth-model-alias.*[].force-mapping` | boolean | When true, response model fields use the mapped upstream model name. |
 | `payload.default` | array of `PayloadRule` | Sets missing JSON payload params. |
 | `payload.default-raw` | array of `PayloadRule` | Sets missing raw JSON payload params. |
 | `payload.override` | array of `PayloadRule` | Overrides JSON payload params. |
