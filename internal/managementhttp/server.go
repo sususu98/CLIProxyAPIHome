@@ -141,6 +141,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodGet, "/config", handler.GetConfig)
 	r.Set(http.MethodGet, "/config.yaml", handler.GetConfigYAML)
 	r.Set(http.MethodPut, "/config.yaml", handler.PutConfigYAML)
+	r.Set(http.MethodGet, "/plugins", handler.ListPlugins)
 	r.Set(http.MethodGet, "/plugin-store", handler.ListPluginStore)
 	r.Set(http.MethodPost, "/plugin-store/:id/install", handler.InstallPluginFromStore)
 	r.Set(http.MethodPost, "/plugin-store/:id/uninstall", handler.UninstallPluginFromStore)
@@ -512,8 +513,9 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 		}, serveManagementControlPanelAsset(cfg, configFilePath))
 	}
 
+	var clusterHandler *clustermanagement.Handler
 	if clusterEnabled {
-		clusterHandler := clustermanagement.NewHandler(clusterOpt.Repository, clusterOpt.Runtime, clusterOpt.NodeIP, clusterOpt.NodePort)
+		clusterHandler = clustermanagement.NewHandler(clusterOpt.Repository, clusterOpt.Runtime, clusterOpt.NodeIP, clusterOpt.NodePort)
 		clusterHandler.SetForwardTLSConfig(clusterOpt.ForwardTLSConfig)
 		clusterGroup := engine.Group("/v0/cluster")
 		clusterGroup.Use(withBuildInfoHeaders(), clusterMTLSMiddleware())
@@ -549,6 +551,9 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 		)
 	}
 	reg.Register(mgmt)
+	if clusterEnabled && clusterHandler != nil {
+		engine.NoRoute(clusterManagementNoRoute(clusterOpt, handler, clusterHandler))
+	}
 
 	return &BuildResult{
 		Engine:      engine,
@@ -585,13 +590,61 @@ func corsMiddleware() gin.HandlerFunc {
 // withBuildInfoHeaders applies the build info headers option.
 func withBuildInfoHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if c == nil {
+		setBuildInfoHeaders(c)
+		c.Next()
+	}
+}
+
+func setBuildInfoHeaders(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	c.Writer.Header().Set("X-CPA-HOME-VERSION", buildinfo.Version)
+	c.Writer.Header().Set("X-CPA-HOME-COMMIT", buildinfo.Commit)
+	c.Writer.Header().Set("X-CPA-HOME-BUILD-DATE", buildinfo.BuildDate)
+}
+
+func clusterManagementNoRoute(opt *ClusterManagementOption, handler *cpasdkapi.Handler, clusterHandler *clustermanagement.Handler) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c == nil || c.Request == nil || c.Request.URL == nil {
+			if c != nil {
+				c.AbortWithStatus(http.StatusNotFound)
+			}
 			return
 		}
-		c.Writer.Header().Set("X-CPA-HOME-VERSION", buildinfo.Version)
-		c.Writer.Header().Set("X-CPA-HOME-COMMIT", buildinfo.Commit)
-		c.Writer.Header().Set("X-CPA-HOME-BUILD-DATE", buildinfo.BuildDate)
-		c.Next()
+		path := c.Request.URL.Path
+		if path != "/v0/management" && !strings.HasPrefix(path, "/v0/management/") {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		if opt == nil || !opt.Enabled || opt.Repository == nil || opt.Runtime == nil || clusterHandler == nil {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+
+		setBuildInfoHeaders(c)
+		cfg := cpaConfigFromHomeConfig(opt.Runtime.Config())
+		if cfg == nil {
+			cfg = &cpaconfig.Config{}
+		}
+		envSecret, envSecretSet := os.LookupEnv("MANAGEMENT_PASSWORD")
+		hasSecret := strings.TrimSpace(cfg.RemoteManagement.SecretKey) != "" || (envSecretSet && strings.TrimSpace(envSecret) != "")
+		if !hasSecret {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		if handler != nil {
+			handler.SetConfig(cfg)
+			handler.Middleware()(c)
+			if c.IsAborted() {
+				return
+			}
+		}
+		if c.Request.Method == http.MethodGet && clusterHandler.ServePluginAuthURL(c) {
+			c.Abort()
+			return
+		}
+		c.AbortWithStatus(http.StatusNotFound)
 	}
 }
 

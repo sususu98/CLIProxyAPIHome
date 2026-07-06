@@ -3,6 +3,7 @@ package home
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	cpaauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -84,6 +85,81 @@ func (r *Runtime) PickAuth(ctx context.Context, req pluginapi.SchedulerPickReque
 		return pluginapi.SchedulerPickResponse{}, false, nil
 	}
 	return r.pluginHost.PickAuth(ctx, req)
+}
+
+// RegisteredPlugins returns Home-loaded plugin metadata for management clients.
+func (r *Runtime) RegisteredPlugins() []sdkpluginhost.RegisteredPluginInfo {
+	if r == nil || r.pluginHost == nil {
+		return nil
+	}
+	return r.pluginHost.RegisteredPlugins()
+}
+
+// HasPluginAuthProvider reports whether a Home-loaded plugin owns provider login.
+func (r *Runtime) HasPluginAuthProvider(provider string) bool {
+	return r != nil && r.pluginHost != nil && r.pluginHost.HasAuthProvider(provider)
+}
+
+// StartPluginLogin starts an OAuth flow through a Home-loaded auth provider plugin.
+func (r *Runtime) StartPluginLogin(ctx context.Context, provider, baseURL string) (pluginapi.AuthLoginStartResponse, bool, error) {
+	if r == nil || r.pluginHost == nil {
+		return pluginapi.AuthLoginStartResponse{}, false, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return r.pluginHost.StartLogin(ctx, provider, baseURL)
+}
+
+// PollPluginLogin polls an OAuth flow through a Home-loaded auth provider plugin.
+func (r *Runtime) PollPluginLogin(ctx context.Context, provider, state string, metadata map[string]any) (pluginapi.AuthLoginPollResponse, bool, error) {
+	if r == nil || r.pluginHost == nil {
+		return pluginapi.AuthLoginPollResponse{}, false, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return r.pluginHost.PollLogin(ctx, provider, state, metadata)
+}
+
+// PluginLoginAuths converts auth records returned by a successful plugin login.
+func (r *Runtime) PluginLoginAuths(resp pluginapi.AuthLoginPollResponse) ([]*homeauth.Auth, error) {
+	if r == nil || r.pluginHost == nil {
+		return nil, fmt.Errorf("plugin host is not available")
+	}
+	auths, errAuths := r.pluginLoginPollAuths(resp)
+	if errAuths != nil {
+		return nil, errAuths
+	}
+	if len(auths) == 0 {
+		return nil, fmt.Errorf("plugin login returned no auth records")
+	}
+	for _, auth := range auths {
+		if auth == nil || strings.TrimSpace(auth.ID) == "" {
+			return nil, fmt.Errorf("plugin login returned auth without id")
+		}
+	}
+	return auths, nil
+}
+
+func (r *Runtime) pluginLoginPollAuths(resp pluginapi.AuthLoginPollResponse) ([]*homeauth.Auth, error) {
+	if r == nil || r.pluginHost == nil {
+		return nil, fmt.Errorf("plugin host is not available")
+	}
+	authDatas := resp.Auths
+	if len(authDatas) == 0 {
+		authDatas = []pluginapi.AuthData{resp.Auth}
+	}
+	auths := make([]*homeauth.Auth, 0, len(authDatas))
+	for _, authData := range authDatas {
+		coreAuth := r.pluginHost.AuthDataToCoreAuth(authData, "", "")
+		auth := pluginAuthToHomeAuth(coreAuth)
+		if auth == nil {
+			return nil, fmt.Errorf("plugin login returned invalid auth data")
+		}
+		auths = append(auths, auth)
+	}
+	return auths, nil
 }
 
 func (r *Runtime) tryRegisterPluginModelsForAuth(ctx context.Context, auth *homeauth.Auth, provider, authKind string, excluded []string) bool {

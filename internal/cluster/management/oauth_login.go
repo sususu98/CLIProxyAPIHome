@@ -273,6 +273,14 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "error", "error": errMsg})
 		return
 	}
+	data, errData := cluster.OAuthSessionData(session)
+	if errData != nil {
+		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errData)
+		return
+	}
+	if h.respondPluginAuthStatus(c, ctx, session, data) {
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"status": "wait"})
 }
 
@@ -282,12 +290,6 @@ func (h *Handler) handleOAuthCallback(c *gin.Context) {
 	var req oauthCallbackRequest
 	if errBind := c.ShouldBindJSON(&req); errBind != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "invalid body"})
-		return
-	}
-
-	provider, errProvider := normalizeOAuthProvider(req.Provider)
-	if errProvider != nil || provider == "kimi" {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "unsupported provider"})
 		return
 	}
 
@@ -343,6 +345,28 @@ func (h *Handler) handleOAuthCallback(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"status": "error", "error": "oauth flow is not pending"})
 		return
 	}
+	data, errData := cluster.OAuthSessionData(session)
+	if errData != nil {
+		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errData)
+		return
+	}
+
+	providerInput := strings.TrimSpace(req.Provider)
+	if providerInput == "" {
+		providerInput = strings.TrimSpace(session.Provider)
+	}
+	isPlugin := oauthSessionIsPlugin(data)
+	var provider string
+	var errProvider error
+	if isPlugin {
+		provider, errProvider = normalizePluginOAuthProvider(providerInput)
+	} else {
+		provider, errProvider = normalizeOAuthProvider(providerInput)
+	}
+	if errProvider != nil || (!isPlugin && provider == "kimi") {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "unsupported provider"})
+		return
+	}
 	if !strings.EqualFold(session.Provider, provider) {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "provider does not match state"})
 		return
@@ -355,6 +379,15 @@ func (h *Handler) handleOAuthCallback(c *gin.Context) {
 		})
 		if errSet := h.repo.SetOAuthSessionError(ctx, state, "Authentication failed"); errSet != nil {
 			respondError(c, http.StatusInternalServerError, "oauth_session_failed", errSet)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		return
+	}
+
+	if isPlugin {
+		if errMerge := h.repo.MergeOAuthSessionData(ctx, state, pluginOAuthCallbackSessionData(code, provider)); errMerge != nil {
+			respondError(c, http.StatusInternalServerError, "oauth_session_failed", errMerge)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
