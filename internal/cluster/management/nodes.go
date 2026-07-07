@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
@@ -17,6 +19,16 @@ const (
 	pluginLoadStatusFailed       = "failed"
 	pluginLoadStatusLoaded       = "loaded"
 )
+
+type activeCPANode struct {
+	NodeID      string
+	IP          string
+	Connected   time.Time
+	ClientCount int
+	HomeIP      string
+	HomePort    int
+	LastSeenAt  time.Time
+}
 
 // ListNodes returns a nodes.
 func (h *Handler) ListNodes(c *gin.Context) {
@@ -44,7 +56,11 @@ func (h *Handler) ListNodes(c *gin.Context) {
 		statusesByIP[clientIP] = append(statusesByIP[clientIP], status)
 	}
 	requiredPluginIDs := h.pluginTaskRequiredIDs(ctx)
-	activeNodes := node.GlobalRegistry().List()
+	activeNodes, errNodes := h.activeCPANodes(ctx)
+	if errNodes != nil {
+		respondError(c, http.StatusInternalServerError, "node_load_failed", errNodes)
+		return
+	}
 	nodes := make([]gin.H, 0, len(activeNodes))
 	for _, activeNode := range activeNodes {
 		statuses := statusesByNodeID[strings.TrimSpace(activeNode.NodeID)]
@@ -58,6 +74,9 @@ func (h *Handler) ListNodes(c *gin.Context) {
 			"connected_time":         activeNode.Connected,
 			"client_count":           activeNode.ClientCount,
 			"healthy":                activeNode.ClientCount > 0,
+			"home_ip":                activeNode.HomeIP,
+			"home_port":              activeNode.HomePort,
+			"last_seen_at":           activeNode.LastSeenAt,
 			"plugin_report_state":    state,
 			"plugin_report_statuses": statuses,
 		})
@@ -67,6 +86,90 @@ func (h *Handler) ListNodes(c *gin.Context) {
 		"plugin_report_required": len(requiredPluginIDs) > 0,
 		"plugin_report_statuses": taskStatuses,
 	})
+}
+
+func (h *Handler) activeCPANodes(ctx context.Context) ([]activeCPANode, error) {
+	nodesByKey := make(map[string]activeCPANode)
+	if h != nil && h.repo != nil {
+		records, errRecords := h.repo.ListLiveCPANodes(ctx, time.Time{})
+		if errRecords != nil {
+			return nil, errRecords
+		}
+		for _, record := range records {
+			key := activeCPANodeKey(record.HomeIP, record.HomePort, record.NodeID, record.ClientIP)
+			if key == "" {
+				continue
+			}
+			nodesByKey[key] = activeCPANode{
+				NodeID:      strings.TrimSpace(record.NodeID),
+				IP:          strings.TrimSpace(record.ClientIP),
+				Connected:   record.ConnectedAt,
+				ClientCount: record.ClientCount,
+				HomeIP:      strings.TrimSpace(record.HomeIP),
+				HomePort:    record.HomePort,
+				LastSeenAt:  record.LastSeenAt,
+			}
+		}
+	}
+
+	localHomeIP := ""
+	localHomePort := 0
+	if h != nil {
+		localHomeIP = strings.TrimSpace(h.nodeIP)
+		localHomePort = h.nodePort
+	}
+	for _, localNode := range node.GlobalRegistry().List() {
+		key := activeCPANodeKey(localHomeIP, localHomePort, localNode.NodeID, localNode.IP)
+		if key == "" {
+			continue
+		}
+		nodesByKey[key] = activeCPANode{
+			NodeID:      strings.TrimSpace(localNode.NodeID),
+			IP:          strings.TrimSpace(localNode.IP),
+			Connected:   localNode.Connected,
+			ClientCount: localNode.ClientCount,
+			HomeIP:      localHomeIP,
+			HomePort:    localHomePort,
+			LastSeenAt:  time.Now().UTC(),
+		}
+	}
+
+	nodes := make([]activeCPANode, 0, len(nodesByKey))
+	for _, item := range nodesByKey {
+		nodes = append(nodes, item)
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].Connected.Equal(nodes[j].Connected) {
+			if nodes[i].IP == nodes[j].IP {
+				if nodes[i].NodeID == nodes[j].NodeID {
+					if nodes[i].HomeIP == nodes[j].HomeIP {
+						return nodes[i].HomePort < nodes[j].HomePort
+					}
+					return nodes[i].HomeIP < nodes[j].HomeIP
+				}
+				return nodes[i].NodeID < nodes[j].NodeID
+			}
+			return nodes[i].IP < nodes[j].IP
+		}
+		return nodes[i].Connected.Before(nodes[j].Connected)
+	})
+	return nodes, nil
+}
+
+func activeCPANodeKey(homeIP string, homePort int, nodeID string, clientIP string) string {
+	homeIP = strings.TrimSpace(homeIP)
+	nodeID = strings.TrimSpace(nodeID)
+	clientIP = strings.TrimSpace(clientIP)
+	nodeKey := ""
+	if nodeID != "" {
+		nodeKey = "node:" + nodeID
+	} else if clientIP != "" {
+		nodeKey = "ip:" + clientIP
+	}
+	if nodeKey == "" {
+		return ""
+	}
+	return homeIP + ":" + strconv.Itoa(homePort) + "/" + nodeKey
 }
 
 func (h *Handler) pluginTaskStatuses(ctx context.Context) ([]node.PluginTaskStatus, error) {

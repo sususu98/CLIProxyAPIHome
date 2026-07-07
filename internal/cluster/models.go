@@ -298,6 +298,24 @@ func (ClusterNodeRecord) TableName() string {
 	return "cluster"
 }
 
+type CPANodeRecord struct {
+	HomeIP      string    `gorm:"column:home_ip;primaryKey;index:idx_cpa_node_home_live,priority:1;index:idx_cpa_node_live,priority:3"`
+	HomePort    int       `gorm:"column:home_port;primaryKey;index:idx_cpa_node_home_live,priority:2;index:idx_cpa_node_live,priority:4"`
+	NodeKey     string    `gorm:"column:node_key;primaryKey;size:256"`
+	NodeID      string    `gorm:"column:node_id;index"`
+	ClientIP    string    `gorm:"column:client_ip;index"`
+	ClientCount int       `gorm:"column:client_count"`
+	ConnectedAt time.Time `gorm:"column:connected_at"`
+	LastSeenAt  time.Time `gorm:"column:last_seen_at;index:idx_cpa_node_home_live,priority:3;index:idx_cpa_node_live,priority:1"`
+	CreatedAt   time.Time `gorm:"column:created_at"`
+	UpdatedAt   time.Time `gorm:"column:updated_at"`
+}
+
+// TableName returns the database table name.
+func (CPANodeRecord) TableName() string {
+	return "cpa_node"
+}
+
 type ClusterEventRecord struct {
 	ID         uint      `gorm:"column:id;primaryKey;autoIncrement"`
 	Scope      string    `gorm:"column:scope"`

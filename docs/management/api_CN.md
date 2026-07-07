@@ -474,7 +474,7 @@ openai-compatibility
 
 ### GET `/nodes`
 
-列出当前连接到 Home 的节点。
+列出当前连接到 Home 集群的 CPA 节点。多 Home 节点共享数据库时，接口返回所有 live Home 上报的 CPA 连接快照，而不只返回当前处理请求的 Home 进程内连接。
 
 输入：无。
 
@@ -507,6 +507,9 @@ openai-compatibility
       "connected_time": "2026-05-27T10:30:00Z",
       "client_count": 1,
       "healthy": true,
+      "home_ip": "10.0.0.10",
+      "home_port": 8327,
+      "last_seen_at": "2026-05-27T10:30:05Z",
       "plugin_report_state": "reported_ok",
       "plugin_report_statuses": [
         {
@@ -523,7 +526,7 @@ openai-compatibility
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `nodes` | array | 当前活跃节点列表。 |
+| `nodes` | array | 当前活跃 CPA 节点列表，聚合自所有 live Home 节点写入共享数据库的连接快照。 |
 | `plugin_report_required` | boolean | 当前 Home 配置是否期望 CPA 上报插件状态；至少一个已启用插件带有固定的 store manifest 时为 `true`。 |
 | `plugin_report_statuses` | array | 共享数据库中保存的最新插件上报，按上报节点和上报元数据分组；单插件删除上报可以和其他插件保留的状态行同时存在。它们会一直保留到节点再次上报或被显式清理，不按 TTL 自动过期。这是 CPA 自报告的观测信息，不是强可信安装事实。 |
 | `nodes[].node_id` | string | 从 Home 客户端证书得到的 CPA node ID。 |
@@ -531,6 +534,9 @@ openai-compatibility
 | `nodes[].connected_time` | string | 当前活跃节点条目的首次连接时间。 |
 | `nodes[].client_count` | integer | 当前 IP 下活跃 RESP 订阅连接数。 |
 | `nodes[].healthy` | boolean | 节点是否存在活跃 RESP 配置订阅连接；插件上报不会直接让该字段变为不健康。 |
+| `nodes[].home_ip` | string | 该 CPA 节点当前连接的 Home 节点地址。 |
+| `nodes[].home_port` | integer | 该 CPA 节点当前连接的 Home 节点端口。 |
+| `nodes[].last_seen_at` | string | 该 CPA 节点连接快照最近一次由对应 Home 节点刷新到共享数据库的时间。 |
 | `nodes[].plugin_report_state` | string | 当前已配置插件的观测状态：`not_required`、`missing_report`、`reported_partial`、`reported_failed` 或 `reported_ok`；当前不需要的插件上报失败不会让该状态变为失败。 |
 | `nodes[].plugin_report_statuses` | array | 关联到当前活跃节点的插件上报，优先按 node ID 匹配，缺失时按 IP fallback。 |
 | `plugin_report_statuses[].node_type` | string | 上报节点类型；CPA 节点上报为 `cpa`，`home` 预留给 Home 节点上报。 |

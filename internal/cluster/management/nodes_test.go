@@ -13,6 +13,80 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
 )
 
+func TestListNodesIncludesCPASnapshotsFromAllHomeNodes(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	now := time.Now().UTC()
+	if errSnapshot := repo.ReplaceCPANodeSnapshot(context.Background(), "home-a", 8327, []node.Node{
+		{NodeID: "cpa-a-1", IP: "10.0.1.1", Connected: now.Add(-4 * time.Minute), ClientCount: 1},
+		{NodeID: "cpa-a-2", IP: "10.0.1.2", Connected: now.Add(-3 * time.Minute), ClientCount: 1},
+	}, now); errSnapshot != nil {
+		t.Fatalf("ReplaceCPANodeSnapshot(home-a) error = %v", errSnapshot)
+	}
+	if errSnapshot := repo.ReplaceCPANodeSnapshot(context.Background(), "home-b", 8328, []node.Node{
+		{NodeID: "cpa-b-1", IP: "10.0.2.1", Connected: now.Add(-2 * time.Minute), ClientCount: 1},
+		{NodeID: "cpa-b-2", IP: "10.0.2.2", Connected: now.Add(-1 * time.Minute), ClientCount: 1},
+	}, now); errSnapshot != nil {
+		t.Fatalf("ReplaceCPANodeSnapshot(home-b) error = %v", errSnapshot)
+	}
+
+	handler := NewHandler(repo, nil, "home-a", 8327)
+	engine := gin.New()
+	engine.GET("/nodes", handler.ListNodes)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/nodes", nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	var body struct {
+		Nodes []struct {
+			NodeID      string `json:"node_id"`
+			IP          string `json:"ip"`
+			ClientCount int    `json:"client_count"`
+			Healthy     bool   `json:"healthy"`
+			HomeIP      string `json:"home_ip"`
+			HomePort    int    `json:"home_port"`
+		} `json:"nodes"`
+	}
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if len(body.Nodes) != 4 {
+		t.Fatalf("nodes len = %d, want 4: %+v", len(body.Nodes), body.Nodes)
+	}
+
+	got := make(map[string]struct {
+		HomeIP   string
+		HomePort int
+	})
+	for _, item := range body.Nodes {
+		if item.ClientCount != 1 || !item.Healthy {
+			t.Fatalf("node = %+v, want one healthy client", item)
+		}
+		got[item.NodeID] = struct {
+			HomeIP   string
+			HomePort int
+		}{HomeIP: item.HomeIP, HomePort: item.HomePort}
+	}
+	for nodeID, want := range map[string]struct {
+		HomeIP   string
+		HomePort int
+	}{
+		"cpa-a-1": {HomeIP: "home-a", HomePort: 8327},
+		"cpa-a-2": {HomeIP: "home-a", HomePort: 8327},
+		"cpa-b-1": {HomeIP: "home-b", HomePort: 8328},
+		"cpa-b-2": {HomeIP: "home-b", HomePort: 8328},
+	} {
+		if got[nodeID] != want {
+			t.Fatalf("node %s home = %+v, want %+v; all nodes = %+v", nodeID, got[nodeID], want, body.Nodes)
+		}
+	}
+}
+
 func TestListNodesIncludesPluginTaskHealth(t *testing.T) {
 	db, cleanup := openManagementLogTestDB(t)
 	defer cleanup()

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -426,6 +427,102 @@ func (r *Repository) ListLiveClusterNodes(ctx context.Context, cutoff time.Time)
 		return nil, errFind
 	}
 	return records, nil
+}
+
+// ReplaceCPANodeSnapshot replaces the active CPA connection snapshot owned by one Home node.
+func (r *Repository) ReplaceCPANodeSnapshot(ctx context.Context, homeIP string, homePort int, nodes []node.Node, seenAt time.Time) error {
+	db, errDB := r.database()
+	if errDB != nil {
+		return errDB
+	}
+	homeIP = strings.TrimSpace(homeIP)
+	if homeIP == "" {
+		return fmt.Errorf("home ip is required")
+	}
+	if homePort <= 0 {
+		return fmt.Errorf("home port must be greater than 0")
+	}
+	if seenAt.IsZero() {
+		seenAt = time.Now().UTC()
+	} else {
+		seenAt = seenAt.UTC()
+	}
+
+	records := make([]CPANodeRecord, 0, len(nodes))
+	seenKeys := make(map[string]struct{}, len(nodes))
+	for _, item := range nodes {
+		key := cpaNodeKey(item)
+		if key == "" {
+			continue
+		}
+		if _, ok := seenKeys[key]; ok {
+			continue
+		}
+		seenKeys[key] = struct{}{}
+		clientCount := item.ClientCount
+		if clientCount <= 0 {
+			continue
+		}
+		connectedAt := item.Connected
+		if connectedAt.IsZero() {
+			connectedAt = seenAt
+		} else {
+			connectedAt = connectedAt.UTC()
+		}
+		records = append(records, CPANodeRecord{
+			HomeIP:      homeIP,
+			HomePort:    homePort,
+			NodeKey:     key,
+			NodeID:      strings.TrimSpace(item.NodeID),
+			ClientIP:    strings.TrimSpace(item.IP),
+			ClientCount: clientCount,
+			ConnectedAt: connectedAt,
+			LastSeenAt:  seenAt,
+		})
+	}
+
+	return db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		if errDelete := tx.Where("home_ip = ? AND home_port = ?", homeIP, homePort).Delete(&CPANodeRecord{}).Error; errDelete != nil {
+			return errDelete
+		}
+		if len(records) == 0 {
+			return nil
+		}
+		return tx.Create(&records).Error
+	})
+}
+
+// ListLiveCPANodes returns live CPA node snapshots reported by active Home nodes.
+func (r *Repository) ListLiveCPANodes(ctx context.Context, cutoff time.Time) ([]CPANodeRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	if cutoff.IsZero() {
+		cutoff = time.Now().UTC().Add(-defaultHeartbeatTimeout)
+	}
+
+	var records []CPANodeRecord
+	errFind := db.WithContext(contextOrBackground(ctx)).
+		Where("last_seen_at >= ?", cutoff).
+		Order("connected_at ASC, client_ip ASC, node_id ASC, home_ip ASC, home_port ASC").
+		Find(&records).Error
+	if errFind != nil {
+		return nil, errFind
+	}
+	return records, nil
+}
+
+func cpaNodeKey(item node.Node) string {
+	nodeID := strings.TrimSpace(item.NodeID)
+	if nodeID != "" {
+		return "node:" + nodeID
+	}
+	clientIP := strings.TrimSpace(item.IP)
+	if clientIP == "" {
+		return ""
+	}
+	return "ip:" + clientIP
 }
 
 // ListAuths returns an auths.

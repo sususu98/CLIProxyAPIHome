@@ -148,10 +148,13 @@ func (c *Coordinator) UpdateClientCount(ctx context.Context, clientCount int) er
 	if errDB != nil {
 		return errDB
 	}
-	return db.WithContext(contextOrBackground(ctx)).
+	if errUpdate := db.WithContext(contextOrBackground(ctx)).
 		Model(&ClusterNodeRecord{}).
 		Where("ip = ? AND port = ?", c.node.IP, c.node.Port).
-		Update("client_count", clientCount).Error
+		Update("client_count", clientCount).Error; errUpdate != nil {
+		return errUpdate
+	}
+	return c.syncCPANodeSnapshot(ctx, time.Now().UTC())
 }
 
 // SetOnMasterChanged sets an on master changed.
@@ -224,6 +227,9 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context) error {
 	}).Create(&record).Error; errUpsert != nil {
 		return errUpsert
 	}
+	if errSnapshot := c.syncCPANodeSnapshot(ctx, now); errSnapshot != nil {
+		return errSnapshot
+	}
 
 	elected, errMaster := c.CurrentMaster(ctx)
 	if errMaster != nil {
@@ -235,6 +241,13 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context) error {
 
 	c.setMaster(clusterNodeMatches(*elected, c.node.IP, c.node.Port))
 	return nil
+}
+
+func (c *Coordinator) syncCPANodeSnapshot(ctx context.Context, seenAt time.Time) error {
+	if c == nil || c.repo == nil {
+		return nil
+	}
+	return c.repo.ReplaceCPANodeSnapshot(ctx, c.node.IP, c.node.Port, node.GlobalRegistry().List(), seenAt)
 }
 
 // setMaster sets a master.

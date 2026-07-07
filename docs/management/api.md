@@ -474,7 +474,7 @@ Successful writes return:
 
 ### GET `/nodes`
 
-Lists nodes currently connected to Home.
+Lists CPA nodes currently connected to the Home cluster. When multiple Home nodes share a database, the route returns CPA connection snapshots reported by every live Home node instead of only the in-process connections on the Home node handling the request.
 
 Input: none.
 
@@ -507,6 +507,9 @@ Example response:
       "connected_time": "2026-05-27T10:30:00Z",
       "client_count": 1,
       "healthy": true,
+      "home_ip": "10.0.0.10",
+      "home_port": 8327,
+      "last_seen_at": "2026-05-27T10:30:05Z",
       "plugin_report_state": "reported_ok",
       "plugin_report_statuses": [
         {
@@ -523,7 +526,7 @@ Example response:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `nodes` | array | Active node list. |
+| `nodes` | array | Active CPA node list aggregated from connection snapshots written by all live Home nodes into the shared database. |
 | `plugin_report_required` | boolean | Whether the current Home config expects CPA plugin reports because at least one enabled plugin has a pinned store manifest. |
 | `plugin_report_statuses` | array | Latest plugin reports stored in the shared database, grouped by reporting node and report metadata. Delete reports for one plugin can coexist with preserved status rows for other plugins. These are retained until the node reports again or is explicitly cleaned up; they do not expire by TTL and are self-reported observations, not authoritative install proof. |
 | `nodes[].node_id` | string | CPA node ID derived from the Home client certificate when available. |
@@ -531,6 +534,9 @@ Example response:
 | `nodes[].connected_time` | string | First connection time for the active node entry. |
 | `nodes[].client_count` | integer | Active RESP subscription connection count from this IP. |
 | `nodes[].healthy` | boolean | Whether the node has an active RESP subscription connection. Plugin reports do not make this field unhealthy. |
+| `nodes[].home_ip` | string | Home node address currently serving this CPA node. |
+| `nodes[].home_port` | integer | Home node port currently serving this CPA node. |
+| `nodes[].last_seen_at` | string | Time when the serving Home node last refreshed this CPA connection snapshot in the shared database. |
 | `nodes[].plugin_report_state` | string | Current configured plugin observation state: `not_required`, `missing_report`, `reported_partial`, `reported_failed`, or `reported_ok`. Failed reports for plugins that are not currently required do not make this state failed. |
 | `nodes[].plugin_report_statuses` | array | Plugin reports associated with this active node, matched by node ID when possible and IP as a fallback. |
 | `plugin_report_statuses[].node_type` | string | Reporting node type, currently `cpa` for CPA node reports and reserved for `home` reports. |
