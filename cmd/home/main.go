@@ -285,6 +285,7 @@ func run() int {
 			Runtime:          rt,
 			NodeIP:           clusterClientAddr,
 			NodePort:         clusterAdvertisedPort,
+			HeartbeatTimeout: nodeCfg.HeartbeatTimeout,
 			ForwardTLSConfig: clusterTLSConfig,
 		}))
 	}

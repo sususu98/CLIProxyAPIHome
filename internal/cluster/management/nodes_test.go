@@ -87,6 +87,43 @@ func TestListNodesIncludesCPASnapshotsFromAllHomeNodes(t *testing.T) {
 	}
 }
 
+func TestListNodesUsesConfiguredHeartbeatTimeout(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	now := time.Now().UTC()
+	lastSeenAt := now.Add(-30 * time.Second)
+	if errSnapshot := repo.ReplaceCPANodeSnapshot(context.Background(), "home-timeout", 8327, []node.Node{
+		{NodeID: "cpa-timeout", IP: "10.0.3.1", Connected: now.Add(-2 * time.Minute), ClientCount: 1},
+	}, lastSeenAt); errSnapshot != nil {
+		t.Fatalf("ReplaceCPANodeSnapshot() error = %v", errSnapshot)
+	}
+
+	handler := NewHandler(repo, nil, "home-timeout", 8327)
+	handler.SetHeartbeatTimeout(time.Minute)
+	engine := gin.New()
+	engine.GET("/nodes", handler.ListNodes)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/nodes", nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	var body struct {
+		Nodes []struct {
+			NodeID string `json:"node_id"`
+		} `json:"nodes"`
+	}
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if len(body.Nodes) != 1 || body.Nodes[0].NodeID != "cpa-timeout" {
+		t.Fatalf("nodes = %+v, want cpa-timeout within configured timeout", body.Nodes)
+	}
+}
+
 func TestListNodesIncludesPluginTaskHealth(t *testing.T) {
 	db, cleanup := openManagementLogTestDB(t)
 	defer cleanup()

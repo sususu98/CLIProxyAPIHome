@@ -91,7 +91,11 @@ func (h *Handler) ListNodes(c *gin.Context) {
 func (h *Handler) activeCPANodes(ctx context.Context) ([]activeCPANode, error) {
 	nodesByKey := make(map[string]activeCPANode)
 	if h != nil && h.repo != nil {
-		records, errRecords := h.repo.ListLiveCPANodes(ctx, time.Time{})
+		cutoff := time.Time{}
+		if h.heartbeatTimeout > 0 {
+			cutoff = time.Now().UTC().Add(-h.heartbeatTimeout)
+		}
+		records, errRecords := h.repo.ListLiveCPANodes(ctx, cutoff)
 		if errRecords != nil {
 			return nil, errRecords
 		}

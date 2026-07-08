@@ -19,6 +19,7 @@ type Handler struct {
 	runtime               *home.Runtime
 	nodeIP                string
 	nodePort              int
+	heartbeatTimeout      time.Duration
 	forwardTLSConfig      *tls.Config
 	pluginStoreHTTPClient pluginstore.HTTPDoer
 }
@@ -34,6 +35,14 @@ func (h *Handler) SetForwardTLSConfig(tlsConfig *tls.Config) {
 		return
 	}
 	h.forwardTLSConfig = tlsConfig
+}
+
+// SetHeartbeatTimeout sets the live cluster node timeout used by management reads.
+func (h *Handler) SetHeartbeatTimeout(timeout time.Duration) {
+	if h == nil || timeout <= 0 {
+		return
+	}
+	h.heartbeatTimeout = timeout
 }
 
 func (h *Handler) SetPluginStoreHTTPClient(client pluginstore.HTTPDoer) {

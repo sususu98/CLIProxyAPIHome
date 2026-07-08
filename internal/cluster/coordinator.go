@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
+	log "github.com/sirupsen/logrus"
 	"gorm.io/gorm/clause"
 )
 
@@ -228,7 +229,7 @@ func (c *Coordinator) heartbeatAndElect(ctx context.Context) error {
 		return errUpsert
 	}
 	if errSnapshot := c.syncCPANodeSnapshot(ctx, now); errSnapshot != nil {
-		return errSnapshot
+		log.Warnf("failed to sync CPA node snapshot: %v", errSnapshot)
 	}
 
 	elected, errMaster := c.CurrentMaster(ctx)

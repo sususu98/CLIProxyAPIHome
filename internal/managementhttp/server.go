@@ -95,6 +95,7 @@ type ClusterManagementOption struct {
 	Runtime          *home.Runtime
 	NodeIP           string
 	NodePort         int
+	HeartbeatTimeout time.Duration
 	ForwardTLSConfig *tls.Config
 }
 
@@ -123,6 +124,7 @@ func WithDatabaseManagement(opt DatabaseManagementOption) RouteOption {
 		optCopy := opt
 		r.clusterManagement = &optCopy
 		handler := clustermanagement.NewHandler(opt.Repository, opt.Runtime, opt.NodeIP, opt.NodePort)
+		handler.SetHeartbeatTimeout(opt.HeartbeatTimeout)
 		handler.SetForwardTLSConfig(opt.ForwardTLSConfig)
 		registerClusterManagementRoutes(r, handler)
 	}
@@ -516,6 +518,7 @@ func Build(configFilePath string, opts ...RouteOption) (*BuildResult, error) {
 	var clusterHandler *clustermanagement.Handler
 	if clusterEnabled {
 		clusterHandler = clustermanagement.NewHandler(clusterOpt.Repository, clusterOpt.Runtime, clusterOpt.NodeIP, clusterOpt.NodePort)
+		clusterHandler.SetHeartbeatTimeout(clusterOpt.HeartbeatTimeout)
 		clusterHandler.SetForwardTLSConfig(clusterOpt.ForwardTLSConfig)
 		clusterGroup := engine.Group("/v0/cluster")
 		clusterGroup.Use(withBuildInfoHeaders(), clusterMTLSMiddleware())

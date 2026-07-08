@@ -7,8 +7,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
@@ -89,6 +91,58 @@ func TestOpenSQLite_ConfiguresLocalConcurrency(t *testing.T) {
 	}
 	if busyTimeout < 5000 {
 		t.Fatalf("busy_timeout = %d, want at least 5000", busyTimeout)
+	}
+}
+
+func TestReplaceCPANodeSnapshotConcurrentSameHome(t *testing.T) {
+	db, errOpenSQLite := OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "home.db"))
+	if errOpenSQLite != nil {
+		t.Fatalf("OpenSQLite failed: %v", errOpenSQLite)
+	}
+	sqlDB, errDB := db.DB()
+	if errDB != nil {
+		t.Fatalf("get sql db: %v", errDB)
+	}
+	defer func() {
+		if errClose := sqlDB.Close(); errClose != nil {
+			t.Errorf("close sql db: %v", errClose)
+		}
+	}()
+	if errMigrate := AutoMigrate(db); errMigrate != nil {
+		t.Fatalf("AutoMigrate failed: %v", errMigrate)
+	}
+
+	repo := NewRepository(db)
+	start := make(chan struct{})
+	errCh := make(chan error, 16)
+	now := time.Now().UTC()
+	var wg sync.WaitGroup
+	for i := 0; i < cap(errCh); i++ {
+		idx := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errCh <- repo.ReplaceCPANodeSnapshot(context.Background(), "home-a", 8327, []node.Node{
+				{NodeID: "cpa-a", IP: "10.0.0.1", Connected: now, ClientCount: idx + 1},
+			}, now.Add(time.Duration(idx)*time.Millisecond))
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for errSnapshot := range errCh {
+		if errSnapshot != nil {
+			t.Fatalf("ReplaceCPANodeSnapshot() concurrent error = %v", errSnapshot)
+		}
+	}
+
+	records, errRecords := repo.ListLiveCPANodes(context.Background(), now.Add(-time.Minute))
+	if errRecords != nil {
+		t.Fatalf("ListLiveCPANodes() error = %v", errRecords)
+	}
+	if len(records) != 1 || records[0].NodeID != "cpa-a" || records[0].HomeIP != "home-a" || records[0].HomePort != 8327 {
+		t.Fatalf("records = %+v, want one final CPA snapshot", records)
 	}
 }
 

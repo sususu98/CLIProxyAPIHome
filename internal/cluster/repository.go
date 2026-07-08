@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
@@ -19,7 +20,8 @@ import (
 )
 
 type Repository struct {
-	db *gorm.DB
+	db            *gorm.DB
+	cpaSnapshotMu sync.Mutex
 }
 
 type UpsertResult string
@@ -435,6 +437,8 @@ func (r *Repository) ReplaceCPANodeSnapshot(ctx context.Context, homeIP string, 
 	if errDB != nil {
 		return errDB
 	}
+	r.cpaSnapshotMu.Lock()
+	defer r.cpaSnapshotMu.Unlock()
 	homeIP = strings.TrimSpace(homeIP)
 	if homeIP == "" {
 		return fmt.Errorf("home ip is required")
