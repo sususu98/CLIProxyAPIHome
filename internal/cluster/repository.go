@@ -97,6 +97,7 @@ func AuthToRecord(auth *coreauth.Auth) (*AuthRecord, error) {
 	}
 	record.LastRefreshedAt = timePtrOrNil(auth.LastRefreshedAt)
 	record.NextRefreshAfter = timePtrOrNil(auth.NextRefreshAfter)
+	record.NextRetryAfter = timePtrOrNil(auth.NextRetryAfter)
 
 	return record, nil
 }

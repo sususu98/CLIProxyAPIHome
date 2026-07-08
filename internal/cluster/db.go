@@ -118,7 +118,54 @@ func AutoMigrate(db *gorm.DB) error {
 	if errMigrate := migrateUserUniqueUsername(db); errMigrate != nil {
 		return errMigrate
 	}
+	if errMigrate := migrateAuthNextRetryAfter(db); errMigrate != nil {
+		return errMigrate
+	}
+	if errMigrate := migrateUsageObservabilityIndexes(db); errMigrate != nil {
+		return errMigrate
+	}
 	return migrateLegacyAPIKeys(db)
+}
+
+func migrateUsageObservabilityIndexes(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	statements := []string{
+		`CREATE INDEX IF NOT EXISTS idx_usage_provider_lower_time ON "usage" (LOWER("provider"), "timestamp" DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_auth_type_normalized_time ON "usage" (LOWER(REPLACE("auth_type", '-', '_')), "timestamp" DESC)`,
+	}
+	for _, statement := range statements {
+		if errExec := db.Exec(statement).Error; errExec != nil {
+			return errExec
+		}
+	}
+	return nil
+}
+
+func migrateAuthNextRetryAfter(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	var records []AuthRecord
+	if errFind := db.
+		Where("next_retry_after IS NULL").
+		Find(&records).Error; errFind != nil {
+		return errFind
+	}
+	for _, record := range records {
+		nextRetryAt := usageObservabilityAuthJSONNextRetryAt(string(record.AuthJSON))
+		if nextRetryAt == nil || nextRetryAt.IsZero() {
+			continue
+		}
+		nextRetryValue := nextRetryAt.UTC()
+		if errUpdate := db.Model(&AuthRecord{}).
+			Where("uuid = ?", record.UUID).
+			Update("next_retry_after", nextRetryValue).Error; errUpdate != nil {
+			return errUpdate
+		}
+	}
+	return nil
 }
 
 func migrateUserUniqueUsername(db *gorm.DB) error {

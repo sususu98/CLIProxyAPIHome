@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -228,23 +227,7 @@ func (h *Handler) GetUsageRealtime(c *gin.Context) {
 	}
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
-	recordQuery := cluster.UsageObservabilityRecordQuery{
-		From:           query.From,
-		To:             query.To,
-		Provider:       query.Provider,
-		Model:          query.Model,
-		HomeIP:         query.HomeIP,
-		Endpoint:       query.Endpoint,
-		CredentialType: query.CredentialType,
-		Limit:          usageExportDefaultLimit,
-		MaxLimit:       usageExportDefaultLimit,
-	}
-	records, errRecords := h.repo.ListUsageObservabilityRecords(ctx, recordQuery)
-	if errRecords != nil {
-		respondError(c, http.StatusInternalServerError, "usage_realtime_load_failed", errRecords)
-		return
-	}
-	aggregates, errAggregates := h.repo.ListUsageObservabilityAggregates(ctx, cluster.UsageObservabilityAggregateQuery{
+	snapshot, errSnapshot := h.repo.UsageObservabilityRealtime(ctx, cluster.UsageObservabilityRealtimeQuery{
 		From:           query.From,
 		To:             query.To,
 		Provider:       query.Provider,
@@ -253,12 +236,10 @@ func (h *Handler) GetUsageRealtime(c *gin.Context) {
 		Endpoint:       query.Endpoint,
 		CredentialType: query.CredentialType,
 		GroupBy:        query.GroupBy,
-		Metric:         "request_count",
-		Direction:      "desc",
-		Limit:          20,
+		BucketSeconds:  query.BucketSeconds,
 	})
-	if errAggregates != nil {
-		respondError(c, http.StatusInternalServerError, "usage_realtime_aggregate_failed", errAggregates)
+	if errSnapshot != nil {
+		respondError(c, http.StatusInternalServerError, "usage_realtime_aggregate_failed", errSnapshot)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -266,9 +247,9 @@ func (h *Handler) GetUsageRealtime(c *gin.Context) {
 		"bucket_seconds":       query.BucketSeconds,
 		"updated_at":           time.Now().UTC().Format(time.RFC3339Nano),
 		"group_by":             query.GroupBy,
-		"velocity":             usageRealtimeVelocityResponse(records.Records, query.BucketSeconds),
-		"latency_distribution": usageLatencyDistributionResponse(records.Records),
-		"current_usage":        usageAggregateItemsResponse(aggregates.Items),
+		"velocity":             usageRealtimeVelocityPointResponse(snapshot.Velocity),
+		"latency_distribution": usageLatencyDistributionBucketResponse(snapshot.LatencyDistribution),
+		"current_usage":        usageAggregateItemsResponse(snapshot.CurrentUsage),
 	})
 }
 
@@ -370,7 +351,7 @@ func (h *Handler) getUsageHealth(c *gin.Context, subject string) {
 		respondError(c, http.StatusInternalServerError, "usage_health_load_failed", errAggregates)
 		return
 	}
-	records, errRecords := h.repo.ListUsageObservabilityRecords(ctx, cluster.UsageObservabilityRecordQuery{
+	details, errDetails := h.repo.UsageObservabilityHealthDetails(ctx, cluster.UsageObservabilityRecordQuery{
 		From:           query.From,
 		To:             query.To,
 		Provider:       query.Provider,
@@ -378,19 +359,14 @@ func (h *Handler) getUsageHealth(c *gin.Context, subject string) {
 		HomeIP:         query.HomeIP,
 		Endpoint:       query.Endpoint,
 		CredentialType: query.CredentialType,
-		Limit:          usageExportDefaultLimit,
-		MaxLimit:       usageExportDefaultLimit,
-		Sort:           "timestamp_desc",
-	})
-	if errRecords != nil {
-		respondError(c, http.StatusInternalServerError, "usage_health_records_load_failed", errRecords)
+	}, subject)
+	if errDetails != nil {
+		respondError(c, http.StatusInternalServerError, "usage_health_records_load_failed", errDetails)
 		return
 	}
-	lastErrors := usageHealthLastErrors(records.Records, subject)
-	nextRetries := usageHealthNextRetries(records.Records, subject)
 	items := make([]gin.H, 0, len(result.Items))
 	for index := range result.Items {
-		items = append(items, usageHealthItemResponse(&result.Items[index], subject, lastErrors, nextRetries))
+		items = append(items, usageHealthItemResponse(&result.Items[index], subject, details))
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"subject":        subject,
@@ -495,12 +471,6 @@ type usageHealthHTTPQuery struct {
 	CredentialType string
 	Timezone       string
 	WindowSeconds  int
-}
-
-type usageHealthLastError struct {
-	At      time.Time
-	Status  int
-	Message string
 }
 
 func parseUsageRecordHTTPQuery(c *gin.Context) (usageRecordHTTPQuery, *usageHTTPError) {
@@ -1242,88 +1212,29 @@ func usageAggregateItemsResponse(items []cluster.UsageObservabilityAggregateItem
 	return out
 }
 
-func usageRealtimeVelocityResponse(records []cluster.UsageObservabilityRecord, bucketSeconds int) []gin.H {
-	type bucket struct {
-		start        time.Time
-		end          time.Time
-		requestCount int64
-		failedCount  int64
-		totalTokens  int64
-	}
-	if bucketSeconds <= 0 {
-		bucketSeconds = 60
-	}
-	buckets := map[int64]*bucket{}
-	for _, record := range records {
-		startUnix := record.Timestamp.UTC().Unix() / int64(bucketSeconds) * int64(bucketSeconds)
-		start := time.Unix(startUnix, 0).UTC()
-		key := start.Unix()
-		item := buckets[key]
-		if item == nil {
-			item = &bucket{start: start, end: start.Add(time.Duration(bucketSeconds)*time.Second - time.Nanosecond)}
-			buckets[key] = item
-		}
-		item.requestCount++
-		if record.Failed {
-			item.failedCount++
-		}
-		item.totalTokens += record.Tokens.TotalTokens
-	}
-	keys := make([]int64, 0, len(buckets))
-	for key := range buckets {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i int, j int) bool {
-		return keys[i] < keys[j]
-	})
-	out := make([]gin.H, 0, len(keys))
-	minutes := float64(bucketSeconds) / 60
-	for _, key := range keys {
-		item := buckets[key]
-		errorRate := 0.0
-		if item.requestCount > 0 {
-			errorRate = float64(item.failedCount) / float64(item.requestCount)
-		}
+func usageRealtimeVelocityPointResponse(points []cluster.UsageObservabilityRealtimeVelocityPoint) []gin.H {
+	out := make([]gin.H, 0, len(points))
+	for index := range points {
 		out = append(out, gin.H{
-			"bucket_start": item.start.Format(time.RFC3339Nano),
-			"bucket_end":   item.end.Format(time.RFC3339Nano),
-			"rpm":          float64(item.requestCount) / minutes,
-			"tpm":          float64(item.totalTokens) / minutes,
-			"error_rate":   errorRate,
+			"bucket_start": points[index].BucketStart.UTC().Format(time.RFC3339Nano),
+			"bucket_end":   points[index].BucketEnd.UTC().Format(time.RFC3339Nano),
+			"rpm":          points[index].RPM,
+			"tpm":          points[index].TPM,
+			"error_rate":   points[index].ErrorRate,
 		})
 	}
 	return out
 }
 
-func usageLatencyDistributionResponse(records []cluster.UsageObservabilityRecord) []gin.H {
-	buckets := []struct {
-		label string
-		min   int64
-		max   int64
-	}{
-		{label: "0-500ms", min: 0, max: 500},
-		{label: "500-1000ms", min: 501, max: 1000},
-		{label: "1000-3000ms", min: 1001, max: 3000},
-		{label: "3000ms+", min: 3001, max: 0},
-	}
-	counts := make([]int64, len(buckets))
-	for _, record := range records {
-		latency := record.Performance.LatencyMS
-		for index, bucket := range buckets {
-			if latency >= bucket.min && (bucket.max == 0 || latency <= bucket.max) {
-				counts[index]++
-				break
-			}
-		}
-	}
+func usageLatencyDistributionBucketResponse(buckets []cluster.UsageObservabilityLatencyDistributionBucket) []gin.H {
 	out := make([]gin.H, 0, len(buckets))
-	for index, bucket := range buckets {
-		out = append(out, gin.H{"bucket": bucket.label, "request_count": counts[index]})
+	for index := range buckets {
+		out = append(out, gin.H{"bucket": buckets[index].Bucket, "request_count": buckets[index].RequestCount})
 	}
 	return out
 }
 
-func usageHealthItemResponse(item *cluster.UsageObservabilityAggregateItem, subject string, lastErrors map[string]usageHealthLastError, nextRetries map[string]string) gin.H {
+func usageHealthItemResponse(item *cluster.UsageObservabilityAggregateItem, subject string, details map[string]cluster.UsageObservabilityHealthDetail) gin.H {
 	if item == nil {
 		return gin.H{}
 	}
@@ -1351,19 +1262,23 @@ func usageHealthItemResponse(item *cluster.UsageObservabilityAggregateItem, subj
 	var lastErrorAt any
 	var lastErrorStatus any
 	var lastErrorMessage any
-	if lastError, ok := lastErrors[item.ID]; ok {
-		lastErrorAt = lastError.At.UTC().Format(time.RFC3339Nano)
-		if lastError.Status > 0 {
-			lastErrorStatus = lastError.Status
+	if detail, ok := details[item.ID]; ok {
+		if detail.LastErrorAt != nil {
+			lastErrorAt = detail.LastErrorAt.UTC().Format(time.RFC3339Nano)
 		}
-		lastErrorMessage = emptyStringAsNil(lastError.Message)
+		if detail.LastErrorStatus > 0 {
+			lastErrorStatus = detail.LastErrorStatus
+		}
+		lastErrorMessage = emptyStringAsNil(detail.LastErrorMessage)
 	}
 	nextRetryAt := any(nil)
 	if value, ok := metadata["next_retry_at"].(string); ok {
 		nextRetryAt = emptyStringAsNil(value)
 	}
 	if nextRetryAt == nil {
-		nextRetryAt = emptyStringAsNil(nextRetries[item.ID])
+		if detail, ok := details[item.ID]; ok && detail.NextRetryAt != nil {
+			nextRetryAt = detail.NextRetryAt.UTC().Format(time.RFC3339Nano)
+		}
 	}
 	return gin.H{
 		"id":                   item.ID,
@@ -1381,65 +1296,6 @@ func usageHealthItemResponse(item *cluster.UsageObservabilityAggregateItem, subj
 		"avg_latency_ms":       optionalFloat64Value(item.AvgLatencyMS),
 		"p95_latency_ms":       optionalFloat64Value(item.P95LatencyMS),
 	}
-}
-
-func usageHealthNextRetries(records []cluster.UsageObservabilityRecord, subject string) map[string]string {
-	out := make(map[string]string)
-	times := make(map[string]time.Time)
-	for index := range records {
-		record := records[index]
-		if record.Credential.NextRetryAt == nil || record.Credential.NextRetryAt.IsZero() {
-			continue
-		}
-		key := usageHealthRecordKey(&record, subject)
-		if key == "" {
-			continue
-		}
-		value := record.Credential.NextRetryAt.UTC()
-		current, exists := times[key]
-		if exists && !value.Before(current) {
-			continue
-		}
-		times[key] = value
-	}
-	for key, value := range times {
-		out[key] = value.Format(time.RFC3339Nano)
-	}
-	return out
-}
-
-func usageHealthLastErrors(records []cluster.UsageObservabilityRecord, subject string) map[string]usageHealthLastError {
-	out := make(map[string]usageHealthLastError)
-	for index := range records {
-		record := records[index]
-		if !record.Failed || record.Error == nil {
-			continue
-		}
-		key := usageHealthRecordKey(&record, subject)
-		if key == "" {
-			continue
-		}
-		current, exists := out[key]
-		if exists && !record.Timestamp.After(current.At) {
-			continue
-		}
-		out[key] = usageHealthLastError{
-			At:      record.Timestamp.UTC(),
-			Status:  record.Error.StatusCode,
-			Message: record.Error.Message,
-		}
-	}
-	return out
-}
-
-func usageHealthRecordKey(record *cluster.UsageObservabilityRecord, subject string) string {
-	if record == nil {
-		return ""
-	}
-	if subject == "credential" {
-		return firstNonEmptyQueryValue(record.Credential.CredentialID, "unknown")
-	}
-	return firstNonEmptyQueryValue(record.Provider, "unknown")
 }
 
 func usageHealthStatus(errorRate float64, requestCount int64) string {

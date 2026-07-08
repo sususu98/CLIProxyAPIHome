@@ -10,6 +10,79 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 )
 
+func TestUsageObservabilityAutoMigrateCreatesDashboardIndexes(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	for _, indexName := range []string{
+		"idx_usage_provider_time",
+		"idx_usage_provider_lower_time",
+		"idx_usage_home_time",
+		"idx_usage_auth_type_time",
+		"idx_usage_auth_type_normalized_time",
+		"idx_usage_failed_status_time",
+	} {
+		if !db.Migrator().HasIndex(&UsageRecord{}, indexName) {
+			t.Fatalf("usage index %s was not created", indexName)
+		}
+	}
+}
+
+func TestMigrateAuthNextRetryAfterBackfillsJSON(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	nextRetryAt := time.Date(2026, time.June, 10, 1, 30, 0, 0, time.UTC)
+	auth := &coreauth.Auth{
+		ID:             "legacy-retry-auth",
+		Index:          "legacy-retry-auth",
+		Provider:       "codex",
+		NextRetryAfter: nextRetryAt,
+		CreatedAt:      time.Date(2026, time.June, 10, 1, 0, 0, 0, time.UTC),
+		UpdatedAt:      time.Date(2026, time.June, 10, 1, 0, 0, 0, time.UTC),
+	}
+	authJSON, errMarshal := json.Marshal(auth)
+	if errMarshal != nil {
+		t.Fatalf("marshal auth: %v", errMarshal)
+	}
+	if errCreate := db.Create(&AuthRecord{
+		UUID:      auth.ID,
+		AuthJSON:  JSONB(authJSON),
+		Version:   1,
+		ID:        auth.ID,
+		Index:     auth.Index,
+		Provider:  auth.Provider,
+		CreatedAt: auth.CreatedAt,
+		UpdatedAt: auth.UpdatedAt,
+	}).Error; errCreate != nil {
+		t.Fatalf("Create(auth) error = %v", errCreate)
+	}
+	if errMigrate := migrateAuthNextRetryAfter(db); errMigrate != nil {
+		t.Fatalf("migrateAuthNextRetryAfter() error = %v", errMigrate)
+	}
+	var record AuthRecord
+	if errFirst := db.First(&record, "uuid = ?", auth.ID).Error; errFirst != nil {
+		t.Fatalf("First(auth) error = %v", errFirst)
+	}
+	if record.NextRetryAfter == nil || !record.NextRetryAfter.UTC().Equal(nextRetryAt) {
+		t.Fatalf("next_retry_after = %v, want %v", record.NextRetryAfter, nextRetryAt)
+	}
+}
+
 func TestListUsageObservabilityRecordsJoinsBillingAndMasksClientKey(t *testing.T) {
 	t.Parallel()
 
@@ -127,6 +200,62 @@ func TestGetUsageObservabilityRecordReturnsRecord(t *testing.T) {
 	}
 	if record.Client.APIKeyMasked != "clie...1234" {
 		t.Fatalf("api key mask = %q, want clie...1234", record.Client.APIKeyMasked)
+	}
+}
+
+func TestUsageObservabilityOverviewBuildsTrendWithSQLBuckets(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	seedUsageObservabilityRecord(t, ctx, repo)
+	payloads := []string{
+		`{"timestamp":"2026-06-10T01:45:00Z","provider":"openai","model":"gpt-4.1-mini","api_key":"client-key-secret-1234","request_id":"req-obs-trend-2","endpoint":"/v1/chat/completions","executor_type":"CodexWebsocketsExecutor","auth_index":"auth-observability","auth_type":"oauth","latency_ms":2460,"tokens":{"input_tokens":200,"output_tokens":100,"total_tokens":300}}`,
+		`{"timestamp":"2026-06-10T02:05:00Z","provider":"openai","model":"gpt-4.1-mini","api_key":"client-key-secret-1234","request_id":"req-obs-trend-3","endpoint":"/v1/chat/completions","executor_type":"CodexWebsocketsExecutor","auth_index":"auth-observability","auth_type":"oauth","latency_ms":500,"failed":true,"fail":{"status_code":429},"tokens":{"input_tokens":20,"output_tokens":10,"total_tokens":30}}`,
+	}
+	for index, payload := range payloads {
+		if _, errUsage := repo.AppendUsage(ctx, payload, "192.0.2.10"); errUsage != nil {
+			t.Fatalf("AppendUsage(%d) error = %v", index, errUsage)
+		}
+	}
+
+	from := time.Date(2026, time.June, 10, 1, 0, 0, 0, time.UTC)
+	to := time.Date(2026, time.June, 10, 2, 59, 59, 0, time.UTC)
+	overview, errOverview := repo.UsageObservabilityOverview(ctx, UsageObservabilityOverviewQuery{
+		From:     &from,
+		To:       &to,
+		Interval: "hour",
+		Timezone: "UTC",
+	})
+	if errOverview != nil {
+		t.Fatalf("UsageObservabilityOverview() error = %v", errOverview)
+	}
+	if len(overview.Trend) != 2 {
+		t.Fatalf("trend point count = %d, want 2", len(overview.Trend))
+	}
+
+	first := overview.Trend[0]
+	if !first.BucketStart.Equal(from) {
+		t.Fatalf("first bucket start = %v, want %v", first.BucketStart, from)
+	}
+	if first.RequestCount != 2 || first.SuccessCount != 2 || first.FailedCount != 0 {
+		t.Fatalf("first counts = requests:%d success:%d failed:%d, want 2/2/0", first.RequestCount, first.SuccessCount, first.FailedCount)
+	}
+	if first.TotalTokens != 450 {
+		t.Fatalf("first total tokens = %d, want 450", first.TotalTokens)
+	}
+	if first.AvgLatencyMS == nil || *first.AvgLatencyMS != 1960 {
+		t.Fatalf("first avg latency = %v, want 1960", first.AvgLatencyMS)
+	}
+	if first.P95LatencyMS == nil || *first.P95LatencyMS != 2460 {
+		t.Fatalf("first p95 latency = %v, want 2460", first.P95LatencyMS)
+	}
+
+	second := overview.Trend[1]
+	if second.RequestCount != 1 || second.SuccessCount != 0 || second.FailedCount != 1 {
+		t.Fatalf("second counts = requests:%d success:%d failed:%d, want 1/0/1", second.RequestCount, second.SuccessCount, second.FailedCount)
 	}
 }
 

@@ -109,6 +109,7 @@ type AuthRecord struct {
 	UpdatedAt        time.Time       `gorm:"column:updated_at"`
 	LastRefreshedAt  *time.Time      `gorm:"column:last_refreshed_at"`
 	NextRefreshAfter *time.Time      `gorm:"column:next_refresh_after"`
+	NextRetryAfter   *time.Time      `gorm:"column:next_retry_after"`
 	DeletedAt        gorm.DeletedAt  `gorm:"column:deleted_at;index;index:idx_auth_active_order,priority:1;index:idx_auth_index_active,priority:2"`
 }
 

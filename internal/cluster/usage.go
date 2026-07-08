@@ -15,7 +15,7 @@ const defaultUsageServiceTier = "default"
 
 type UsageRecord struct {
 	ID                  uint      `gorm:"column:id;primaryKey;autoIncrement;index:idx_usage_time_order,priority:2"`
-	Timestamp           time.Time `gorm:"column:timestamp;not null;index:idx_usage_timestamp;index:idx_usage_time_order,priority:1,sort:desc;index:idx_usage_source_time,priority:2,sort:desc;index:idx_usage_auth_time,priority:2,sort:desc;index:idx_usage_failed_time,priority:2,sort:desc;index:idx_usage_provider_model_time,priority:3,sort:desc;index:idx_usage_endpoint_time,priority:2,sort:desc"`
+	Timestamp           time.Time `gorm:"column:timestamp;not null;index:idx_usage_timestamp;index:idx_usage_time_order,priority:1,sort:desc;index:idx_usage_source_time,priority:2,sort:desc;index:idx_usage_auth_time,priority:2,sort:desc;index:idx_usage_failed_time,priority:2,sort:desc;index:idx_usage_failed_status_time,priority:3,sort:desc;index:idx_usage_provider_model_time,priority:3,sort:desc;index:idx_usage_provider_time,priority:2,sort:desc;index:idx_usage_endpoint_time,priority:2,sort:desc;index:idx_usage_home_time,priority:2,sort:desc;index:idx_usage_auth_type_time,priority:2,sort:desc"`
 	LatencyMS           int64     `gorm:"column:latency_ms;not null;default:0"`
 	TTFTMS              int64     `gorm:"column:ttft_ms;not null;default:0"`
 	Source              string    `gorm:"column:source;index:idx_usage_source;index:idx_usage_source_time,priority:1"`
@@ -27,20 +27,20 @@ type UsageRecord struct {
 	CacheReadTokens     int64     `gorm:"column:cache_read_tokens;not null;default:0"`
 	CacheCreationTokens int64     `gorm:"column:cache_creation_tokens;not null;default:0"`
 	TotalTokens         int64     `gorm:"column:total_tokens;not null;default:0"`
-	Failed              bool      `gorm:"column:failed;not null;default:false;index:idx_usage_failed;index:idx_usage_failed_time,priority:1"`
-	FailStatusCode      int       `gorm:"column:fail_status_code;not null;default:0"`
+	Failed              bool      `gorm:"column:failed;not null;default:false;index:idx_usage_failed;index:idx_usage_failed_time,priority:1;index:idx_usage_failed_status_time,priority:1"`
+	FailStatusCode      int       `gorm:"column:fail_status_code;not null;default:0;index:idx_usage_failed_status_time,priority:2"`
 	FailBody            string    `gorm:"column:fail_body;type:text"`
-	Provider            string    `gorm:"column:provider;index:idx_usage_provider_model,priority:1;index:idx_usage_provider_model_time,priority:1"`
+	Provider            string    `gorm:"column:provider;index:idx_usage_provider_model,priority:1;index:idx_usage_provider_model_time,priority:1;index:idx_usage_provider_time,priority:1"`
 	ExecutorType        string    `gorm:"column:executor_type"`
 	Model               string    `gorm:"column:model;index:idx_usage_provider_model,priority:2;index:idx_usage_provider_model_time,priority:2"`
 	Alias               string    `gorm:"column:alias"`
 	Effort              string    `gorm:"column:effort"`
 	ServiceTier         string    `gorm:"column:service_tier"`
 	Endpoint            string    `gorm:"column:endpoint;index:idx_usage_endpoint;index:idx_usage_endpoint_time,priority:1"`
-	AuthType            string    `gorm:"column:auth_type"`
+	AuthType            string    `gorm:"column:auth_type;index:idx_usage_auth_type_time,priority:1"`
 	APIKey              string    `gorm:"column:api_key;index:idx_usage_api_key"`
 	RequestID           string    `gorm:"column:request_id;index:idx_usage_request_id"`
-	HomeIP              string    `gorm:"column:home_ip;index:idx_usage_home_ip"`
+	HomeIP              string    `gorm:"column:home_ip;index:idx_usage_home_ip;index:idx_usage_home_time,priority:1"`
 	TokensJSON          JSONB     `gorm:"column:tokens"`
 	FailJSON            JSONB     `gorm:"column:fail"`
 	PayloadJSON         JSONB     `gorm:"column:payload;not null"`

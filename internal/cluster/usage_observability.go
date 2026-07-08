@@ -361,6 +361,7 @@ type usageObservabilityRecordRow struct {
 	AuthDisabled         bool            `gorm:"column:auth_disabled"`
 	AuthUnavailable      bool            `gorm:"column:auth_unavailable"`
 	AuthNextRefreshAfter sql.NullTime    `gorm:"column:auth_next_refresh_after"`
+	AuthNextRetryAfter   sql.NullTime    `gorm:"column:auth_next_retry_after"`
 }
 
 type usageObservabilityAggregateRow struct {
@@ -377,7 +378,7 @@ type usageObservabilityAggregateRow struct {
 	MetadataCredentialProvider string          `gorm:"column:metadata_credential_provider"`
 	MetadataCredentialLabel    string          `gorm:"column:metadata_credential_label"`
 	MetadataAuthUUID           string          `gorm:"column:metadata_auth_uuid"`
-	MetadataAuthJSON           JSONB           `gorm:"column:metadata_auth_json"`
+	MetadataAuthNextRetryAt    string          `gorm:"column:metadata_auth_next_retry_at"`
 	MetadataAuthStatus         string          `gorm:"column:metadata_auth_status"`
 	MetadataAuthDisabled       int64           `gorm:"column:metadata_auth_disabled"`
 	MetadataAuthUnavailable    int64           `gorm:"column:metadata_auth_unavailable"`
@@ -399,12 +400,132 @@ type usageObservabilityAggregateRow struct {
 	LastUsedAt                 string          `gorm:"column:last_used_at"`
 }
 
+type UsageObservabilityRealtimeQuery struct {
+	From           *time.Time
+	To             *time.Time
+	Provider       string
+	Model          string
+	HomeIP         string
+	Endpoint       string
+	CredentialType string
+	GroupBy        string
+	BucketSeconds  int
+}
+
+type UsageObservabilityRealtimeSnapshot struct {
+	Velocity            []UsageObservabilityRealtimeVelocityPoint
+	LatencyDistribution []UsageObservabilityLatencyDistributionBucket
+	CurrentUsage        []UsageObservabilityAggregateItem
+}
+
+type UsageObservabilityRealtimeVelocityPoint struct {
+	BucketStart time.Time
+	BucketEnd   time.Time
+	RPM         float64
+	TPM         float64
+	ErrorRate   float64
+}
+
+type UsageObservabilityLatencyDistributionBucket struct {
+	Bucket       string
+	RequestCount int64
+}
+
+type UsageObservabilityHealthDetail struct {
+	LastErrorAt      *time.Time
+	LastErrorStatus  int
+	LastErrorMessage string
+	NextRetryAt      *time.Time
+}
+
 type usageObservabilityAggregateAccumulator struct {
 	Item          UsageObservabilityAggregateItem
 	LatencyValues []int64
 	LatencyTotal  int64
 	AmountTotal   float64
 	AmountValid   bool
+}
+
+type usageObservabilityOverviewBounds struct {
+	MinTimestamp sql.NullString `gorm:"column:min_timestamp"`
+	MaxTimestamp sql.NullString `gorm:"column:max_timestamp"`
+}
+
+type usageObservabilityTotalsRow struct {
+	RequestCount          int64           `gorm:"column:request_count"`
+	SuccessCount          sql.NullInt64   `gorm:"column:success_count"`
+	FailedCount           sql.NullInt64   `gorm:"column:failed_count"`
+	InputTokens           sql.NullInt64   `gorm:"column:input_tokens"`
+	OutputTokens          sql.NullInt64   `gorm:"column:output_tokens"`
+	ReasoningTokens       sql.NullInt64   `gorm:"column:reasoning_tokens"`
+	CachedTokens          sql.NullInt64   `gorm:"column:cached_tokens"`
+	CacheReadTokens       sql.NullInt64   `gorm:"column:cache_read_tokens"`
+	CacheCreationTokens   sql.NullInt64   `gorm:"column:cache_creation_tokens"`
+	TotalTokens           sql.NullInt64   `gorm:"column:total_tokens"`
+	TotalAmount           sql.NullFloat64 `gorm:"column:total_amount"`
+	AvgLatencyMS          sql.NullFloat64 `gorm:"column:avg_latency_ms"`
+	AvgTTFTMS             sql.NullFloat64 `gorm:"column:avg_ttft_ms"`
+	ActiveUserCount       int64           `gorm:"column:active_user_count"`
+	ActiveClientKeyCount  int64           `gorm:"column:active_client_key_count"`
+	ActiveCredentialCount int64           `gorm:"column:active_credential_count"`
+	ActiveModelCount      int64           `gorm:"column:active_model_count"`
+	MinTimestamp          sql.NullString  `gorm:"column:min_timestamp"`
+	MaxTimestamp          sql.NullString  `gorm:"column:max_timestamp"`
+}
+
+type usageObservabilityLatencyPercentileRow struct {
+	P50LatencyMS sql.NullFloat64 `gorm:"column:p50_latency_ms"`
+	P95LatencyMS sql.NullFloat64 `gorm:"column:p95_latency_ms"`
+}
+
+type usageObservabilityTrendBucketRow struct {
+	BucketUnix          int64           `gorm:"column:bucket_unix"`
+	RequestCount        int64           `gorm:"column:request_count"`
+	SuccessCount        sql.NullInt64   `gorm:"column:success_count"`
+	FailedCount         sql.NullInt64   `gorm:"column:failed_count"`
+	InputTokens         sql.NullInt64   `gorm:"column:input_tokens"`
+	OutputTokens        sql.NullInt64   `gorm:"column:output_tokens"`
+	ReasoningTokens     sql.NullInt64   `gorm:"column:reasoning_tokens"`
+	CachedTokens        sql.NullInt64   `gorm:"column:cached_tokens"`
+	CacheReadTokens     sql.NullInt64   `gorm:"column:cache_read_tokens"`
+	CacheCreationTokens sql.NullInt64   `gorm:"column:cache_creation_tokens"`
+	TotalTokens         sql.NullInt64   `gorm:"column:total_tokens"`
+	TotalAmount         sql.NullFloat64 `gorm:"column:total_amount"`
+	AvgLatencyMS        sql.NullFloat64 `gorm:"column:avg_latency_ms"`
+}
+
+type usageObservabilityTrendPercentileRow struct {
+	BucketUnix   int64           `gorm:"column:bucket_unix"`
+	P95LatencyMS sql.NullFloat64 `gorm:"column:p95_latency_ms"`
+}
+
+type usageObservabilityRealtimeVelocityRow struct {
+	BucketUnix   int64         `gorm:"column:bucket_unix"`
+	RequestCount int64         `gorm:"column:request_count"`
+	FailedCount  sql.NullInt64 `gorm:"column:failed_count"`
+	TotalTokens  sql.NullInt64 `gorm:"column:total_tokens"`
+}
+
+type usageObservabilityLatencyDistributionRow struct {
+	Bucket       string `gorm:"column:bucket"`
+	RequestCount int64  `gorm:"column:request_count"`
+}
+
+type usageObservabilityHealthLastErrorRow struct {
+	SubjectID      string    `gorm:"column:subject_id"`
+	UsageID        uint      `gorm:"column:usage_id"`
+	Timestamp      time.Time `gorm:"column:timestamp"`
+	FailStatusCode int       `gorm:"column:fail_status_code"`
+}
+
+type usageObservabilityHealthLastErrorBodyRow struct {
+	UsageID  uint   `gorm:"column:usage_id"`
+	FailBody string `gorm:"column:fail_body"`
+}
+
+type usageObservabilityHealthNextRetryRow struct {
+	SubjectID   string `gorm:"column:subject_id"`
+	NextRetryAt string `gorm:"column:next_retry_at"`
 }
 
 func (r *Repository) ListUsageObservabilityRecords(ctx context.Context, query UsageObservabilityRecordQuery) (UsageObservabilityRecordListResult, error) {
@@ -560,6 +681,56 @@ func (r *Repository) UsageObservabilityOverview(ctx context.Context, query Usage
 	if errDB != nil {
 		return UsageObservabilityOverview{}, errDB
 	}
+	db = db.WithContext(contextOrBackground(ctx))
+	recordQuery := usageObservabilityOverviewRecordQuery(query)
+	totals, bounds, errTotals := usageObservabilityTotalsSQL(db, recordQuery)
+	if errTotals != nil {
+		return UsageObservabilityOverview{}, errTotals
+	}
+
+	interval := usageObservabilityOverviewIntervalFromBounds(query.Interval, query.From, query.To, bounds)
+	location := usageObservabilityLocation(query.Timezone)
+	overview := UsageObservabilityOverview{
+		Range: UsageObservabilityOverviewRange{
+			From:     usageObservabilityRangeTimeFromBounds(query.From, bounds, true),
+			To:       usageObservabilityRangeTimeFromBounds(query.To, bounds, false),
+			Timezone: firstNonEmptyUsageObservabilityString(query.Timezone, "UTC"),
+			Interval: interval,
+		},
+		Totals:          totals,
+		CostBreakdown:   []UsageObservabilityCostBreakdownItem{},
+		ModelEfficiency: []UsageObservabilityAggregateItem{},
+	}
+	live, errLive := usageObservabilityLiveSQL(db, recordQuery, 300)
+	if errLive != nil {
+		return UsageObservabilityOverview{}, errLive
+	}
+	overview.Live = live
+	trend, errTrend := usageObservabilityTrendSQL(db, recordQuery, interval, location)
+	if errTrend != nil {
+		return UsageObservabilityOverview{}, errTrend
+	}
+	overview.Trend = trend
+	overview.Activity = usageObservabilityActivity(overview.Trend)
+	modelEfficiency, errModelEfficiency := usageObservabilityAggregateItemsSQL(db, recordQuery, "model", "total_tokens", "desc", 10)
+	if errModelEfficiency != nil {
+		return UsageObservabilityOverview{}, errModelEfficiency
+	}
+	overview.ModelEfficiency = modelEfficiency
+	top, errTop := usageObservabilityTopSQL(db, recordQuery)
+	if errTop != nil {
+		return UsageObservabilityOverview{}, errTop
+	}
+	overview.Top = top
+	return overview, nil
+}
+
+func (r *Repository) UsageObservabilityRealtime(ctx context.Context, query UsageObservabilityRealtimeQuery) (UsageObservabilityRealtimeSnapshot, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return UsageObservabilityRealtimeSnapshot{}, errDB
+	}
+	db = db.WithContext(contextOrBackground(ctx))
 	recordQuery := UsageObservabilityRecordQuery{
 		From:           query.From,
 		To:             query.To,
@@ -569,35 +740,648 @@ func (r *Repository) UsageObservabilityOverview(ctx context.Context, query Usage
 		Endpoint:       query.Endpoint,
 		CredentialType: query.CredentialType,
 	}
-	var rows []usageObservabilityRecordRow
-	scope := usageObservabilityRecordScope(db.WithContext(contextOrBackground(ctx)).Table("usage"), recordQuery)
-	if errFind := scope.Session(&gorm.Session{}).Select(usageObservabilityRecordSelect()).Scan(&rows).Error; errFind != nil {
-		return UsageObservabilityOverview{}, errFind
+	velocity, errVelocity := usageObservabilityRealtimeVelocitySQL(db, recordQuery, query.BucketSeconds)
+	if errVelocity != nil {
+		return UsageObservabilityRealtimeSnapshot{}, errVelocity
+	}
+	latencyDistribution, errLatencyDistribution := usageObservabilityLatencyDistributionSQL(db, recordQuery)
+	if errLatencyDistribution != nil {
+		return UsageObservabilityRealtimeSnapshot{}, errLatencyDistribution
+	}
+	currentUsage, errCurrentUsage := usageObservabilityAggregateItemsSQL(db, recordQuery, query.GroupBy, "request_count", "desc", 20)
+	if errCurrentUsage != nil {
+		return UsageObservabilityRealtimeSnapshot{}, errCurrentUsage
+	}
+	return UsageObservabilityRealtimeSnapshot{Velocity: velocity, LatencyDistribution: latencyDistribution, CurrentUsage: currentUsage}, nil
+}
+
+func (r *Repository) UsageObservabilityHealthDetails(ctx context.Context, query UsageObservabilityRecordQuery, subject string) (map[string]UsageObservabilityHealthDetail, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	db = db.WithContext(contextOrBackground(ctx))
+	details := map[string]UsageObservabilityHealthDetail{}
+	lastErrors, errLastErrors := usageObservabilityHealthLastErrorsSQL(db, query, subject)
+	if errLastErrors != nil {
+		return nil, errLastErrors
+	}
+	for key, detail := range lastErrors {
+		details[key] = detail
+	}
+	nextRetries, errNextRetries := usageObservabilityHealthNextRetriesSQL(db, query, subject)
+	if errNextRetries != nil {
+		return nil, errNextRetries
+	}
+	for key, nextRetryAt := range nextRetries {
+		detail := details[key]
+		nextRetryValue := nextRetryAt.UTC()
+		detail.NextRetryAt = &nextRetryValue
+		details[key] = detail
+	}
+	return details, nil
+}
+
+func usageObservabilityOverviewRecordQuery(query UsageObservabilityOverviewQuery) UsageObservabilityRecordQuery {
+	return UsageObservabilityRecordQuery{
+		From:           query.From,
+		To:             query.To,
+		Provider:       query.Provider,
+		Model:          query.Model,
+		HomeIP:         query.HomeIP,
+		Endpoint:       query.Endpoint,
+		CredentialType: query.CredentialType,
+	}
+}
+
+func usageObservabilityTotalsSQL(db *gorm.DB, query UsageObservabilityRecordQuery) (UsageObservabilityTotals, usageObservabilityOverviewBounds, error) {
+	var row usageObservabilityTotalsRow
+	scope := usageObservabilityRecordScope(db.Table("usage"), query)
+	if errScan := scope.Session(&gorm.Session{}).Select(usageObservabilityTotalsSQLSelect()).Scan(&row).Error; errScan != nil {
+		return UsageObservabilityTotals{}, usageObservabilityOverviewBounds{}, errScan
+	}
+	totals := usageObservabilityTotalsFromRow(&row)
+	percentiles, errPercentiles := usageObservabilityLatencyPercentilesSQL(db, query)
+	if errPercentiles != nil {
+		return UsageObservabilityTotals{}, usageObservabilityOverviewBounds{}, errPercentiles
+	}
+	if percentiles.P50LatencyMS.Valid {
+		p50 := percentiles.P50LatencyMS.Float64
+		totals.P50LatencyMS = &p50
+	}
+	if percentiles.P95LatencyMS.Valid {
+		p95 := percentiles.P95LatencyMS.Float64
+		totals.P95LatencyMS = &p95
+	}
+	bounds := usageObservabilityOverviewBounds{MinTimestamp: row.MinTimestamp, MaxTimestamp: row.MaxTimestamp}
+	return totals, bounds, nil
+}
+
+func usageObservabilityTotalsSQLSelect() string {
+	credentialExpr := `NULLIF(` + usageObservabilitySQLCredentialID() + `, '')`
+	return fmt.Sprintf(`
+		COUNT(DISTINCT "usage"."id") AS request_count,
+		SUM(CASE WHEN "usage"."failed" THEN 0 ELSE 1 END) AS success_count,
+		SUM(CASE WHEN "usage"."failed" THEN 1 ELSE 0 END) AS failed_count,
+		SUM("usage"."input_tokens") AS input_tokens,
+		SUM("usage"."output_tokens") AS output_tokens,
+		SUM("usage"."reasoning_tokens") AS reasoning_tokens,
+		SUM("usage"."cached_tokens") AS cached_tokens,
+		SUM("usage"."cache_read_tokens") AS cache_read_tokens,
+		SUM("usage"."cache_creation_tokens") AS cache_creation_tokens,
+		SUM("usage"."total_tokens") AS total_tokens,
+		SUM("billing_charge"."amount") AS total_amount,
+		AVG(CASE WHEN "usage"."latency_ms" >= 0 THEN "usage"."latency_ms" END) AS avg_latency_ms,
+		AVG(CASE WHEN "usage"."ttft_ms" > 0 THEN "usage"."ttft_ms" END) AS avg_ttft_ms,
+		COUNT(DISTINCT COALESCE("billing_charge"."user_id", "api_key"."user_id")) AS active_user_count,
+		COUNT(DISTINCT COALESCE("billing_charge"."api_key_id", "api_key"."id")) AS active_client_key_count,
+		COUNT(DISTINCT %s) AS active_credential_count,
+		COUNT(DISTINCT NULLIF("usage"."model", '')) AS active_model_count,
+		MIN("usage"."timestamp") AS min_timestamp,
+		MAX("usage"."timestamp") AS max_timestamp`, credentialExpr)
+}
+
+func usageObservabilityTotalsFromRow(row *usageObservabilityTotalsRow) UsageObservabilityTotals {
+	if row == nil {
+		return UsageObservabilityTotals{}
+	}
+	totals := UsageObservabilityTotals{
+		RequestCount:          row.RequestCount,
+		SuccessCount:          optionalSQLInt64Value(row.SuccessCount),
+		FailedCount:           optionalSQLInt64Value(row.FailedCount),
+		InputTokens:           optionalSQLInt64Value(row.InputTokens),
+		OutputTokens:          optionalSQLInt64Value(row.OutputTokens),
+		ReasoningTokens:       optionalSQLInt64Value(row.ReasoningTokens),
+		CachedTokens:          optionalSQLInt64Value(row.CachedTokens),
+		CacheReadTokens:       optionalSQLInt64Value(row.CacheReadTokens),
+		CacheCreationTokens:   optionalSQLInt64Value(row.CacheCreationTokens),
+		TotalTokens:           optionalSQLInt64Value(row.TotalTokens),
+		ActiveUserCount:       row.ActiveUserCount,
+		ActiveClientKeyCount:  row.ActiveClientKeyCount,
+		ActiveCredentialCount: row.ActiveCredentialCount,
+		ActiveModelCount:      row.ActiveModelCount,
+	}
+	if totals.RequestCount > 0 {
+		totals.SuccessRate = float64(totals.SuccessCount) / float64(totals.RequestCount)
+		totals.ErrorRate = float64(totals.FailedCount) / float64(totals.RequestCount)
+	}
+	if row.TotalAmount.Valid {
+		amount := row.TotalAmount.Float64
+		totals.TotalAmount = &amount
+		totals.Currency = UsageObservabilityCurrencyCredits
+	}
+	if row.AvgLatencyMS.Valid {
+		avg := row.AvgLatencyMS.Float64
+		totals.AvgLatencyMS = &avg
+	}
+	if row.AvgTTFTMS.Valid {
+		avgTTFT := row.AvgTTFTMS.Float64
+		totals.AvgTTFTMS = &avgTTFT
+	}
+	if totals.TotalAmount != nil && totals.TotalTokens > 0 {
+		blended := *totals.TotalAmount * 1000000 / float64(totals.TotalTokens)
+		totals.BlendedCostPer1M = &blended
+	}
+	return totals
+}
+
+func optionalSQLInt64Value(value sql.NullInt64) int64 {
+	if !value.Valid {
+		return 0
+	}
+	return value.Int64
+}
+
+func usageObservabilityLatencyPercentilesSQL(db *gorm.DB, query UsageObservabilityRecordQuery) (usageObservabilityLatencyPercentileRow, error) {
+	base := usageObservabilityNarrowUsageScope(db.Table("usage"), query).
+		Select(`"usage"."latency_ms" AS latency_ms`).
+		Where(`"usage"."latency_ms" >= ?`, 0)
+	ranked := db.Table("(?) AS scoped_latency", base).
+		Select(`
+			scoped_latency.latency_ms AS latency_ms,
+			COUNT(*) OVER () AS latency_count,
+			ROW_NUMBER() OVER (ORDER BY scoped_latency.latency_ms ASC) AS latency_rank`)
+	var row usageObservabilityLatencyPercentileRow
+	if errScan := db.Table("(?) AS ranked_latency", ranked).
+		Select(`
+			MIN(CASE WHEN ranked_latency.latency_rank * 100 >= ranked_latency.latency_count * 50 THEN ranked_latency.latency_ms END) AS p50_latency_ms,
+			MIN(CASE WHEN ranked_latency.latency_rank * 100 >= ranked_latency.latency_count * 95 THEN ranked_latency.latency_ms END) AS p95_latency_ms`).
+		Scan(&row).Error; errScan != nil {
+		return usageObservabilityLatencyPercentileRow{}, errScan
+	}
+	return row, nil
+}
+
+func usageObservabilityLiveSQL(db *gorm.DB, query UsageObservabilityRecordQuery, windowSeconds int) (UsageObservabilityLiveSummary, error) {
+	if windowSeconds <= 0 {
+		windowSeconds = 300
+	}
+	cutoff := time.Now().UTC().Add(-time.Duration(windowSeconds) * time.Second)
+	liveQuery := query
+	if liveQuery.From == nil || liveQuery.From.Before(cutoff) {
+		liveQuery.From = &cutoff
+	}
+	totals, _, errTotals := usageObservabilityTotalsSQL(db, liveQuery)
+	if errTotals != nil {
+		return UsageObservabilityLiveSummary{}, errTotals
+	}
+	live := UsageObservabilityLiveSummary{
+		WindowSeconds: windowSeconds,
+		ErrorRate:     totals.ErrorRate,
+		SuccessRate:   totals.SuccessRate,
+		P50LatencyMS:  totals.P50LatencyMS,
+		P95LatencyMS:  totals.P95LatencyMS,
+	}
+	minutes := float64(windowSeconds) / 60
+	if minutes > 0 {
+		live.RPM = float64(totals.RequestCount) / minutes
+		live.TPM = float64(totals.TotalTokens) / minutes
+	}
+	return live, nil
+}
+
+func usageObservabilityTrendSQL(db *gorm.DB, query UsageObservabilityRecordQuery, interval string, location *time.Location) ([]UsageObservabilityTrendPoint, error) {
+	bucketExpr, bucketArgs := usageObservabilityTrendBucketUnixSQL(db, interval, location, query)
+	baseSelect := fmt.Sprintf(`
+		%s AS bucket_unix,
+		"usage"."latency_ms" AS latency_ms,
+		"usage"."input_tokens" AS input_tokens,
+		"usage"."output_tokens" AS output_tokens,
+		"usage"."reasoning_tokens" AS reasoning_tokens,
+		"usage"."cached_tokens" AS cached_tokens,
+		"usage"."cache_read_tokens" AS cache_read_tokens,
+		"usage"."cache_creation_tokens" AS cache_creation_tokens,
+		"usage"."total_tokens" AS total_tokens,
+		"usage"."failed" AS failed,
+		"billing_charge"."amount" AS amount`, bucketExpr)
+	base := usageObservabilityUsageBillingScope(db.Table("usage"), query).Select(baseSelect, bucketArgs...)
+	var rows []usageObservabilityTrendBucketRow
+	if errFind := db.Table("(?) AS trend_source", base).
+		Select(`
+			trend_source.bucket_unix AS bucket_unix,
+			COUNT(*) AS request_count,
+			SUM(CASE WHEN trend_source.failed THEN 0 ELSE 1 END) AS success_count,
+			SUM(CASE WHEN trend_source.failed THEN 1 ELSE 0 END) AS failed_count,
+			SUM(trend_source.input_tokens) AS input_tokens,
+			SUM(trend_source.output_tokens) AS output_tokens,
+			SUM(trend_source.reasoning_tokens) AS reasoning_tokens,
+			SUM(trend_source.cached_tokens) AS cached_tokens,
+			SUM(trend_source.cache_read_tokens) AS cache_read_tokens,
+			SUM(trend_source.cache_creation_tokens) AS cache_creation_tokens,
+			SUM(trend_source.total_tokens) AS total_tokens,
+			SUM(trend_source.amount) AS total_amount,
+			AVG(CASE WHEN trend_source.latency_ms >= 0 THEN trend_source.latency_ms END) AS avg_latency_ms`).
+		Group("trend_source.bucket_unix").
+		Order("trend_source.bucket_unix ASC").
+		Scan(&rows).Error; errFind != nil {
+		return nil, errFind
 	}
 
-	interval := usageObservabilityOverviewInterval(query.Interval, query.From, query.To, rows)
-	location := usageObservabilityLocation(query.Timezone)
-	overview := UsageObservabilityOverview{
-		Range: UsageObservabilityOverviewRange{
-			From:     usageObservabilityRangeTime(query.From, rows, true),
-			To:       usageObservabilityRangeTime(query.To, rows, false),
-			Timezone: firstNonEmptyUsageObservabilityString(query.Timezone, "UTC"),
-			Interval: interval,
-		},
-		CostBreakdown:   []UsageObservabilityCostBreakdownItem{},
-		ModelEfficiency: []UsageObservabilityAggregateItem{},
+	percentiles, errPercentiles := usageObservabilityTrendP95SQL(db, query, bucketExpr, bucketArgs)
+	if errPercentiles != nil {
+		return nil, errPercentiles
 	}
-	overview.Totals = usageObservabilityTotals(rows)
-	overview.Live = usageObservabilityLive(rows, 300)
-	overview.Trend = usageObservabilityTrend(rows, interval, location)
-	overview.Activity = usageObservabilityActivity(overview.Trend)
-	overview.ModelEfficiency = usageObservabilityTopItems(rows, "model", "total_tokens", "desc", 10)
-	overview.Top = usageObservabilityTop(rows)
-	return overview, nil
+	return usageObservabilityTrendFromBucketRows(rows, percentiles, interval, location), nil
+}
+
+func usageObservabilityTrendP95SQL(db *gorm.DB, query UsageObservabilityRecordQuery, bucketExpr string, bucketArgs []any) (map[int64]sql.NullFloat64, error) {
+	baseSelect := fmt.Sprintf(`
+		%s AS bucket_unix,
+		"usage"."latency_ms" AS latency_ms`, bucketExpr)
+	base := usageObservabilityNarrowUsageScope(db.Table("usage"), query).
+		Select(baseSelect, bucketArgs...).
+		Where(`"usage"."latency_ms" >= ?`, 0)
+	ranked := db.Table("(?) AS trend_latency", base).
+		Select(`
+			trend_latency.bucket_unix AS bucket_unix,
+			trend_latency.latency_ms AS latency_ms,
+			COUNT(*) OVER (PARTITION BY trend_latency.bucket_unix) AS latency_count,
+			ROW_NUMBER() OVER (PARTITION BY trend_latency.bucket_unix ORDER BY trend_latency.latency_ms ASC) AS latency_rank`)
+	var rows []usageObservabilityTrendPercentileRow
+	if errScan := db.Table("(?) AS ranked_latency", ranked).
+		Select(`
+			ranked_latency.bucket_unix AS bucket_unix,
+			MIN(ranked_latency.latency_ms) AS p95_latency_ms`).
+		Where("ranked_latency.latency_rank * 100 >= ranked_latency.latency_count * 95").
+		Group("ranked_latency.bucket_unix").
+		Scan(&rows).Error; errScan != nil {
+		return nil, errScan
+	}
+	percentiles := make(map[int64]sql.NullFloat64, len(rows))
+	for index := range rows {
+		percentiles[rows[index].BucketUnix] = rows[index].P95LatencyMS
+	}
+	return percentiles, nil
+}
+
+func usageObservabilityTrendFromBucketRows(rows []usageObservabilityTrendBucketRow, percentiles map[int64]sql.NullFloat64, interval string, location *time.Location) []UsageObservabilityTrendPoint {
+	points := make([]UsageObservabilityTrendPoint, 0, len(rows))
+	for index := range rows {
+		start, end := usageObservabilityBucketRange(time.Unix(rows[index].BucketUnix, 0).UTC(), interval, location)
+		point := UsageObservabilityTrendPoint{
+			BucketStart:         start,
+			BucketEnd:           end,
+			RequestCount:        rows[index].RequestCount,
+			SuccessCount:        optionalSQLInt64Value(rows[index].SuccessCount),
+			FailedCount:         optionalSQLInt64Value(rows[index].FailedCount),
+			InputTokens:         optionalSQLInt64Value(rows[index].InputTokens),
+			OutputTokens:        optionalSQLInt64Value(rows[index].OutputTokens),
+			ReasoningTokens:     optionalSQLInt64Value(rows[index].ReasoningTokens),
+			CachedTokens:        optionalSQLInt64Value(rows[index].CachedTokens),
+			CacheReadTokens:     optionalSQLInt64Value(rows[index].CacheReadTokens),
+			CacheCreationTokens: optionalSQLInt64Value(rows[index].CacheCreationTokens),
+			TotalTokens:         optionalSQLInt64Value(rows[index].TotalTokens),
+		}
+		if rows[index].TotalAmount.Valid {
+			amount := rows[index].TotalAmount.Float64
+			point.TotalAmount = &amount
+		}
+		if rows[index].AvgLatencyMS.Valid {
+			avg := rows[index].AvgLatencyMS.Float64
+			point.AvgLatencyMS = &avg
+		}
+		if percentile, ok := percentiles[rows[index].BucketUnix]; ok && percentile.Valid {
+			p95 := percentile.Float64
+			point.P95LatencyMS = &p95
+		}
+		points = append(points, point)
+	}
+	return points
+}
+
+func usageObservabilityTrendBucketUnixSQL(db *gorm.DB, interval string, location *time.Location, query UsageObservabilityRecordQuery) (string, []any) {
+	bucketSeconds := int64(86400)
+	subtractSeconds := int64(0)
+	switch interval {
+	case "minute":
+		bucketSeconds = 60
+	case "hour":
+		bucketSeconds = 3600
+	case "week":
+		bucketSeconds = 604800
+		subtractSeconds = 4 * 86400
+	}
+	if db != nil && db.Dialector != nil && db.Dialector.Name() == "postgres" {
+		datePart := "day"
+		switch interval {
+		case "minute":
+			datePart = "minute"
+		case "hour":
+			datePart = "hour"
+		case "week":
+			datePart = "week"
+		}
+		timezoneName := "UTC"
+		if location != nil {
+			timezoneName = location.String()
+		}
+		return fmt.Sprintf(`CAST(EXTRACT(EPOCH FROM (date_trunc('%s', timezone(?, "usage"."timestamp")) AT TIME ZONE ?)) AS BIGINT)`, datePart), []any{timezoneName, timezoneName}
+	}
+	offsetSeconds := int64(usageObservabilityTimezoneOffsetSeconds(location, query))
+	return `CAST(((CAST(strftime('%s', "usage"."timestamp") AS INTEGER) + ? - ?) / ?) AS INTEGER) * ? - ? + ?`, []any{offsetSeconds, subtractSeconds, bucketSeconds, bucketSeconds, offsetSeconds, subtractSeconds}
+}
+
+func usageObservabilityTimezoneOffsetSeconds(location *time.Location, query UsageObservabilityRecordQuery) int {
+	if location == nil {
+		location = time.UTC
+	}
+	reference := time.Now().UTC()
+	if query.From != nil {
+		reference = query.From.UTC()
+	} else if query.To != nil {
+		reference = query.To.UTC()
+	}
+	_, offset := reference.In(location).Zone()
+	return offset
+}
+
+func usageObservabilityTopSQL(db *gorm.DB, query UsageObservabilityRecordQuery) (UsageObservabilityTopGroups, error) {
+	users, errUsers := usageObservabilityAggregateItemsSQL(db, query, "user", "request_count", "desc", 10)
+	if errUsers != nil {
+		return UsageObservabilityTopGroups{}, errUsers
+	}
+	clientKeys, errClientKeys := usageObservabilityAggregateItemsSQL(db, query, "client_key", "request_count", "desc", 10)
+	if errClientKeys != nil {
+		return UsageObservabilityTopGroups{}, errClientKeys
+	}
+	credentials, errCredentials := usageObservabilityAggregateItemsSQL(db, query, "credential", "request_count", "desc", 10)
+	if errCredentials != nil {
+		return UsageObservabilityTopGroups{}, errCredentials
+	}
+	providers, errProviders := usageObservabilityAggregateItemsSQL(db, query, "provider", "request_count", "desc", 10)
+	if errProviders != nil {
+		return UsageObservabilityTopGroups{}, errProviders
+	}
+	models, errModels := usageObservabilityAggregateItemsSQL(db, query, "model", "request_count", "desc", 10)
+	if errModels != nil {
+		return UsageObservabilityTopGroups{}, errModels
+	}
+	endpoints, errEndpoints := usageObservabilityAggregateItemsSQL(db, query, "endpoint", "request_count", "desc", 10)
+	if errEndpoints != nil {
+		return UsageObservabilityTopGroups{}, errEndpoints
+	}
+	errorQuery := query
+	errorQuery.Status = "failed"
+	errors, errErrors := usageObservabilityAggregateItemsSQL(db, errorQuery, "status_code", "failed_count", "desc", 10)
+	if errErrors != nil {
+		return UsageObservabilityTopGroups{}, errErrors
+	}
+	return UsageObservabilityTopGroups{
+		Users:       users,
+		ClientKeys:  clientKeys,
+		Credentials: credentials,
+		Providers:   providers,
+		Models:      models,
+		Endpoints:   endpoints,
+		Errors:      errors,
+	}, nil
+}
+
+func usageObservabilityAggregateItemsSQL(db *gorm.DB, query UsageObservabilityRecordQuery, groupBy string, metric string, direction string, limit int) ([]UsageObservabilityAggregateItem, error) {
+	if limit <= 0 {
+		limit = UsageObservabilityDefaultGroupLimit
+	}
+	includeP95ForSort := strings.TrimSpace(metric) == "p95_latency_ms"
+	baseForItems := usageObservabilityAggregateBaseQuery(db, query, groupBy)
+	itemsQuery := db.Table("(?) AS scoped", baseForItems)
+	if includeP95ForSort {
+		p95Query := usageObservabilityAggregateP95Query(db, query, groupBy)
+		itemsQuery = itemsQuery.Joins("LEFT JOIN (?) AS p95 ON p95.aggregate_id = scoped.aggregate_id", p95Query)
+	}
+	var rows []usageObservabilityAggregateRow
+	if errFind := itemsQuery.
+		Select(usageObservabilityAggregateSQLSelect(includeP95ForSort)).
+		Group("scoped.aggregate_id").
+		Order(usageObservabilityAggregateSQLOrder(metric, direction)).
+		Limit(limit).
+		Scan(&rows).Error; errFind != nil {
+		return nil, errFind
+	}
+	if !includeP95ForSort && len(rows) > 0 {
+		p95Values, errP95 := usageObservabilityAggregateP95Values(db, query, groupBy, usageObservabilityAggregateRowIDs(rows))
+		if errP95 != nil {
+			return nil, errP95
+		}
+		for index := range rows {
+			if value, ok := p95Values[rows[index].AggregateID]; ok {
+				rows[index].P95LatencyMS = value
+			}
+		}
+	}
+	items := make([]UsageObservabilityAggregateItem, 0, len(rows))
+	for index := range rows {
+		items = append(items, usageObservabilityAggregateItemFromRow(&rows[index], groupBy))
+	}
+	return items, nil
+}
+
+func usageObservabilityRealtimeVelocitySQL(db *gorm.DB, query UsageObservabilityRecordQuery, bucketSeconds int) ([]UsageObservabilityRealtimeVelocityPoint, error) {
+	if bucketSeconds <= 0 {
+		bucketSeconds = 60
+	}
+	bucketExpr, bucketArgs := usageObservabilityBucketUnixSQL(db, bucketSeconds)
+	selectSQL := fmt.Sprintf(`
+		%s AS bucket_unix,
+		COUNT(*) AS request_count,
+		SUM(CASE WHEN "usage"."failed" THEN 1 ELSE 0 END) AS failed_count,
+		SUM("usage"."total_tokens") AS total_tokens`, bucketExpr)
+	var rows []usageObservabilityRealtimeVelocityRow
+	if errFind := usageObservabilityNarrowUsageScope(db.Table("usage"), query).
+		Select(selectSQL, bucketArgs...).
+		Group("bucket_unix").
+		Order("bucket_unix ASC").
+		Scan(&rows).Error; errFind != nil {
+		return nil, errFind
+	}
+	points := make([]UsageObservabilityRealtimeVelocityPoint, 0, len(rows))
+	minutes := float64(bucketSeconds) / 60
+	for index := range rows {
+		start := time.Unix(rows[index].BucketUnix, 0).UTC()
+		requestCount := rows[index].RequestCount
+		failedCount := optionalSQLInt64Value(rows[index].FailedCount)
+		totalTokens := optionalSQLInt64Value(rows[index].TotalTokens)
+		errorRate := 0.0
+		if requestCount > 0 {
+			errorRate = float64(failedCount) / float64(requestCount)
+		}
+		points = append(points, UsageObservabilityRealtimeVelocityPoint{
+			BucketStart: start,
+			BucketEnd:   start.Add(time.Duration(bucketSeconds)*time.Second - time.Nanosecond),
+			RPM:         float64(requestCount) / minutes,
+			TPM:         float64(totalTokens) / minutes,
+			ErrorRate:   errorRate,
+		})
+	}
+	return points, nil
+}
+
+func usageObservabilityBucketUnixSQL(db *gorm.DB, bucketSeconds int) (string, []any) {
+	if bucketSeconds <= 0 {
+		bucketSeconds = 60
+	}
+	if db != nil && db.Dialector != nil && db.Dialector.Name() == "postgres" {
+		return `CAST(FLOOR(EXTRACT(EPOCH FROM "usage"."timestamp") / ?) * ? AS BIGINT)`, []any{bucketSeconds, bucketSeconds}
+	}
+	return `CAST((CAST(strftime('%s', "usage"."timestamp") AS INTEGER) / ?) AS INTEGER) * ?`, []any{bucketSeconds, bucketSeconds}
+}
+
+func usageObservabilityLatencyDistributionSQL(db *gorm.DB, query UsageObservabilityRecordQuery) ([]UsageObservabilityLatencyDistributionBucket, error) {
+	labels := []string{"0-500ms", "500-1000ms", "1000-3000ms", "3000ms+"}
+	counts := map[string]int64{}
+	for _, label := range labels {
+		counts[label] = 0
+	}
+	var rows []usageObservabilityLatencyDistributionRow
+	if errFind := usageObservabilityNarrowUsageScope(db.Table("usage"), query).
+		Where(`"usage"."latency_ms" >= ?`, 0).
+		Select(`
+			CASE
+				WHEN "usage"."latency_ms" <= 500 THEN '0-500ms'
+				WHEN "usage"."latency_ms" <= 1000 THEN '500-1000ms'
+				WHEN "usage"."latency_ms" <= 3000 THEN '1000-3000ms'
+				ELSE '3000ms+'
+			END AS bucket,
+			COUNT(*) AS request_count`).
+		Group("bucket").
+		Scan(&rows).Error; errFind != nil {
+		return nil, errFind
+	}
+	for index := range rows {
+		counts[rows[index].Bucket] = rows[index].RequestCount
+	}
+	buckets := make([]UsageObservabilityLatencyDistributionBucket, 0, len(labels))
+	for _, label := range labels {
+		buckets = append(buckets, UsageObservabilityLatencyDistributionBucket{Bucket: label, RequestCount: counts[label]})
+	}
+	return buckets, nil
+}
+
+func usageObservabilityHealthLastErrorsSQL(db *gorm.DB, query UsageObservabilityRecordQuery, subject string) (map[string]UsageObservabilityHealthDetail, error) {
+	subjectExpr := usageObservabilityHealthSubjectSQL(subject)
+	scoped := usageObservabilityRecordScope(db.Table("usage"), query).
+		Where(`"usage"."failed" = ?`, true).
+		Select(fmt.Sprintf(`
+			%s AS subject_id,
+			"usage"."id" AS usage_id,
+			"usage"."timestamp" AS timestamp,
+			"usage"."fail_status_code" AS fail_status_code`, subjectExpr))
+	ranked := db.Table("(?) AS scoped_error", scoped).
+		Select(`
+			scoped_error.subject_id AS subject_id,
+			scoped_error.usage_id AS usage_id,
+			scoped_error.timestamp AS timestamp,
+			scoped_error.fail_status_code AS fail_status_code,
+			ROW_NUMBER() OVER (PARTITION BY scoped_error.subject_id ORDER BY scoped_error.timestamp DESC, scoped_error.usage_id DESC) AS error_rank`)
+	var rows []usageObservabilityHealthLastErrorRow
+	if errFind := db.Table("(?) AS ranked_error", ranked).
+		Where("ranked_error.error_rank = ?", 1).
+		Scan(&rows).Error; errFind != nil {
+		return nil, errFind
+	}
+	failBodies, errBodies := usageObservabilityHealthFailBodiesSQL(db, rows)
+	if errBodies != nil {
+		return nil, errBodies
+	}
+	details := make(map[string]UsageObservabilityHealthDetail, len(rows))
+	for index := range rows {
+		timestamp := rows[index].Timestamp.UTC()
+		details[rows[index].SubjectID] = UsageObservabilityHealthDetail{
+			LastErrorAt:      &timestamp,
+			LastErrorStatus:  rows[index].FailStatusCode,
+			LastErrorMessage: usageObservabilityErrorMessage(failBodies[rows[index].UsageID]),
+		}
+	}
+	return details, nil
+}
+
+func usageObservabilityHealthFailBodiesSQL(db *gorm.DB, rows []usageObservabilityHealthLastErrorRow) (map[uint]string, error) {
+	usageIDs := make([]uint, 0, len(rows))
+	seen := make(map[uint]struct{}, len(rows))
+	for index := range rows {
+		usageID := rows[index].UsageID
+		if usageID == 0 {
+			continue
+		}
+		if _, ok := seen[usageID]; ok {
+			continue
+		}
+		seen[usageID] = struct{}{}
+		usageIDs = append(usageIDs, usageID)
+	}
+	if len(usageIDs) == 0 {
+		return map[uint]string{}, nil
+	}
+	var bodyRows []usageObservabilityHealthLastErrorBodyRow
+	if errFind := db.Table("usage").
+		Select(`"usage"."id" AS usage_id, "usage"."fail_body" AS fail_body`).
+		Where(`"usage"."id" IN ?`, usageIDs).
+		Scan(&bodyRows).Error; errFind != nil {
+		return nil, errFind
+	}
+	out := make(map[uint]string, len(bodyRows))
+	for index := range bodyRows {
+		out[bodyRows[index].UsageID] = bodyRows[index].FailBody
+	}
+	return out, nil
+}
+
+func usageObservabilityHealthNextRetriesSQL(db *gorm.DB, query UsageObservabilityRecordQuery, subject string) (map[string]time.Time, error) {
+	subjectExpr := usageObservabilityHealthSubjectSQL(subject)
+	nextRetryExpr := usageObservabilitySQLAuthNextRetryAfter()
+	scoped := usageObservabilityRecordScope(db.Table("usage"), query).
+		Select(fmt.Sprintf(`
+			%s AS subject_id,
+			%s AS next_retry_at`, subjectExpr, nextRetryExpr))
+	var rows []usageObservabilityHealthNextRetryRow
+	if errFind := db.Table("(?) AS scoped_retry", scoped).
+		Select("DISTINCT scoped_retry.subject_id AS subject_id, scoped_retry.next_retry_at AS next_retry_at").
+		Where("scoped_retry.next_retry_at IS NOT NULL").
+		Scan(&rows).Error; errFind != nil {
+		return nil, errFind
+	}
+	nextRetries := map[string]time.Time{}
+	for index := range rows {
+		nextRetryAt := usageObservabilityOptionalAggregateTime(rows[index].NextRetryAt)
+		if nextRetryAt == nil || nextRetryAt.IsZero() {
+			continue
+		}
+		key := strings.TrimSpace(rows[index].SubjectID)
+		if key == "" {
+			continue
+		}
+		value := nextRetryAt.UTC()
+		current, exists := nextRetries[key]
+		if exists && !value.Before(current) {
+			continue
+		}
+		nextRetries[key] = value
+	}
+	return nextRetries, nil
+}
+
+func usageObservabilityHealthSubjectSQL(subject string) string {
+	if strings.TrimSpace(subject) == "credential" {
+		id, _ := usageObservabilityAggregateSQLIdentity("credential")
+		return id
+	}
+	id, _ := usageObservabilityAggregateSQLIdentity("provider")
+	return id
 }
 
 func usageObservabilityAggregateBaseQuery(db *gorm.DB, query UsageObservabilityRecordQuery, groupBy string) *gorm.DB {
-	return usageObservabilityRecordScope(db.Table("usage"), query).
+	scope := db.Table("usage").Joins(`LEFT JOIN "billing_charge" ON "billing_charge"."usage_id" = "usage"."id"`)
+	switch strings.TrimSpace(groupBy) {
+	case "user", "client_key":
+		scope = scope.
+			Joins(`LEFT JOIN "api_key" ON "api_key"."api_key" = "usage"."api_key"`).
+			Joins(`LEFT JOIN "user" ON "user"."id" = COALESCE("billing_charge"."user_id", "api_key"."user_id")`)
+	case "credential":
+		scope = scope.
+			Joins(`LEFT JOIN "auth" AS "auth_uuid" ON "auth_uuid"."deleted_at" IS NULL AND "auth_uuid"."uuid" = "usage"."auth_index"`).
+			Joins(`LEFT JOIN "auth" AS "auth_by_index" ON "auth_uuid"."uuid" IS NULL AND "auth_by_index"."deleted_at" IS NULL AND "auth_by_index"."index" = "usage"."auth_index"`).
+			Joins(`LEFT JOIN "auth" AS "auth_by_id" ON "auth_uuid"."uuid" IS NULL AND "auth_by_index"."uuid" IS NULL AND "auth_by_id"."deleted_at" IS NULL AND "auth_by_id"."id" = "usage"."auth_index"`)
+	}
+	return usageObservabilityApplyUsageFilters(scope, query).
 		Select(usageObservabilityAggregateBaseSelect(groupBy))
 }
 
@@ -667,21 +1451,55 @@ func usageObservabilityAggregateRowIDs(rows []usageObservabilityAggregateRow) []
 
 func usageObservabilityAggregateBaseSelect(groupBy string) string {
 	idExpr, labelExpr := usageObservabilityAggregateSQLIdentity(groupBy)
+	clientUserIDExpr := `NULL`
+	usernameExpr := `''`
+	clientAPIKeyIDExpr := `NULL`
+	clientAPIKeyLabelExpr := `''`
+	clientAPIKeyMaskedExpr := `''`
+	credentialTypeExpr := `''`
+	credentialIDExpr := `''`
+	authIndexExpr := `''`
+	credentialProviderExpr := `''`
+	credentialLabelExpr := `''`
+	authUUIDExpr := `''`
+	authNextRetryAtExpr := `NULL`
+	authStatusExpr := `''`
+	authDisabledExpr := `FALSE`
+	authUnavailableExpr := `FALSE`
+	switch strings.TrimSpace(groupBy) {
+	case "user", "client_key":
+		clientUserIDExpr = `COALESCE("billing_charge"."user_id", "api_key"."user_id")`
+		usernameExpr = `"user"."username"`
+		clientAPIKeyIDExpr = `COALESCE("billing_charge"."api_key_id", "api_key"."id")`
+		clientAPIKeyLabelExpr = `COALESCE("billing_charge"."api_key_label", CASE WHEN "api_key"."id" IS NULL THEN '' ELSE 'api-key-' || CAST("api_key"."id" AS TEXT) END)`
+		clientAPIKeyMaskedExpr = `"billing_charge"."api_key_masked"`
+	case "credential":
+		credentialTypeExpr = `"usage"."auth_type"`
+		credentialIDExpr = usageObservabilitySQLCredentialID()
+		authIndexExpr = usageObservabilitySQLAuthIndex()
+		credentialProviderExpr = usageObservabilitySQLAuthProvider()
+		credentialLabelExpr = usageObservabilitySQLAuthLabel()
+		authUUIDExpr = usageObservabilitySQLAuthUUID()
+		authNextRetryAtExpr = usageObservabilitySQLAuthNextRetryAfter()
+		authStatusExpr = usageObservabilitySQLAuthStatus()
+		authDisabledExpr = usageObservabilitySQLAuthDisabled()
+		authUnavailableExpr = usageObservabilitySQLAuthUnavailable()
+	}
 	return fmt.Sprintf(`
 		%s AS aggregate_id,
 		%s AS aggregate_label,
-		COALESCE("billing_charge"."user_id", "api_key"."user_id") AS metadata_user_id,
-		"user"."username" AS metadata_username,
-		COALESCE("billing_charge"."api_key_id", "api_key"."id") AS metadata_api_key_id,
-		COALESCE("billing_charge"."api_key_label", CASE WHEN "api_key"."id" IS NULL THEN '' ELSE 'api-key-' || CAST("api_key"."id" AS TEXT) END) AS metadata_api_key_label,
-		"billing_charge"."api_key_masked" AS metadata_api_key_masked,
-		"usage"."auth_type" AS metadata_credential_type,
+		%s AS metadata_user_id,
+		%s AS metadata_username,
+		%s AS metadata_api_key_id,
+		%s AS metadata_api_key_label,
+		%s AS metadata_api_key_masked,
+		%s AS metadata_credential_type,
 		%s AS metadata_credential_id,
 		%s AS metadata_auth_index,
 		%s AS metadata_credential_provider,
 		%s AS metadata_credential_label,
 		%s AS metadata_auth_uuid,
-		%s AS metadata_auth_json,
+		%s AS metadata_auth_next_retry_at,
 		%s AS metadata_auth_status,
 		%s AS metadata_auth_disabled,
 		%s AS metadata_auth_unavailable,
@@ -700,15 +1518,21 @@ func usageObservabilityAggregateBaseSelect(groupBy string) string {
 		"billing_charge"."amount" AS amount`,
 		idExpr,
 		labelExpr,
-		usageObservabilitySQLCredentialID(),
-		usageObservabilitySQLAuthIndex(),
-		usageObservabilitySQLAuthProvider(),
-		usageObservabilitySQLAuthLabel(),
-		usageObservabilitySQLAuthUUID(),
-		usageObservabilitySQLAuthJSON(),
-		usageObservabilitySQLAuthStatus(),
-		usageObservabilitySQLAuthDisabled(),
-		usageObservabilitySQLAuthUnavailable(),
+		clientUserIDExpr,
+		usernameExpr,
+		clientAPIKeyIDExpr,
+		clientAPIKeyLabelExpr,
+		clientAPIKeyMaskedExpr,
+		credentialTypeExpr,
+		credentialIDExpr,
+		authIndexExpr,
+		credentialProviderExpr,
+		credentialLabelExpr,
+		authUUIDExpr,
+		authNextRetryAtExpr,
+		authStatusExpr,
+		authDisabledExpr,
+		authUnavailableExpr,
 	)
 }
 
@@ -766,7 +1590,7 @@ func usageObservabilityAggregateSQLSelect(includeP95 bool) string {
 		MAX(scoped.metadata_credential_provider) AS metadata_credential_provider,
 		MAX(scoped.metadata_credential_label) AS metadata_credential_label,
 		MAX(scoped.metadata_auth_uuid) AS metadata_auth_uuid,
-		MAX(scoped.metadata_auth_json) AS metadata_auth_json,
+		MAX(scoped.metadata_auth_next_retry_at) AS metadata_auth_next_retry_at,
 		MAX(scoped.metadata_auth_status) AS metadata_auth_status,
 		MAX(CASE WHEN scoped.metadata_auth_disabled THEN 1 ELSE 0 END) AS metadata_auth_disabled,
 		MAX(CASE WHEN scoped.metadata_auth_unavailable THEN 1 ELSE 0 END) AS metadata_auth_unavailable,
@@ -833,10 +1657,6 @@ func usageObservabilitySQLAuthLabel() string {
 	return `COALESCE("auth_uuid"."label", "auth_by_index"."label", "auth_by_id"."label")`
 }
 
-func usageObservabilitySQLAuthJSON() string {
-	return `CAST(COALESCE("auth_uuid"."auth_json", "auth_by_index"."auth_json", "auth_by_id"."auth_json") AS TEXT)`
-}
-
 func usageObservabilitySQLAuthStatus() string {
 	return `COALESCE("auth_uuid"."status", "auth_by_index"."status", "auth_by_id"."status")`
 }
@@ -847,6 +1667,10 @@ func usageObservabilitySQLAuthDisabled() string {
 
 func usageObservabilitySQLAuthUnavailable() string {
 	return `COALESCE("auth_uuid"."unavailable", "auth_by_index"."unavailable", "auth_by_id"."unavailable", FALSE)`
+}
+
+func usageObservabilitySQLAuthNextRetryAfter() string {
+	return `COALESCE("auth_uuid"."next_retry_after", "auth_by_index"."next_retry_after", "auth_by_id"."next_retry_after")`
 }
 
 func usageObservabilityRecordSelect() string {
@@ -898,7 +1722,8 @@ func usageObservabilityRecordSelect() string {
 		COALESCE("auth_uuid"."status", "auth_by_index"."status", "auth_by_id"."status") AS auth_status,
 		COALESCE("auth_uuid"."disabled", "auth_by_index"."disabled", "auth_by_id"."disabled") AS auth_disabled,
 		COALESCE("auth_uuid"."unavailable", "auth_by_index"."unavailable", "auth_by_id"."unavailable") AS auth_unavailable,
-		COALESCE("auth_uuid"."next_refresh_after", "auth_by_index"."next_refresh_after", "auth_by_id"."next_refresh_after") AS auth_next_refresh_after`
+		COALESCE("auth_uuid"."next_refresh_after", "auth_by_index"."next_refresh_after", "auth_by_id"."next_refresh_after") AS auth_next_refresh_after,
+		COALESCE("auth_uuid"."next_retry_after", "auth_by_index"."next_retry_after", "auth_by_id"."next_retry_after") AS auth_next_retry_after`
 }
 
 func usageObservabilityRecordScope(scope *gorm.DB, query UsageObservabilityRecordQuery) *gorm.DB {
@@ -909,7 +1734,19 @@ func usageObservabilityRecordScope(scope *gorm.DB, query UsageObservabilityRecor
 		Joins(`LEFT JOIN "auth" AS "auth_uuid" ON "auth_uuid"."deleted_at" IS NULL AND "auth_uuid"."uuid" = "usage"."auth_index"`).
 		Joins(`LEFT JOIN "auth" AS "auth_by_index" ON "auth_uuid"."uuid" IS NULL AND "auth_by_index"."deleted_at" IS NULL AND "auth_by_index"."index" = "usage"."auth_index"`).
 		Joins(`LEFT JOIN "auth" AS "auth_by_id" ON "auth_uuid"."uuid" IS NULL AND "auth_by_index"."uuid" IS NULL AND "auth_by_id"."deleted_at" IS NULL AND "auth_by_id"."id" = "usage"."auth_index"`)
+	return usageObservabilityApplyRecordFilters(scope, query)
+}
 
+func usageObservabilityUsageBillingScope(scope *gorm.DB, query UsageObservabilityRecordQuery) *gorm.DB {
+	return usageObservabilityNarrowUsageScope(scope.
+		Joins(`LEFT JOIN "billing_charge" ON "billing_charge"."usage_id" = "usage"."id"`), query)
+}
+
+func usageObservabilityNarrowUsageScope(scope *gorm.DB, query UsageObservabilityRecordQuery) *gorm.DB {
+	return usageObservabilityApplyUsageFilters(scope, query)
+}
+
+func usageObservabilityApplyRecordFilters(scope *gorm.DB, query UsageObservabilityRecordQuery) *gorm.DB {
 	if query.From != nil {
 		scope = scope.Where(`"usage"."timestamp" >= ?`, query.From.UTC())
 	}
@@ -983,6 +1820,54 @@ func usageObservabilityRecordScope(scope *gorm.DB, query UsageObservabilityRecor
 			COALESCE("auth_uuid"."label", "auth_by_index"."label", "auth_by_id"."label") LIKE ? OR
 			"usage"."auth_index" LIKE ?)`,
 			matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher, matcher)
+	}
+	if search := strings.TrimSpace(query.RequestLogSearch); search != "" {
+		matcher := "%" + search + "%"
+		status := strings.ToLower(search)
+		scope = scope.Where(`(
+			"usage"."request_id" LIKE ? OR
+			"usage"."provider" LIKE ? OR
+			"usage"."model" LIKE ? OR
+			(? = 'success' AND "usage"."failed" = ?) OR
+			(? = 'failed' AND "usage"."failed" = ?))`,
+			matcher, matcher, matcher, status, false, status, true)
+	}
+	return scope
+}
+
+func usageObservabilityApplyUsageFilters(scope *gorm.DB, query UsageObservabilityRecordQuery) *gorm.DB {
+	if query.From != nil {
+		scope = scope.Where(`"usage"."timestamp" >= ?`, query.From.UTC())
+	}
+	if query.To != nil {
+		scope = scope.Where(`"usage"."timestamp" <= ?`, query.To.UTC())
+	}
+	if provider := strings.ToLower(strings.TrimSpace(query.Provider)); provider != "" {
+		scope = scope.Where(`LOWER("usage"."provider") = ?`, provider)
+	}
+	if model := strings.TrimSpace(query.Model); model != "" {
+		scope = scope.Where(`"usage"."model" LIKE ?`, "%"+model+"%")
+	}
+	if homeIP := strings.TrimSpace(query.HomeIP); homeIP != "" {
+		scope = scope.Where(`"usage"."home_ip" = ?`, homeIP)
+	}
+	if endpoint := strings.TrimSpace(query.Endpoint); endpoint != "" {
+		scope = scope.Where(`"usage"."endpoint" LIKE ?`, "%"+endpoint+"%")
+	}
+	scope = usageObservabilityCredentialTypeScope(scope, query.CredentialType)
+	scope = usageObservabilityStatusScope(scope, query.Status)
+	scope = usageObservabilityStatusCodeScope(scope, query.StatusCode)
+	if requestID := strings.TrimSpace(query.RequestID); requestID != "" {
+		scope = scope.Where(`"usage"."request_id" = ?`, requestID)
+	}
+	if executorType := strings.TrimSpace(query.ExecutorType); executorType != "" {
+		scope = scope.Where(`"usage"."executor_type" = ?`, executorType)
+	}
+	if query.MinLatencyMS != nil {
+		scope = scope.Where(`"usage"."latency_ms" >= ?`, *query.MinLatencyMS)
+	}
+	if query.MaxLatencyMS != nil {
+		scope = scope.Where(`"usage"."latency_ms" <= ?`, *query.MaxLatencyMS)
 	}
 	if search := strings.TrimSpace(query.RequestLogSearch); search != "" {
 		matcher := "%" + search + "%"
@@ -1189,6 +2074,15 @@ func usageObservabilityAggregateItemFromRow(row *usageObservabilityAggregateRow,
 	return item
 }
 
+func usageObservabilityOptionalAggregateTime(raw string) *time.Time {
+	parsed, ok := usageObservabilityAggregateTime(raw)
+	if !ok {
+		return nil
+	}
+	value := parsed.UTC()
+	return &value
+}
+
 func usageObservabilityAggregateTime(raw string) (time.Time, bool) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
@@ -1233,7 +2127,7 @@ func usageObservabilityAggregateMetadataFromRow(row *usageObservabilityAggregate
 			"user_id":        optionalSQLInt64MapValue(row.MetadataUserID),
 		}
 	case "credential":
-		nextRetryAt := usageObservabilityOptionalTimeMapValue(usageObservabilityAuthJSONNextRetryAt(string(row.MetadataAuthJSON)))
+		nextRetryAt := usageObservabilityOptionalTimeMapValue(usageObservabilityOptionalAggregateTime(row.MetadataAuthNextRetryAt))
 		return map[string]any{
 			"credential_type": normalizeUsageObservabilityCredentialType(row.MetadataCredentialType),
 			"provider":        firstNonEmptyUsageObservabilityString(row.MetadataCredentialProvider, row.MetadataProvider),
@@ -1683,11 +2577,26 @@ func usageObservabilityPercentile(values []int64, percentile float64) float64 {
 }
 
 func usageObservabilityOverviewInterval(requested string, from *time.Time, to *time.Time, rows []usageObservabilityRecordRow) string {
+	start, end := usageObservabilityRangeBounds(from, to, rows)
+	return usageObservabilityOverviewIntervalFromTimes(requested, start, end)
+}
+
+func usageObservabilityOverviewIntervalFromBounds(requested string, from *time.Time, to *time.Time, bounds usageObservabilityOverviewBounds) string {
+	start, end := usageObservabilityBoundsTimes(bounds)
+	if from != nil {
+		start = from.UTC()
+	}
+	if to != nil {
+		end = to.UTC()
+	}
+	return usageObservabilityOverviewIntervalFromTimes(requested, start, end)
+}
+
+func usageObservabilityOverviewIntervalFromTimes(requested string, start time.Time, end time.Time) string {
 	switch strings.ToLower(strings.TrimSpace(requested)) {
 	case "minute", "hour", "day", "week":
 		return strings.ToLower(strings.TrimSpace(requested))
 	}
-	start, end := usageObservabilityRangeBounds(from, to, rows)
 	if start.IsZero() || end.IsZero() {
 		return "day"
 	}
@@ -1716,6 +2625,43 @@ func usageObservabilityRangeTime(value *time.Time, rows []usageObservabilityReco
 		return ""
 	}
 	return end.UTC().Format(time.RFC3339Nano)
+}
+
+func usageObservabilityRangeTimeFromBounds(value *time.Time, bounds usageObservabilityOverviewBounds, first bool) string {
+	start, end := usageObservabilityBoundsTimes(bounds)
+	if value != nil {
+		if first {
+			start = value.UTC()
+		} else {
+			end = value.UTC()
+		}
+	}
+	if first {
+		if start.IsZero() {
+			return ""
+		}
+		return start.UTC().Format(time.RFC3339Nano)
+	}
+	if end.IsZero() {
+		return ""
+	}
+	return end.UTC().Format(time.RFC3339Nano)
+}
+
+func usageObservabilityBoundsTimes(bounds usageObservabilityOverviewBounds) (time.Time, time.Time) {
+	var start time.Time
+	var end time.Time
+	if bounds.MinTimestamp.Valid {
+		if parsedStart, ok := usageObservabilityAggregateTime(bounds.MinTimestamp.String); ok {
+			start = parsedStart.UTC()
+		}
+	}
+	if bounds.MaxTimestamp.Valid {
+		if parsedEnd, ok := usageObservabilityAggregateTime(bounds.MaxTimestamp.String); ok {
+			end = parsedEnd.UTC()
+		}
+	}
+	return start, end
 }
 
 func usageObservabilityLocation(timezone string) *time.Location {
@@ -1845,6 +2791,10 @@ func usageObservabilityCredential(row *usageObservabilityRecordRow) UsageObserva
 func usageObservabilityAuthNextRetryAt(row *usageObservabilityRecordRow) *time.Time {
 	if row == nil {
 		return nil
+	}
+	if row.AuthNextRetryAfter.Valid {
+		nextRetryAt := row.AuthNextRetryAfter.Time.UTC()
+		return &nextRetryAt
 	}
 	return usageObservabilityAuthJSONNextRetryAt(string(row.AuthJSON))
 }
