@@ -706,7 +706,7 @@ func (r *Repository) UsageObservabilityOverview(ctx context.Context, query Usage
 		return UsageObservabilityOverview{}, errLive
 	}
 	overview.Live = live
-	trend, errTrend := usageObservabilityTrendSQL(db, recordQuery, interval, location)
+	trend, errTrend := usageObservabilityTrendSQL(db, recordQuery, interval, location, bounds)
 	if errTrend != nil {
 		return UsageObservabilityOverview{}, errTrend
 	}
@@ -940,8 +940,8 @@ func usageObservabilityLiveSQL(db *gorm.DB, query UsageObservabilityRecordQuery,
 	return live, nil
 }
 
-func usageObservabilityTrendSQL(db *gorm.DB, query UsageObservabilityRecordQuery, interval string, location *time.Location) ([]UsageObservabilityTrendPoint, error) {
-	bucketExpr, bucketArgs := usageObservabilityTrendBucketUnixSQL(db, interval, location, query)
+func usageObservabilityTrendSQL(db *gorm.DB, query UsageObservabilityRecordQuery, interval string, location *time.Location, bounds usageObservabilityOverviewBounds) ([]UsageObservabilityTrendPoint, error) {
+	bucketExpr, bucketArgs := usageObservabilityTrendBucketUnixSQL(db, interval, location, query, bounds)
 	baseSelect := fmt.Sprintf(`
 		%s AS bucket_unix,
 		"usage"."latency_ms" AS latency_ms,
@@ -1049,7 +1049,7 @@ func usageObservabilityTrendFromBucketRows(rows []usageObservabilityTrendBucketR
 	return points
 }
 
-func usageObservabilityTrendBucketUnixSQL(db *gorm.DB, interval string, location *time.Location, query UsageObservabilityRecordQuery) (string, []any) {
+func usageObservabilityTrendBucketUnixSQL(db *gorm.DB, interval string, location *time.Location, query UsageObservabilityRecordQuery, bounds usageObservabilityOverviewBounds) (string, []any) {
 	bucketSeconds := int64(86400)
 	subtractSeconds := int64(0)
 	switch interval {
@@ -1077,8 +1077,123 @@ func usageObservabilityTrendBucketUnixSQL(db *gorm.DB, interval string, location
 		}
 		return fmt.Sprintf(`CAST(EXTRACT(EPOCH FROM (date_trunc('%s', timezone(?, "usage"."timestamp")) AT TIME ZONE ?)) AS BIGINT)`, datePart), []any{timezoneName, timezoneName}
 	}
+	if bucketCaseSQL, ok := usageObservabilitySQLiteTrendBucketCaseSQL(interval, location, query, bounds); ok {
+		return bucketCaseSQL, nil
+	}
 	offsetSeconds := int64(usageObservabilityTimezoneOffsetSeconds(location, query))
 	return `CAST(((CAST(strftime('%s', "usage"."timestamp") AS INTEGER) + ? - ?) / ?) AS INTEGER) * ? - ? + ?`, []any{offsetSeconds, subtractSeconds, bucketSeconds, bucketSeconds, offsetSeconds, subtractSeconds}
+}
+
+func usageObservabilitySQLiteTrendBucketCaseSQL(interval string, location *time.Location, query UsageObservabilityRecordQuery, bounds usageObservabilityOverviewBounds) (string, bool) {
+	if location == nil || location == time.UTC {
+		return "", false
+	}
+	rangeStart, rangeEnd := usageObservabilityTrendCaseRange(query, bounds)
+	if rangeStart.IsZero() || rangeEnd.IsZero() || rangeEnd.Before(rangeStart) {
+		return "", false
+	}
+	caseStart, _ := usageObservabilityBucketRange(rangeStart, interval, location)
+	_, caseEnd := usageObservabilityBucketRange(rangeEnd, interval, location)
+	if caseEnd.Before(rangeEnd) {
+		caseEnd = rangeEnd
+	}
+	if !usageObservabilityTimezoneOffsetChanges(location, caseStart, caseEnd) {
+		return "", false
+	}
+
+	usageUnixExpr := `CAST(strftime('%s', "usage"."timestamp") AS INTEGER)`
+	fallbackOffset := int64(usageObservabilityTimezoneOffsetSeconds(location, query))
+	fallbackSQL := usageObservabilitySQLiteTrendBucketOffsetSQL(interval, fallbackOffset)
+	segments := usageObservabilityTrendBucketCaseSegments(interval, location, caseStart, caseEnd)
+	if len(segments) == 0 {
+		return "", false
+	}
+
+	var builder strings.Builder
+	builder.WriteString("CASE")
+	for _, segment := range segments {
+		builder.WriteString(fmt.Sprintf(" WHEN %s >= %d AND %s < %d THEN %d", usageUnixExpr, segment.StartUnix, usageUnixExpr, segment.EndUnix, segment.BucketUnix))
+	}
+	builder.WriteString(" ELSE ")
+	builder.WriteString(fallbackSQL)
+	builder.WriteString(" END")
+	return builder.String(), true
+}
+
+type usageObservabilityTrendBucketCaseSegment struct {
+	StartUnix  int64
+	EndUnix    int64
+	BucketUnix int64
+}
+
+func usageObservabilityTrendCaseRange(query UsageObservabilityRecordQuery, bounds usageObservabilityOverviewBounds) (time.Time, time.Time) {
+	start, end := usageObservabilityBoundsTimes(bounds)
+	if query.From != nil {
+		start = query.From.UTC()
+	}
+	if query.To != nil {
+		end = query.To.UTC()
+	}
+	return start.UTC(), end.UTC()
+}
+
+func usageObservabilityTimezoneOffsetChanges(location *time.Location, start time.Time, end time.Time) bool {
+	if location == nil || location == time.UTC || start.IsZero() || end.IsZero() || end.Before(start) {
+		return false
+	}
+	_, firstOffset := start.In(location).Zone()
+	for cursor := start.Add(time.Hour); cursor.Before(end); cursor = cursor.Add(time.Hour) {
+		_, offset := cursor.In(location).Zone()
+		if offset != firstOffset {
+			return true
+		}
+	}
+	_, endOffset := end.In(location).Zone()
+	return endOffset != firstOffset
+}
+
+func usageObservabilityTrendBucketCaseSegments(interval string, location *time.Location, start time.Time, end time.Time) []usageObservabilityTrendBucketCaseSegment {
+	if location == nil {
+		location = time.UTC
+	}
+	if start.IsZero() || end.IsZero() || end.Before(start) {
+		return nil
+	}
+	step := time.Minute
+	cursor := start.UTC().Truncate(step)
+	limit := end.UTC().Add(step)
+	segments := make([]usageObservabilityTrendBucketCaseSegment, 0)
+	for cursor.Before(limit) || cursor.Equal(limit) {
+		bucketStart, _ := usageObservabilityBucketRange(cursor, interval, location)
+		segment := usageObservabilityTrendBucketCaseSegment{
+			StartUnix:  cursor.Unix(),
+			EndUnix:    cursor.Add(step).Unix(),
+			BucketUnix: bucketStart.Unix(),
+		}
+		lastIndex := len(segments) - 1
+		if lastIndex >= 0 && segments[lastIndex].BucketUnix == segment.BucketUnix && segments[lastIndex].EndUnix == segment.StartUnix {
+			segments[lastIndex].EndUnix = segment.EndUnix
+		} else {
+			segments = append(segments, segment)
+		}
+		cursor = cursor.Add(step)
+	}
+	return segments
+}
+
+func usageObservabilitySQLiteTrendBucketOffsetSQL(interval string, offsetSeconds int64) string {
+	bucketSeconds := int64(86400)
+	subtractSeconds := int64(0)
+	switch interval {
+	case "minute":
+		bucketSeconds = 60
+	case "hour":
+		bucketSeconds = 3600
+	case "week":
+		bucketSeconds = 604800
+		subtractSeconds = 4 * 86400
+	}
+	return fmt.Sprintf(`CAST(((CAST(strftime('%%s', "usage"."timestamp") AS INTEGER) + %d - %d) / %d) AS INTEGER) * %d - %d + %d`, offsetSeconds, subtractSeconds, bucketSeconds, bucketSeconds, offsetSeconds, subtractSeconds)
 }
 
 func usageObservabilityTimezoneOffsetSeconds(location *time.Location, query UsageObservabilityRecordQuery) int {

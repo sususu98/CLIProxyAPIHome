@@ -97,7 +97,7 @@ func AuthToRecord(auth *coreauth.Auth) (*AuthRecord, error) {
 	}
 	record.LastRefreshedAt = timePtrOrNil(auth.LastRefreshedAt)
 	record.NextRefreshAfter = timePtrOrNil(auth.NextRefreshAfter)
-	record.NextRetryAfter = timePtrOrNil(auth.NextRetryAfter)
+	record.NextRetryAfter = authNextRetryAfterTime(auth)
 
 	return record, nil
 }
@@ -1084,6 +1084,30 @@ func timePtrOrNil(value time.Time) *time.Time {
 	}
 	utcValue := value.UTC()
 	return &utcValue
+}
+
+func authNextRetryAfterTime(auth *coreauth.Auth) *time.Time {
+	if auth == nil {
+		return nil
+	}
+	var earliest time.Time
+	remember := func(value time.Time) {
+		if value.IsZero() {
+			return
+		}
+		value = value.UTC()
+		if earliest.IsZero() || value.Before(earliest) {
+			earliest = value
+		}
+	}
+	remember(auth.NextRetryAfter)
+	for _, state := range auth.ModelStates {
+		if state == nil {
+			continue
+		}
+		remember(state.NextRetryAfter)
+	}
+	return timePtrOrNil(earliest)
 }
 
 // hashValue reports whether h value is present.

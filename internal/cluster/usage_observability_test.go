@@ -83,6 +83,81 @@ func TestMigrateAuthNextRetryAfterBackfillsJSON(t *testing.T) {
 	}
 }
 
+func TestUsageObservabilityOverviewTopCredentialUsesModelStateNextRetry(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	username := "usage-retry-user"
+	credits := 100.0
+	user, errCreateUser := repo.CreateUser(ctx, UserUpdate{Username: &username, Credits: &credits})
+	if errCreateUser != nil {
+		t.Fatalf("CreateUser() error = %v", errCreateUser)
+	}
+	clientKey := "client-key-retry-secret-1234"
+	if _, errCreateKey := repo.CreateAPIKeyForUser(ctx, user.ID, APIKeyUserUpdate{APIKey: &clientKey}); errCreateKey != nil {
+		t.Fatalf("CreateAPIKeyForUser() error = %v", errCreateKey)
+	}
+	modelRetryAt := time.Date(2026, time.June, 10, 1, 30, 0, 0, time.UTC)
+	auth := &coreauth.Auth{
+		ID:        "auth-model-retry",
+		Index:     "auth-model-retry",
+		Provider:  "codex",
+		Label:     "Model Retry OAuth",
+		Status:    coreauth.StatusActive,
+		CreatedAt: time.Date(2026, time.June, 10, 1, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, time.June, 10, 1, 0, 0, 0, time.UTC),
+		ModelStates: map[string]*coreauth.ModelState{
+			"gpt-4.1-mini": {
+				Status:         coreauth.StatusError,
+				Unavailable:    true,
+				NextRetryAfter: modelRetryAt,
+				UpdatedAt:      time.Date(2026, time.June, 10, 1, 10, 0, 0, time.UTC),
+			},
+		},
+	}
+	if _, errAuth := repo.UpsertAuth(ctx, auth, "test"); errAuth != nil {
+		t.Fatalf("UpsertAuth() error = %v", errAuth)
+	}
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	var authRecord AuthRecord
+	if errFirst := db.First(&authRecord, "uuid = ?", auth.ID).Error; errFirst != nil {
+		t.Fatalf("First(auth) error = %v", errFirst)
+	}
+	if authRecord.NextRetryAfter == nil || !authRecord.NextRetryAfter.UTC().Equal(modelRetryAt) {
+		t.Fatalf("next_retry_after = %v, want %v", authRecord.NextRetryAfter, modelRetryAt)
+	}
+	if _, errCreatePrice := repo.CreateBillingModelPrice(ctx, BillingModelPriceUpdate{Provider: "openai", Model: "gpt-4.1-mini", RequestPrice: 2, Enabled: true}); errCreatePrice != nil {
+		t.Fatalf("CreateBillingModelPrice() error = %v", errCreatePrice)
+	}
+	payload := `{"timestamp":"2026-06-10T01:15:00Z","provider":"openai","model":"gpt-4.1-mini","api_key":"client-key-retry-secret-1234","request_id":"req-obs-model-retry","endpoint":"/v1/chat/completions","executor_type":"CodexWebsocketsExecutor","auth_index":"auth-model-retry","auth_type":"oauth","latency_ms":500,"tokens":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}`
+	if _, errUsage := repo.AppendUsage(ctx, payload, "192.0.2.10"); errUsage != nil {
+		t.Fatalf("AppendUsage() error = %v", errUsage)
+	}
+
+	from := time.Date(2026, time.June, 10, 1, 0, 0, 0, time.UTC)
+	to := time.Date(2026, time.June, 10, 2, 0, 0, 0, time.UTC)
+	overview, errOverview := repo.UsageObservabilityOverview(ctx, UsageObservabilityOverviewQuery{From: &from, To: &to, Interval: "hour", Timezone: "UTC"})
+	if errOverview != nil {
+		t.Fatalf("UsageObservabilityOverview() error = %v", errOverview)
+	}
+	if len(overview.Top.Credentials) != 1 {
+		t.Fatalf("credential count = %d, want 1", len(overview.Top.Credentials))
+	}
+	nextRetryAt, ok := overview.Top.Credentials[0].Metadata["next_retry_at"].(string)
+	if !ok {
+		t.Fatalf("next_retry_at = %T, want string", overview.Top.Credentials[0].Metadata["next_retry_at"])
+	}
+	if nextRetryAt != modelRetryAt.Format(time.RFC3339Nano) {
+		t.Fatalf("next_retry_at = %q, want %q", nextRetryAt, modelRetryAt.Format(time.RFC3339Nano))
+	}
+}
+
 func TestListUsageObservabilityRecordsJoinsBillingAndMasksClientKey(t *testing.T) {
 	t.Parallel()
 
@@ -256,6 +331,42 @@ func TestUsageObservabilityOverviewBuildsTrendWithSQLBuckets(t *testing.T) {
 	second := overview.Trend[1]
 	if second.RequestCount != 1 || second.SuccessCount != 0 || second.FailedCount != 1 {
 		t.Fatalf("second counts = requests:%d success:%d failed:%d, want 1/0/1", second.RequestCount, second.SuccessCount, second.FailedCount)
+	}
+}
+
+func TestUsageObservabilityOverviewSQLiteTrendNamedTimezoneDST(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	seedUsageObservabilityRecord(t, ctx, repo)
+	payload := `{"timestamp":"2026-03-08T07:30:00Z","provider":"openai","model":"gpt-4.1-mini","api_key":"client-key-secret-1234","request_id":"req-obs-dst-day","endpoint":"/v1/chat/completions","executor_type":"CodexWebsocketsExecutor","auth_index":"auth-observability","auth_type":"oauth","latency_ms":500,"tokens":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}`
+	if _, errUsage := repo.AppendUsage(ctx, payload, "192.0.2.10"); errUsage != nil {
+		t.Fatalf("AppendUsage(dst) error = %v", errUsage)
+	}
+
+	from := time.Date(2026, time.March, 8, 7, 0, 0, 0, time.UTC)
+	to := time.Date(2026, time.March, 8, 8, 0, 0, 0, time.UTC)
+	overview, errOverview := repo.UsageObservabilityOverview(ctx, UsageObservabilityOverviewQuery{
+		From:     &from,
+		To:       &to,
+		Interval: "day",
+		Timezone: "America/New_York",
+	})
+	if errOverview != nil {
+		t.Fatalf("UsageObservabilityOverview(dst) error = %v", errOverview)
+	}
+	if len(overview.Trend) != 1 {
+		t.Fatalf("trend point count = %d, want 1", len(overview.Trend))
+	}
+	wantBucketStart := time.Date(2026, time.March, 8, 5, 0, 0, 0, time.UTC)
+	if !overview.Trend[0].BucketStart.Equal(wantBucketStart) {
+		t.Fatalf("bucket start = %v, want %v", overview.Trend[0].BucketStart, wantBucketStart)
+	}
+	if overview.Trend[0].RequestCount != 1 {
+		t.Fatalf("request count = %d, want 1", overview.Trend[0].RequestCount)
 	}
 }
 
