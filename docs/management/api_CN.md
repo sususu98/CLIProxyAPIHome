@@ -443,7 +443,20 @@ openai-compatibility
   "payload": {
     "default": [
       {
-        "models": [{ "name": "gpt-*", "protocol": "responses" }],
+        "models": [
+          {
+            "name": "gpt-*",
+            "protocol": "responses",
+            "from-protocol": "openai",
+            "headers": {
+              "X-Client-Tier": "tenant-*"
+            },
+            "match": [{ "metadata.client": "codex" }],
+            "not-match": [{ "metadata.mode": "dev" }],
+            "exist": ["tools.#(type==\"web_search\").type"],
+            "not-exist": ["metadata.disable_payload"]
+          }
+        ],
         "params": { "reasoning.effort": "high" }
       }
     ],
@@ -460,7 +473,11 @@ openai-compatibility
 }
 ```
 
-`PUT /payload` 和 `PATCH /payload` 接受原始 payload object、`{ "value": <payload> }` 或 `{ "payload": <payload> }`。
+`GET /payload` 返回完整持久化 payload root，包括旧前端暂不识别的高级 model matcher 字段。
+
+`PUT /payload` 接受原始 payload object、`{ "value": <payload> }` 或 `{ "payload": <payload> }`。它会替换完整 `payload` root，并校验完整 schema，不会静默丢弃高级 matcher 字段。
+
+`PATCH /payload` 接受相同 body 形态，并对现有 `payload` root 应用 object merge-patch 语义：提交的 object 字段会递归合并，`null` 删除字段，array 作为整体替换，patch 中未出现的 sibling 字段会保留。这样前端只更新 `filter` 等单个 section 时，不会删除 `default`、`override` 或高级 matcher 字段。
 
 `DELETE /payload` 从 config snapshot 删除该 root。
 
@@ -3091,7 +3108,32 @@ Payload 嵌套结构：
   },
   "PayloadModelRule": {
     "name": "model pattern or wildcard",
-    "protocol": "translator protocol"
+    "protocol": "translator protocol",
+    "from-protocol": "source protocol",
+    "headers": {
+      "Header-Name": "wildcard value"
+    },
+    "match": [
+      { "json.path": "required value" }
+    ],
+    "not-match": [
+      { "json.path": "disallowed value" }
+    ],
+    "exist": ["json.path"],
+    "not-exist": ["json.path"]
   }
 }
 ```
+
+`PayloadModelRule` 字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `name` | string | 目标 model name 或通配模式。 |
+| `protocol` | string | 当前 translator protocol/provider format 匹配条件，例如 `openai`、`responses`、`gemini`、`claude`、`codex` 或 `antigravity`。 |
+| `from-protocol` | string | 来源协议匹配条件，用于请求从其他协议转换而来的场景。 |
+| `headers` | object string to string | 请求 header 匹配条件；配置的每个 header 都必须存在，且值需要匹配对应通配模式。 |
+| `match` | array of object | payload JSON path/value 必须匹配的条件；path 使用与 payload params 相同的 gjson/sjson 风格路径语法。 |
+| `not-match` | array of object | payload JSON path/value 必须不匹配的条件。 |
+| `exist` | array of string | 指定 payload JSON path 必须存在且不是 `null`。 |
+| `not-exist` | array of string | 指定 payload JSON path 必须不存在或为 `null`。 |

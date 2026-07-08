@@ -205,6 +205,46 @@ func (h *Handler) PutConfigRoot(route string) gin.HandlerFunc {
 	}
 }
 
+// PatchConfigRoot merges a config root object.
+func (h *Handler) PatchConfigRoot(route string) gin.HandlerFunc {
+	// Normalize source data before building the derived payload.
+	key := strings.Trim(strings.TrimSpace(route), "/")
+	return func(c *gin.Context) {
+		value, errValue := readConfigValue(c, key)
+		if errValue != nil {
+			respondError(c, http.StatusBadRequest, "invalid body", errValue)
+			return
+		}
+		ctx, cancel := h.requestContext(c)
+		defer cancel()
+		root, errSnapshot := h.configRoot(ctx)
+		if errSnapshot != nil {
+			respondError(c, http.StatusInternalServerError, "config_load_failed", errSnapshot)
+			return
+		}
+		current, _ := root[key].(map[string]any)
+		patch, ok := value.(map[string]any)
+		if !ok {
+			root[key] = value
+		} else {
+			root[key] = mergeConfigPatch(current, patch)
+		}
+		if _, errConfig := configFromRoot(root); errConfig != nil {
+			respondError(c, http.StatusUnprocessableEntity, "invalid_config", errConfig)
+			return
+		}
+		if errUpsert := h.repo.UpsertConfigValue(ctx, key, root[key]); errUpsert != nil {
+			respondError(c, http.StatusInternalServerError, "write_failed", errUpsert)
+			return
+		}
+		if errRefresh := h.refreshConfig(ctx); errRefresh != nil {
+			respondError(c, http.StatusInternalServerError, "reload_failed", errRefresh)
+			return
+		}
+		respondOK(c)
+	}
+}
+
 // DeleteConfigRoot deletes a config root.
 func (h *Handler) DeleteConfigRoot(route string) gin.HandlerFunc {
 	// Normalize source data before building the derived payload.
@@ -336,6 +376,27 @@ func readConfigValue(c *gin.Context, key string) (any, error) {
 		}
 	}
 	return value, nil
+}
+
+func mergeConfigPatch(current map[string]any, patch map[string]any) map[string]any {
+	merged := make(map[string]any, len(current)+len(patch))
+	for key, value := range current {
+		merged[key] = value
+	}
+	for key, value := range patch {
+		if value == nil {
+			delete(merged, key)
+			continue
+		}
+		currentObject, currentOK := merged[key].(map[string]any)
+		patchObject, patchOK := value.(map[string]any)
+		if currentOK && patchOK {
+			merged[key] = mergeConfigPatch(currentObject, patchObject)
+			continue
+		}
+		merged[key] = value
+	}
+	return merged
 }
 
 // isCredentialConfigKey reports whether credential config key.

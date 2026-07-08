@@ -86,3 +86,67 @@ func TestRuntimeConfigFromRootPreservesPluginConfig(t *testing.T) {
 		t.Fatalf("runtime payload lost plugin config:\n%s", string(payload))
 	}
 }
+
+func TestRuntimeConfigFromRootPreservesAdvancedPayloadModelMatchers(t *testing.T) {
+	root := map[string]any{
+		"payload": map[string]any{
+			"default": []any{
+				map[string]any{
+					"models": []any{
+						map[string]any{
+							"name":          "gemini-*",
+							"protocol":      "gemini",
+							"from-protocol": "responses",
+							"headers": map[string]any{
+								"X-Client-Tier": "tenant-*",
+							},
+							"match": []any{
+								map[string]any{"metadata.client": "codex"},
+							},
+							"not-match": []any{
+								map[string]any{"metadata.mode": "dev"},
+							},
+							"exist":     []any{"tools.#(type==\"web_search\").type"},
+							"not-exist": []any{"metadata.disable_payload"},
+						},
+					},
+					"params": map[string]any{
+						"generationConfig.thinkingConfig.thinkingBudget": 32768,
+					},
+				},
+			},
+		},
+	}
+
+	cfg, payload, errConfig := RuntimeConfigFromRoot(root)
+	if errConfig != nil {
+		t.Fatalf("RuntimeConfigFromRoot() error = %v", errConfig)
+	}
+	if len(cfg.Payload.Default) != 1 || len(cfg.Payload.Default[0].Models) != 1 {
+		t.Fatalf("payload default models = %#v, want one advanced matcher", cfg.Payload.Default)
+	}
+	model := cfg.Payload.Default[0].Models[0]
+	if model.FromProtocol != "responses" {
+		t.Fatalf("FromProtocol = %q, want responses", model.FromProtocol)
+	}
+	if model.Headers["X-Client-Tier"] != "tenant-*" {
+		t.Fatalf("Headers = %#v, want X-Client-Tier matcher", model.Headers)
+	}
+	if len(model.Match) != 1 || model.Match[0]["metadata.client"] != "codex" {
+		t.Fatalf("Match = %#v, want metadata.client matcher", model.Match)
+	}
+	if len(model.NotMatch) != 1 || model.NotMatch[0]["metadata.mode"] != "dev" {
+		t.Fatalf("NotMatch = %#v, want metadata.mode matcher", model.NotMatch)
+	}
+	if len(model.Exist) != 1 || model.Exist[0] != "tools.#(type==\"web_search\").type" {
+		t.Fatalf("Exist = %#v, want web_search path", model.Exist)
+	}
+	if len(model.NotExist) != 1 || model.NotExist[0] != "metadata.disable_payload" {
+		t.Fatalf("NotExist = %#v, want disable payload path", model.NotExist)
+	}
+	for _, want := range []string{"from-protocol: responses", "X-Client-Tier: tenant-*", "not-exist:"} {
+		if !strings.Contains(string(payload), want) {
+			t.Fatalf("runtime payload missing %q:\n%s", want, string(payload))
+		}
+	}
+}
