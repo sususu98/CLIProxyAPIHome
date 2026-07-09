@@ -284,7 +284,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodDelete, "/oauth-model-alias", handler.DeleteOAuthModelAlias)
 	r.Set(http.MethodGet, "/payload", handler.GetConfigRoot("/payload"))
 	r.Set(http.MethodPut, "/payload", handler.PutConfigRoot("/payload"))
-	r.Set(http.MethodPatch, "/payload", handler.PutConfigRoot("/payload"))
+	r.Set(http.MethodPatch, "/payload", handler.PatchConfigRoot("/payload"))
 	r.Set(http.MethodDelete, "/payload", handler.DeleteConfigRoot("/payload"))
 
 	r.Set(http.MethodGet, "/auth-files", handler.ListAuthFiles)

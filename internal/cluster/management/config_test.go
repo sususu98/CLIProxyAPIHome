@@ -219,6 +219,111 @@ func TestOAuthModelAliasForceMappingRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPayloadAdvancedMatchersRoundTrip(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	handler := NewHandler(repo, nil, "127.0.0.1", 0)
+	engine := gin.New()
+	engine.PUT("/payload", handler.PutConfigRoot("/payload"))
+	engine.GET("/payload", handler.GetConfigRoot("/payload"))
+	engine.GET("/config", handler.GetConfig)
+	engine.PATCH("/payload", handler.PatchConfigRoot("/payload"))
+
+	payload := `{
+  "default": [
+    {
+      "models": [
+        {
+          "name": "gemini-*",
+          "protocol": "gemini",
+          "from-protocol": "responses",
+          "headers": {
+            "X-Client-Tier": "tenant-*"
+          },
+          "match": [
+            { "metadata.client": "codex" }
+          ],
+          "not-match": [
+            { "metadata.mode": "dev" }
+          ],
+          "exist": [
+            "tools.#(type==\"web_search\").type"
+          ],
+          "not-exist": [
+            "metadata.disable_payload"
+          ]
+        }
+      ],
+      "params": {
+        "generationConfig.thinkingConfig.thinkingBudget": 32768
+      }
+    }
+  ],
+  "override": [
+    {
+      "models": [
+        { "name": "gpt-*", "protocol": "responses" }
+      ],
+      "params": {
+        "reasoning.effort": "high"
+      }
+    }
+  ]
+}`
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/payload", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("put status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+
+	getResp := httptest.NewRecorder()
+	getReq := httptest.NewRequest(http.MethodGet, "/payload", nil)
+	engine.ServeHTTP(getResp, getReq)
+	if getResp.Code != http.StatusOK {
+		t.Fatalf("get status = %d, body = %s", getResp.Code, getResp.Body.String())
+	}
+	assertAdvancedPayloadMatcher(t, getResp.Body.Bytes())
+
+	configResp := httptest.NewRecorder()
+	configReq := httptest.NewRequest(http.MethodGet, "/config", nil)
+	engine.ServeHTTP(configResp, configReq)
+	if configResp.Code != http.StatusOK {
+		t.Fatalf("config status = %d, body = %s", configResp.Code, configResp.Body.String())
+	}
+	assertAdvancedPayloadMatcher(t, configResp.Body.Bytes())
+
+	patchResp := httptest.NewRecorder()
+	patchReq := httptest.NewRequest(http.MethodPatch, "/payload", strings.NewReader(`{
+  "filter": [
+    {
+      "models": [
+        { "name": "gemini-*", "protocol": "gemini" }
+      ],
+      "params": ["generationConfig.responseJsonSchema"]
+    }
+  ]
+}`))
+	patchReq.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(patchResp, patchReq)
+	if patchResp.Code != http.StatusOK {
+		t.Fatalf("patch status = %d, body = %s", patchResp.Code, patchResp.Body.String())
+	}
+
+	patchedResp := httptest.NewRecorder()
+	patchedReq := httptest.NewRequest(http.MethodGet, "/payload", nil)
+	engine.ServeHTTP(patchedResp, patchedReq)
+	if patchedResp.Code != http.StatusOK {
+		t.Fatalf("patched get status = %d, body = %s", patchedResp.Code, patchedResp.Body.String())
+	}
+	assertAdvancedPayloadMatcher(t, patchedResp.Body.Bytes())
+	assertPayloadHasSections(t, patchedResp.Body.Bytes(), "default", "override", "filter")
+}
+
 func providerKeyFirstModel(t *testing.T, raw []byte, key string) map[string]any {
 	t.Helper()
 
@@ -239,6 +344,84 @@ func providerKeyFirstModel(t *testing.T, raw []byte, key string) map[string]any 
 		t.Fatalf("%s first model = %+v, want object", key, rawModels[0])
 	}
 	return model
+}
+
+func assertAdvancedPayloadMatcher(t *testing.T, raw []byte) {
+	t.Helper()
+
+	var root map[string]any
+	if errDecode := json.Unmarshal(raw, &root); errDecode != nil {
+		t.Fatalf("decode payload response: %v; body = %s", errDecode, string(raw))
+	}
+	payloadRoot, ok := root["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload root = %#v, want object; body = %s", root["payload"], string(raw))
+	}
+	defaultRules, ok := payloadRoot["default"].([]any)
+	if !ok || len(defaultRules) != 1 {
+		t.Fatalf("payload.default = %#v, want one rule; body = %s", payloadRoot["default"], string(raw))
+	}
+	defaultRule, ok := defaultRules[0].(map[string]any)
+	if !ok {
+		t.Fatalf("payload.default[0] = %#v, want object", defaultRules[0])
+	}
+	models, ok := defaultRule["models"].([]any)
+	if !ok || len(models) != 1 {
+		t.Fatalf("payload.default[0].models = %#v, want one model", defaultRule["models"])
+	}
+	model, ok := models[0].(map[string]any)
+	if !ok {
+		t.Fatalf("payload.default[0].models[0] = %#v, want object", models[0])
+	}
+	if model["from-protocol"] != "responses" {
+		t.Fatalf("from-protocol = %#v, want responses; model = %#v", model["from-protocol"], model)
+	}
+	headers, ok := model["headers"].(map[string]any)
+	if !ok || headers["X-Client-Tier"] != "tenant-*" {
+		t.Fatalf("headers = %#v, want X-Client-Tier matcher", model["headers"])
+	}
+	match, ok := model["match"].([]any)
+	if !ok || len(match) != 1 {
+		t.Fatalf("match = %#v, want one matcher", model["match"])
+	}
+	matchMap, ok := match[0].(map[string]any)
+	if !ok || matchMap["metadata.client"] != "codex" {
+		t.Fatalf("match[0] = %#v, want metadata.client matcher", match[0])
+	}
+	notMatch, ok := model["not-match"].([]any)
+	if !ok || len(notMatch) != 1 {
+		t.Fatalf("not-match = %#v, want one matcher", model["not-match"])
+	}
+	notMatchMap, ok := notMatch[0].(map[string]any)
+	if !ok || notMatchMap["metadata.mode"] != "dev" {
+		t.Fatalf("not-match[0] = %#v, want metadata.mode matcher", notMatch[0])
+	}
+	exist, ok := model["exist"].([]any)
+	if !ok || len(exist) != 1 || exist[0] != `tools.#(type=="web_search").type` {
+		t.Fatalf("exist = %#v, want web_search path", model["exist"])
+	}
+	notExist, ok := model["not-exist"].([]any)
+	if !ok || len(notExist) != 1 || notExist[0] != "metadata.disable_payload" {
+		t.Fatalf("not-exist = %#v, want disable_payload path", model["not-exist"])
+	}
+}
+
+func assertPayloadHasSections(t *testing.T, raw []byte, sections ...string) {
+	t.Helper()
+
+	var root map[string]any
+	if errDecode := json.Unmarshal(raw, &root); errDecode != nil {
+		t.Fatalf("decode payload response: %v; body = %s", errDecode, string(raw))
+	}
+	payloadRoot, ok := root["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload root = %#v, want object; body = %s", root["payload"], string(raw))
+	}
+	for _, section := range sections {
+		if _, exists := payloadRoot[section]; !exists {
+			t.Fatalf("payload missing section %q after patch: %#v", section, payloadRoot)
+		}
+	}
 }
 
 func assertOAuthModelAliasForceMapping(t *testing.T, raw []byte) {

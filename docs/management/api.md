@@ -443,7 +443,20 @@ These routes write the corresponding config root into the cluster repository and
   "payload": {
     "default": [
       {
-        "models": [{ "name": "gpt-*", "protocol": "responses" }],
+        "models": [
+          {
+            "name": "gpt-*",
+            "protocol": "responses",
+            "from-protocol": "openai",
+            "headers": {
+              "X-Client-Tier": "tenant-*"
+            },
+            "match": [{ "metadata.client": "codex" }],
+            "not-match": [{ "metadata.mode": "dev" }],
+            "exist": ["tools.#(type==\"web_search\").type"],
+            "not-exist": ["metadata.disable_payload"]
+          }
+        ],
         "params": { "reasoning.effort": "high" }
       }
     ],
@@ -460,7 +473,11 @@ These routes write the corresponding config root into the cluster repository and
 }
 ```
 
-`PUT /payload` and `PATCH /payload` accept either a raw payload object, `{ "value": <payload> }`, or `{ "payload": <payload> }`.
+`GET /payload` returns the complete persisted payload root, including advanced model matcher fields that older frontends may not recognize.
+
+`PUT /payload` accepts either a raw payload object, `{ "value": <payload> }`, or `{ "payload": <payload> }`. It replaces the complete `payload` root and validates the full schema without dropping advanced matcher fields.
+
+`PATCH /payload` accepts the same body shapes and applies object merge-patch semantics to the existing `payload` root: submitted object fields are merged recursively, `null` removes a field, arrays are replaced as whole values, and sibling fields not present in the patch are preserved. This lets clients update one section, such as `filter`, without deleting `default`, `override`, or advanced matcher fields.
 
 `DELETE /payload` removes the root from the config snapshot.
 
@@ -3091,7 +3108,32 @@ Payload nested structure:
   },
   "PayloadModelRule": {
     "name": "model pattern or wildcard",
-    "protocol": "translator protocol"
+    "protocol": "translator protocol",
+    "from-protocol": "source protocol",
+    "headers": {
+      "Header-Name": "wildcard value"
+    },
+    "match": [
+      { "json.path": "required value" }
+    ],
+    "not-match": [
+      { "json.path": "disallowed value" }
+    ],
+    "exist": ["json.path"],
+    "not-exist": ["json.path"]
   }
 }
 ```
+
+`PayloadModelRule` fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | string | Target model name or wildcard pattern. |
+| `protocol` | string | Current translator protocol/provider format matcher, such as `openai`, `responses`, `gemini`, `claude`, `codex`, or `antigravity`. |
+| `from-protocol` | string | Source protocol matcher used when a request was translated from another protocol. |
+| `headers` | object string to string | Request header matchers. Every configured header must be present and its value must match the configured wildcard pattern. |
+| `match` | array of object | Payload JSON path/value conditions that must match. Paths use the same gjson/sjson-style path syntax as payload params. |
+| `not-match` | array of object | Payload JSON path/value conditions that must not match. |
+| `exist` | array of string | Payload JSON paths that must exist and not be `null`. |
+| `not-exist` | array of string | Payload JSON paths that must be missing or `null`. |
