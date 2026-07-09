@@ -30,11 +30,24 @@ func IsUserConflictError(err error) bool {
 }
 
 type UserUpdate struct {
-	Username *string
-	Password *string
-	Credits  *float64
-	MFA      *JSONB
-	Passkey  *JSONB
+	Username         *string
+	Password         *string
+	Credits          *float64
+	CreditsUnlimited *bool
+	MFA              *JSONB
+	Passkey          *JSONB
+
+	Timezone        *string
+	Limit5hCredits  OptionalFloatUpdate
+	WindowMode5h    *string
+	Limit1dCredits  OptionalFloatUpdate
+	WindowMode1d    *string
+	Limit7dCredits  OptionalFloatUpdate
+	WindowMode7d    *string
+	WeekResetDay    *int
+	WeekResetHour   *int
+	Limit30dCredits OptionalFloatUpdate
+	WindowMode30d   *string
 }
 
 // ListUsers returns users.
@@ -103,11 +116,18 @@ func (r *Repository) CreateUser(ctx context.Context, update UserUpdate) (*UserRe
 	record := &UserRecord{
 		Username: username,
 	}
+	defaultUserPeriodLimitFields(record)
 	if update.Password != nil {
 		record.Password = *update.Password
 	}
 	if update.Credits != nil {
 		record.Credits = *update.Credits
+	}
+	if update.CreditsUnlimited != nil {
+		record.CreditsUnlimited = *update.CreditsUnlimited
+	}
+	if errApply := applyUserPeriodLimitUpdate(record, update); errApply != nil {
+		return nil, errApply
 	}
 	if update.MFA != nil {
 		record.MFA = cloneJSONB(*update.MFA)
@@ -149,6 +169,12 @@ func (r *Repository) UpdateUser(ctx context.Context, id uint, update UserUpdate)
 		}
 		if update.Credits != nil {
 			record.Credits = *update.Credits
+		}
+		if update.CreditsUnlimited != nil {
+			record.CreditsUnlimited = *update.CreditsUnlimited
+		}
+		if errApply := applyUserPeriodLimitUpdate(record, update); errApply != nil {
+			return errApply
 		}
 		if update.MFA != nil {
 			record.MFA = cloneJSONB(*update.MFA)
@@ -242,4 +268,73 @@ func NormalizeJSONB(raw json.RawMessage) (*JSONB, error) {
 	}
 	value := JSONB(append([]byte(nil), raw...))
 	return &value, nil
+}
+
+func applyUserPeriodLimitUpdate(record *UserRecord, update UserUpdate) error {
+	if record == nil {
+		return fmt.Errorf("user record is nil")
+	}
+	defaultUserPeriodLimitFields(record)
+	if update.Timezone != nil {
+		timezone, errTZ := normalizeUserTimezone(*update.Timezone)
+		if errTZ != nil {
+			return errTZ
+		}
+		record.Timezone = timezone
+	}
+	if errLimit := applyOptionalFloat(update.Limit5hCredits, &record.Limit5hCredits); errLimit != nil {
+		return fmt.Errorf("limit_5h_credits: %w", errLimit)
+	}
+	if update.WindowMode5h != nil {
+		mode, errMode := normalizePeriodWindowMode(*update.WindowMode5h, false)
+		if errMode != nil {
+			return fmt.Errorf("window_mode_5h: %w", errMode)
+		}
+		record.WindowMode5h = mode
+	}
+	if errLimit := applyOptionalFloat(update.Limit1dCredits, &record.Limit1dCredits); errLimit != nil {
+		return fmt.Errorf("limit_1d_credits: %w", errLimit)
+	}
+	if update.WindowMode1d != nil {
+		mode, errMode := normalizePeriodWindowMode(*update.WindowMode1d, true)
+		if errMode != nil {
+			return fmt.Errorf("window_mode_1d: %w", errMode)
+		}
+		record.WindowMode1d = mode
+	}
+	if errLimit := applyOptionalFloat(update.Limit7dCredits, &record.Limit7dCredits); errLimit != nil {
+		return fmt.Errorf("limit_7d_credits: %w", errLimit)
+	}
+	if update.WindowMode7d != nil {
+		mode, errMode := normalizePeriodWindowMode(*update.WindowMode7d, true)
+		if errMode != nil {
+			return fmt.Errorf("window_mode_7d: %w", errMode)
+		}
+		record.WindowMode7d = mode
+	}
+	if update.WeekResetDay != nil {
+		day, errDay := normalizeWeekResetDay(*update.WeekResetDay)
+		if errDay != nil {
+			return errDay
+		}
+		record.WeekResetDay = day
+	}
+	if update.WeekResetHour != nil {
+		hour, errHour := normalizeWeekResetHour(*update.WeekResetHour)
+		if errHour != nil {
+			return errHour
+		}
+		record.WeekResetHour = hour
+	}
+	if errLimit := applyOptionalFloat(update.Limit30dCredits, &record.Limit30dCredits); errLimit != nil {
+		return fmt.Errorf("limit_30d_credits: %w", errLimit)
+	}
+	if update.WindowMode30d != nil {
+		mode, errMode := normalizePeriodWindowMode(*update.WindowMode30d, true)
+		if errMode != nil {
+			return fmt.Errorf("window_mode_30d: %w", errMode)
+		}
+		record.WindowMode30d = mode
+	}
+	return nil
 }

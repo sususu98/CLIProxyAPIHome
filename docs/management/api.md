@@ -257,6 +257,8 @@ The table below is extracted from the final Home route registry built by `intern
 | `GET` | `/users` |
 | `POST` | `/users` |
 | `DELETE` | `/users/:id` |
+| `GET` | `/users/:id/period-limits` |
+| `POST` | `/users/:id/period-limits/reset` |
 | `GET` | `/users/:id` |
 | `PATCH` | `/users/:id` |
 | `PUT` | `/users/:id` |
@@ -973,6 +975,7 @@ Example response:
       "username": "alice",
       "password_set": true,
       "credits": 10.5,
+      "credits_unlimited": false,
       "mfa": { "enabled": true },
       "passkey": [{ "id": "credential-id" }],
       "created_at": "2026-05-27T10:00:00Z",
@@ -1002,6 +1005,7 @@ Example response:
     "username": "alice",
     "password_set": true,
     "credits": 10.5,
+    "credits_unlimited": false,
     "mfa": { "enabled": true },
     "passkey": [{ "id": "credential-id" }],
     "created_at": "2026-05-27T10:00:00Z",
@@ -1032,6 +1036,18 @@ Example request:
 | `username` | string | yes | Username. Aliases: `user_name`, `user-name`. |
 | `password` | string | no | Non-empty plaintext is stored as a bcrypt hash. Existing valid bcrypt hashes are preserved for migration. Responses do not return password material; they return `password_set`. |
 | `credits` | number | no | User credit balance. Defaults to `0`. When a client API key is bound to this user and credits are `<= 0`, RESP `RPOP auth` returns `user_credits_insufficient`. For billing workflows, prefer `/billing/balance-records/recharge` and `/billing/balance-records/deduct` so balance changes have ledger records. |
+| `credits_unlimited` | boolean | no | When `true`, dispatch ignores the total `credits` balance and billing charges do not deduct it. Period limits still apply. Defaults to `false`. |
+| `timezone` | string | no | IANA timezone for calendar windows; default `Asia/Shanghai`. |
+| `limit_5h_credits` | number/null | no | 5-hour credits limit. `null` clears/disables. `0` blocks immediately. |
+| `window_mode_5h` | string | no | `first_use` (default; alias `fixed`) or `sliding`. |
+| `limit_1d_credits` | number/null | no | 1-day credits limit. |
+| `window_mode_1d` | string | no | `first_use`, `sliding` (alias `rolling`), or `calendar` (default `first_use`). |
+| `limit_7d_credits` | number/null | no | 7-day credits limit. |
+| `window_mode_7d` | string | no | `first_use`, `sliding` (alias `rolling`), or `calendar` (default `first_use`). |
+| `week_reset_day` | integer | no | Calendar week start day, `1=Mon` .. `7=Sun` (default `1`). |
+| `week_reset_hour` | integer | no | Calendar week start hour `0-23` (default `0`). |
+| `limit_30d_credits` | number/null | no | 30-day / month credits limit. |
+| `window_mode_30d` | string | no | `first_use`, `sliding` (alias `rolling`), or `calendar` (default `first_use`). Calendar uses calendar months. |
 | `mfa` | any valid JSON | no | Stored in `user.mfa`. |
 | `passkey` | any valid JSON | no | Stored in `user.passkey`. |
 
@@ -1054,8 +1070,65 @@ Example request:
 ```
 
 All request fields are optional, but `username`, if present, must not be empty. `credits`, if present, replaces the user's current credit balance. For billing workflows, prefer `/billing/balance-records/recharge` and `/billing/balance-records/deduct` so balance changes have ledger records.
+Set `credits_unlimited` to `true` when the user should have unlimited total balance but still be constrained by configured period limits.
 
 Response: same shape as `GET /users/:id`.
+
+
+### GET `/users/:id/period-limits`
+
+Returns the user's period-limit configuration and current usage.
+
+Response fields include `timezone`, `credits`, `credits_unlimited`, and `windows[]` with:
+
+| Field | Description |
+| --- | --- |
+| `id` | `5h`, `1d`, `7d`, or `30d`. |
+| `enabled` | `true` when the limit is configured (`limit != null`). |
+| `limit` | Credits limit for the window; `null` means disabled. |
+| `used` | Credits spent in the current window (`SUM(billing_charge.amount)`). |
+| `remaining` | `max(limit - used, 0)` when enabled. |
+| `mode` | `first_use`, `sliding`, or `calendar` (`calendar` only for `1d`/`7d`/`30d`). |
+| `window_start` / `window_end` / `reset_at` | Current window bounds when active. |
+| `usage_epoch` | Soft-reset marker; usage only counts charges at/after this time. |
+
+`5h` supports `first_use` (default, **first billable charge** opens a 5h window; legacy alias `fixed`) or `sliding` (rolling 5h). `1d`/`7d`/`30d` support `first_use` (default, first-charge duration; legacy alias `fixed`), `sliding` (rolling duration), or `calendar` (natural day/week/month). Dispatch probes do not open `first_use` windows. Calendar mode uses `timezone` (default `Asia/Shanghai`). Calendar `7d` uses `week_reset_day` (1=Mon..7=Sun) and `week_reset_hour`. Calendar `30d` is a calendar month, not a rolling 30-day span.
+
+Product alignment (Claude Code / Codex):
+- Short window `5h` defaults to `first_use`: the first billable charge opens a 5-hour session; the limit is a credits budget inside that window, not five hours of continuous work.
+- Longer windows (`7d` / `30d`) stack independently; all enabled windows are enforced with AND.
+- Use `calendar` on `1d` / `7d` / `30d` for natural day / week / month resets.
+- Use `sliding` (alias `rolling`) when usage should recover continuously as older spend ages out.
+
+### POST `/users/:id/period-limits/reset`
+
+Soft-resets period counters without deleting billing history.
+
+Request body:
+
+```json
+{ "windows": ["5h", "1d"], "mode": "counter" }
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `windows` | string[] | no | Subset of `5h`/`1d`/`7d`/`30d`. Empty/omitted resets all windows. |
+| `mode` | string | no | `counter` (default): for each selected window set `usage_epoch_* = now` and clear the matching `period_window_start_*`. `window_only`: clear `period_window_start_*`; for `sliding`/`calendar` also set `usage_epoch_*` so used actually resets. |
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "user_id": 1,
+  "reset": { "mode": "counter", "windows": ["5h", "1d"], "at": "2026-07-09T12:00:00Z" },
+  "limits": { "user_id": 1, "windows": [] }
+}
+```
+
+Period limits are enforced at dispatch for every API key owned by the user (`user_credits_insufficient` and `user_period_limit_exceeded`). When `credits_unlimited=true`, the total-balance check is skipped, but enabled period windows are still enforced.
+
+Enforcement is a **soft limit**: cost is known only after the request, so a final/in-flight request may push `used` past `limit`; the next dispatch is blocked. `first_use` opens on the first **billable charge**, not on dispatch probes.
 
 ### DELETE `/users/:id`
 

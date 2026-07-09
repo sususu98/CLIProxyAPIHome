@@ -586,6 +586,11 @@ func (r *Repository) createBillingChargeForUsageTx(ctx context.Context, tx *gorm
 		return nil
 	}
 
+	// Open first_use period windows on the first billable charge (not on dispatch probes).
+	if errOpen := openUserFirstUseWindowsOnChargeTx(ctx, tx, *userID, charge.CreatedAt); errOpen != nil {
+		return errOpen
+	}
+
 	balanceBefore, balanceAfter, errCredits := billingApplyUserCreditDeltaTx(ctx, tx, *userID, -amount)
 	if errCredits != nil {
 		return errCredits
@@ -699,13 +704,13 @@ func billingApplyUserCreditDeltaTx(ctx context.Context, tx *gorm.DB, userID uint
 	ctx = contextOrBackground(ctx)
 	for attempt := 0; attempt < billingCreditMaxRetries; attempt++ {
 		user := &UserRecord{}
-		if errFirst := tx.WithContext(ctx).Select("id", "credits").Where("id = ?", userID).First(user).Error; errFirst != nil {
+		if errFirst := tx.WithContext(ctx).Select("id", "credits", "credits_unlimited").Where("id = ?", userID).First(user).Error; errFirst != nil {
 			return 0, 0, errFirst
 		}
 		balanceBefore := user.Credits
 		balanceAfter := balanceBefore + delta
-		if delta == 0 {
-			return balanceBefore, balanceAfter, nil
+		if delta == 0 || user.CreditsUnlimited {
+			return balanceBefore, balanceBefore, nil
 		}
 		update := tx.WithContext(ctx).
 			Model(&UserRecord{}).
