@@ -351,6 +351,29 @@ func TestDownloadRequestLogByIDForwardsToTargetHomeOverMTLS(t *testing.T) {
 	}
 }
 
+func TestRequestLogTargetNodeUsesHomePortWhenProvided(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+	records := []cluster.ClusterNodeRecord{
+		{IP: "127.0.0.1", Port: 18327, StartedAt: now, LastSeenAt: now},
+		{IP: "127.0.0.1", Port: 18328, StartedAt: now, LastSeenAt: now},
+	}
+	if errCreate := db.Create(&records).Error; errCreate != nil {
+		t.Fatalf("create cluster nodes: %v", errCreate)
+	}
+
+	handler := NewHandler(cluster.NewRepository(db), nil, "127.0.0.1", 18327)
+	target, errTarget := handler.requestLogTargetNode(context.Background(), "127.0.0.1", 18328)
+	if errTarget != nil {
+		t.Fatalf("requestLogTargetNode error = %v", errTarget)
+	}
+	if target == nil || target.Port != 18328 {
+		t.Fatalf("target = %#v, want port 18328", target)
+	}
+}
+
 func TestRequestLogForwardHeaderAllowlists(t *testing.T) {
 	t.Parallel()
 
