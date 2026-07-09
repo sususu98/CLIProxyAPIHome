@@ -26,7 +26,7 @@ type Handler struct {
 
 // NewHandler creates a new handler.
 func NewHandler(repo *cluster.Repository, runtime *home.Runtime, nodeIP string, nodePort int) *Handler {
-	return &Handler{repo: repo, runtime: runtime, nodeIP: strings.TrimSpace(nodeIP), nodePort: nodePort}
+	return &Handler{repo: repo, runtime: runtime, nodeIP: strings.TrimSpace(nodeIP), nodePort: nodePort, heartbeatTimeout: cluster.DefaultHeartbeatTimeout()}
 }
 
 // SetForwardTLSConfig sets the TLS config used for cluster HTTP forwarding.

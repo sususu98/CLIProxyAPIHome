@@ -124,6 +124,25 @@ func TestListNodesUsesConfiguredHeartbeatTimeout(t *testing.T) {
 	}
 }
 
+type topologyTestHomeItem struct {
+	ID              string `json:"id"`
+	Role            string `json:"role"`
+	IsMaster        bool   `json:"is_master"`
+	ReportedMaster  bool   `json:"reported_master"`
+	Health          string `json:"health"`
+	CPACount        int    `json:"cpa_count"`
+	HealthyCPACount int    `json:"healthy_cpa_count"`
+}
+
+type topologyTestCPAItem struct {
+	NodeID   string `json:"node_id"`
+	HomeID   string `json:"home_id"`
+	HomeIP   string `json:"home_ip"`
+	HomePort int    `json:"home_port"`
+	Health   string `json:"health"`
+	Healthy  bool   `json:"healthy"`
+}
+
 func TestListNodesIncludesPluginTaskHealth(t *testing.T) {
 	db, cleanup := openManagementLogTestDB(t)
 	defer cleanup()
@@ -174,7 +193,7 @@ func TestListNodesIncludesPluginTaskHealth(t *testing.T) {
 	node.GlobalRegistry().AddWithNodeID("10.0.0.5", "node-1", time.Now().UTC())
 	defer node.GlobalRegistry().RemoveWithNodeID("10.0.0.5", "node-1")
 
-	handler := NewHandler(repo, nil, "127.0.0.1", 0)
+	handler := NewHandler(repo, nil, "127.0.0.1", 8327)
 	engine := gin.New()
 	engine.GET("/nodes", handler.ListNodes)
 
@@ -189,6 +208,10 @@ func TestListNodesIncludesPluginTaskHealth(t *testing.T) {
 		Nodes                []struct {
 			NodeID            string                  `json:"node_id"`
 			IP                string                  `json:"ip"`
+			HomeID            string                  `json:"home_id"`
+			HomeIP            string                  `json:"home_ip"`
+			HomePort          int                     `json:"home_port"`
+			LastSeenAt        time.Time               `json:"last_seen_at"`
 			Healthy           bool                    `json:"healthy"`
 			PluginReportState string                  `json:"plugin_report_state"`
 			Statuses          []node.PluginTaskStatus `json:"plugin_report_statuses"`
@@ -207,9 +230,354 @@ func TestListNodesIncludesPluginTaskHealth(t *testing.T) {
 	if len(body.Nodes) != 1 {
 		t.Fatalf("nodes len = %d, want 1", len(body.Nodes))
 	}
-	if body.Nodes[0].NodeID != "node-1" || body.Nodes[0].IP != "10.0.0.5" || !body.Nodes[0].Healthy || body.Nodes[0].PluginReportState != "reported_failed" || len(body.Nodes[0].Statuses) != 1 {
+	if body.Nodes[0].NodeID != "node-1" || body.Nodes[0].IP != "10.0.0.5" || body.Nodes[0].HomeID != "127.0.0.1:8327" || body.Nodes[0].HomeIP != "127.0.0.1" || body.Nodes[0].HomePort != 8327 || body.Nodes[0].LastSeenAt.IsZero() || !body.Nodes[0].Healthy || body.Nodes[0].PluginReportState != "reported_failed" || len(body.Nodes[0].Statuses) != 1 {
 		t.Fatalf("node = %+v, want failed plugin report state", body.Nodes[0])
 	}
+}
+
+func TestGetTopologyReturnsHomeAndCPANodes(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	now := time.Now().UTC()
+	homeRecords := []cluster.ClusterNodeRecord{
+		{
+			IP:          "home-a",
+			Port:        8327,
+			IsMaster:    true,
+			ClientCount: 1,
+			StartedAt:   now.Add(-time.Minute),
+			LastSeenAt:  now,
+		},
+		{
+			IP:          "home-b",
+			Port:        8327,
+			IsMaster:    false,
+			ClientCount: 1,
+			StartedAt:   now,
+			LastSeenAt:  now,
+		},
+	}
+	if errCreate := db.Create(&homeRecords).Error; errCreate != nil {
+		t.Fatalf("create home records: %v", errCreate)
+	}
+
+	if errSnapshot := repo.ReplaceCPANodeSnapshot(context.Background(), "home-a", 8327, []node.Node{
+		{NodeID: "cpa-a", IP: "10.0.0.5", ClientCount: 1, Connected: now.Add(-30 * time.Second)},
+	}, now); errSnapshot != nil {
+		t.Fatalf("replace cpa-a snapshot: %v", errSnapshot)
+	}
+	if errSnapshot := repo.ReplaceCPANodeSnapshot(context.Background(), "home-b", 8327, []node.Node{
+		{NodeID: "cpa-b", IP: "10.0.0.6", ClientCount: 1, Connected: now.Add(-20 * time.Second)},
+	}, now); errSnapshot != nil {
+		t.Fatalf("replace cpa-b snapshot: %v", errSnapshot)
+	}
+
+	handler := NewHandler(repo, nil, "home-a", 8327)
+	engine := gin.New()
+	engine.GET("/topology", handler.GetTopology)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/topology", nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+
+	var body struct {
+		Summary struct {
+			HomeCount        int  `json:"home_count"`
+			HealthyHomeCount int  `json:"healthy_home_count"`
+			CPACount         int  `json:"cpa_count"`
+			HealthyCPACount  int  `json:"healthy_cpa_count"`
+			MissingMaster    bool `json:"missing_master"`
+		} `json:"summary"`
+		Management struct {
+			HomeID string `json:"home_id"`
+		} `json:"management"`
+		Master struct {
+			ID string `json:"id"`
+		} `json:"master"`
+		Homes []topologyTestHomeItem `json:"homes"`
+		CPAs  []topologyTestCPAItem  `json:"cpas"`
+	}
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode topology: %v; body=%s", errDecode, resp.Body.String())
+	}
+	if body.Summary.HomeCount != 2 || body.Summary.HealthyHomeCount != 2 || body.Summary.CPACount != 2 || body.Summary.HealthyCPACount != 2 || body.Summary.MissingMaster {
+		t.Fatalf("summary = %+v, want two healthy homes and cpas with master", body.Summary)
+	}
+	if body.Management.HomeID != "home-a:8327" {
+		t.Fatalf("management home id = %q, want home-a:8327", body.Management.HomeID)
+	}
+	if body.Master.ID != "home-a:8327" {
+		t.Fatalf("master id = %q, want home-a:8327", body.Master.ID)
+	}
+	if topologyTestHome(body.Homes, "home-a:8327").CPACount != 1 || topologyTestHome(body.Homes, "home-b:8327").CPACount != 1 {
+		t.Fatalf("homes = %+v, want one CPA under each Home", body.Homes)
+	}
+	cpaA := topologyTestCPA(body.CPAs, "cpa-a")
+	if cpaA.HomeID != "home-a:8327" || cpaA.HomeIP != "home-a" || cpaA.HomePort != 8327 || cpaA.Health != "healthy" || !cpaA.Healthy {
+		t.Fatalf("cpa-a = %+v, want connected to home-a and healthy", cpaA)
+	}
+	cpaB := topologyTestCPA(body.CPAs, "cpa-b")
+	if cpaB.HomeID != "home-b:8327" || cpaB.HomeIP != "home-b" || cpaB.HomePort != 8327 || cpaB.Health != "healthy" || !cpaB.Healthy {
+		t.Fatalf("cpa-b = %+v, want connected to home-b and healthy", cpaB)
+	}
+}
+
+func TestGetTopologyReportsMissingMasterWithoutHomeHeartbeat(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	handler := NewHandler(repo, nil, "home-a", 8327)
+	engine := gin.New()
+	engine.GET("/topology", handler.GetTopology)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/topology", nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+
+	var body struct {
+		Summary struct {
+			HomeCount      int  `json:"home_count"`
+			CPACount       int  `json:"cpa_count"`
+			MissingMaster  bool `json:"missing_master"`
+			AttentionCount int  `json:"attention_count"`
+		} `json:"summary"`
+		Master *topologyTestHomeItem `json:"master"`
+	}
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode topology: %v; body=%s", errDecode, resp.Body.String())
+	}
+	if body.Summary.HomeCount != 0 || body.Summary.CPACount != 0 || !body.Summary.MissingMaster || body.Summary.AttentionCount != 1 {
+		t.Fatalf("summary = %+v, want empty topology with missing master attention", body.Summary)
+	}
+	if body.Master != nil {
+		t.Fatalf("master = %+v, want nil for empty topology", body.Master)
+	}
+}
+
+func TestGetTopologyMarksCPAUnknownWhenServingHomeIsMissing(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	now := time.Now().UTC()
+	if errSnapshot := repo.ReplaceCPANodeSnapshot(context.Background(), "home-missing", 8327, []node.Node{
+		{NodeID: "cpa-orphan", IP: "10.0.0.10", ClientCount: 1, Connected: now.Add(-time.Minute)},
+	}, now); errSnapshot != nil {
+		t.Fatalf("replace orphan cpa snapshot: %v", errSnapshot)
+	}
+
+	handler := NewHandler(repo, nil, "home-a", 8327)
+	engine := gin.New()
+	engine.GET("/topology", handler.GetTopology)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/topology", nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+
+	var body struct {
+		Summary struct {
+			HomeCount       int  `json:"home_count"`
+			CPACount        int  `json:"cpa_count"`
+			UnknownCPACount int  `json:"unknown_cpa_count"`
+			MissingMaster   bool `json:"missing_master"`
+			AttentionCount  int  `json:"attention_count"`
+		} `json:"summary"`
+		CPAs []topologyTestCPAItem `json:"cpas"`
+	}
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode topology: %v; body=%s", errDecode, resp.Body.String())
+	}
+	if body.Summary.HomeCount != 0 || body.Summary.CPACount != 1 || body.Summary.UnknownCPACount != 1 || !body.Summary.MissingMaster || body.Summary.AttentionCount != 2 {
+		t.Fatalf("summary = %+v, want orphan cpa counted unknown plus missing master", body.Summary)
+	}
+	cpa := topologyTestCPA(body.CPAs, "cpa-orphan")
+	if cpa.HomeID != "home-missing:8327" || cpa.Health != "unknown" || cpa.Healthy {
+		t.Fatalf("cpa-orphan = %+v, want unknown cpa under missing home", cpa)
+	}
+}
+
+func TestGetTopologyIncludesStaleCPASnapshots(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	now := time.Now().UTC()
+	staleSeenAt := now.Add(-2 * time.Minute)
+	homeRecord := cluster.ClusterNodeRecord{
+		IP:          "home-stale",
+		Port:        8327,
+		IsMaster:    true,
+		ClientCount: 1,
+		StartedAt:   now.Add(-3 * time.Minute),
+		LastSeenAt:  staleSeenAt,
+	}
+	if errCreate := db.Create(&homeRecord).Error; errCreate != nil {
+		t.Fatalf("create stale home record: %v", errCreate)
+	}
+	if errSnapshot := repo.ReplaceCPANodeSnapshot(context.Background(), "home-stale", 8327, []node.Node{
+		{NodeID: "cpa-stale", IP: "10.0.0.7", ClientCount: 1, Connected: staleSeenAt.Add(-time.Minute)},
+	}, staleSeenAt); errSnapshot != nil {
+		t.Fatalf("replace stale cpa snapshot: %v", errSnapshot)
+	}
+
+	handler := NewHandler(repo, nil, "home-stale", 8327)
+	handler.SetHeartbeatTimeout(30 * time.Second)
+	engine := gin.New()
+	engine.GET("/topology", handler.GetTopology)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/topology", nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+
+	var body struct {
+		Summary struct {
+			CPACount              int  `json:"cpa_count"`
+			StaleCPACount         int  `json:"stale_cpa_count"`
+			HomeCount             int  `json:"home_count"`
+			StaleHome             int  `json:"stale_home_count"`
+			MissingMaster         bool `json:"missing_master"`
+			RetentionAfterSeconds int  `json:"retention_after_seconds"`
+		} `json:"summary"`
+		Master *topologyTestHomeItem  `json:"master"`
+		Homes  []topologyTestHomeItem `json:"homes"`
+		CPAs   []topologyTestCPAItem  `json:"cpas"`
+	}
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode topology: %v; body=%s", errDecode, resp.Body.String())
+	}
+	if body.Summary.HomeCount != 1 || body.Summary.StaleHome != 1 || body.Summary.CPACount != 1 || body.Summary.StaleCPACount != 1 {
+		t.Fatalf("summary = %+v, want one stale home and one stale cpa", body.Summary)
+	}
+	if !body.Summary.MissingMaster {
+		t.Fatalf("missing_master = false, want true for stale-only topology")
+	}
+	if body.Summary.RetentionAfterSeconds != 180 {
+		t.Fatalf("retention_after_seconds = %d, want 180", body.Summary.RetentionAfterSeconds)
+	}
+	if body.Master != nil {
+		t.Fatalf("master = %+v, want nil for stale-only topology", body.Master)
+	}
+	home := topologyTestHome(body.Homes, "home-stale:8327")
+	if home.Role != "unknown" || home.IsMaster || !home.ReportedMaster || home.Health != "stale" {
+		t.Fatalf("home-stale = %+v, want stale reported master without current master role", home)
+	}
+	cpa := topologyTestCPA(body.CPAs, "cpa-stale")
+	if cpa.HomeID != "home-stale:8327" || cpa.Health != "stale" || cpa.Healthy {
+		t.Fatalf("cpa-stale = %+v, want stale cpa under stale home", cpa)
+	}
+}
+
+func TestGetTopologyPrunesExpiredSnapshots(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	now := time.Now().UTC()
+	recentSeenAt := now.Add(-2 * time.Minute)
+	expiredSeenAt := now.Add(-10 * time.Minute)
+	homeRecords := []cluster.ClusterNodeRecord{
+		{
+			IP:          "home-recent",
+			Port:        8327,
+			IsMaster:    false,
+			ClientCount: 1,
+			StartedAt:   recentSeenAt.Add(-time.Minute),
+			LastSeenAt:  recentSeenAt,
+		},
+		{
+			IP:          "home-expired",
+			Port:        8327,
+			IsMaster:    false,
+			ClientCount: 1,
+			StartedAt:   expiredSeenAt.Add(-time.Minute),
+			LastSeenAt:  expiredSeenAt,
+		},
+	}
+	if errCreate := db.Create(&homeRecords).Error; errCreate != nil {
+		t.Fatalf("create home records: %v", errCreate)
+	}
+	if errSnapshot := repo.ReplaceCPANodeSnapshot(context.Background(), "home-recent", 8327, []node.Node{
+		{NodeID: "cpa-recent", IP: "10.0.0.8", ClientCount: 1, Connected: recentSeenAt.Add(-time.Minute)},
+	}, recentSeenAt); errSnapshot != nil {
+		t.Fatalf("replace recent cpa snapshot: %v", errSnapshot)
+	}
+	if errSnapshot := repo.ReplaceCPANodeSnapshot(context.Background(), "home-expired", 8327, []node.Node{
+		{NodeID: "cpa-expired", IP: "10.0.0.9", ClientCount: 1, Connected: expiredSeenAt.Add(-time.Minute)},
+	}, expiredSeenAt); errSnapshot != nil {
+		t.Fatalf("replace expired cpa snapshot: %v", errSnapshot)
+	}
+
+	handler := NewHandler(repo, nil, "home-recent", 8327)
+	handler.SetHeartbeatTimeout(30 * time.Second)
+	engine := gin.New()
+	engine.GET("/topology", handler.GetTopology)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/topology", nil)
+	engine.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+
+	var body struct {
+		Summary struct {
+			HomeCount int `json:"home_count"`
+			CPACount  int `json:"cpa_count"`
+		} `json:"summary"`
+		Homes []topologyTestHomeItem `json:"homes"`
+		CPAs  []topologyTestCPAItem  `json:"cpas"`
+	}
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode topology: %v; body=%s", errDecode, resp.Body.String())
+	}
+	if body.Summary.HomeCount != 1 || body.Summary.CPACount != 1 {
+		t.Fatalf("summary = %+v, want only recent stale snapshots within retention", body.Summary)
+	}
+	if topologyTestHome(body.Homes, "home-recent:8327").ID == "" {
+		t.Fatalf("homes = %+v, want home-recent", body.Homes)
+	}
+	if topologyTestHome(body.Homes, "home-expired:8327").ID != "" {
+		t.Fatalf("homes = %+v, want home-expired pruned", body.Homes)
+	}
+	if topologyTestCPA(body.CPAs, "cpa-recent").NodeID == "" {
+		t.Fatalf("cpas = %+v, want cpa-recent", body.CPAs)
+	}
+	if topologyTestCPA(body.CPAs, "cpa-expired").NodeID != "" {
+		t.Fatalf("cpas = %+v, want cpa-expired pruned", body.CPAs)
+	}
+}
+
+func topologyTestHome(items []topologyTestHomeItem, id string) topologyTestHomeItem {
+	for _, item := range items {
+		if item.ID == id {
+			return item
+		}
+	}
+	return topologyTestHomeItem{}
+}
+
+func topologyTestCPA(items []topologyTestCPAItem, nodeID string) topologyTestCPAItem {
+	for _, item := range items {
+		if item.NodeID == nodeID {
+			return item
+		}
+	}
+	return topologyTestCPAItem{}
 }
 
 func TestListNodesRequiresCurrentConfiguredPluginInReport(t *testing.T) {

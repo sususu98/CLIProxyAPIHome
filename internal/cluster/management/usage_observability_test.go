@@ -75,7 +75,7 @@ func TestGetCapabilitiesReturnsUsageObservabilityFlags(t *testing.T) {
 	if !ok {
 		t.Fatalf("capabilities = %T, want object", payload["capabilities"])
 	}
-	for _, key := range []string{"usage", "usage_overview", "usage_records", "usage_record_details", "usage_aggregates", "usage_export", "usage_provider_health", "usage_credential_health", "usage_realtime", "request_log_index", "oauth_usage", "logs", "request_error_logs"} {
+	for _, key := range []string{"usage", "usage_overview", "usage_records", "usage_record_details", "usage_aggregates", "usage_export", "usage_provider_health", "usage_credential_health", "usage_realtime", "request_log_index", "oauth_usage", "logs", "request_error_logs", "topology"} {
 		if capabilities[key] != true {
 			t.Fatalf("capabilities[%s] = %v, want true", key, capabilities[key])
 		}

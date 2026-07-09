@@ -56,6 +56,64 @@ func TestOpenSQLite_AutoMigrateAndConfigRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCPANodeSnapshotRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, errOpenSQLite := OpenSQLite(ctx, filepath.Join(t.TempDir(), "home.db"))
+	if errOpenSQLite != nil {
+		t.Fatalf("OpenSQLite failed: %v", errOpenSQLite)
+	}
+	sqlDB, errDB := db.DB()
+	if errDB != nil {
+		t.Fatalf("get sql db: %v", errDB)
+	}
+	defer func() {
+		if errClose := sqlDB.Close(); errClose != nil {
+			t.Errorf("close sql db: %v", errClose)
+		}
+	}()
+	if errMigrate := AutoMigrate(db); errMigrate != nil {
+		t.Fatalf("AutoMigrate failed: %v", errMigrate)
+	}
+
+	repo := NewRepository(db)
+	connectedAt := time.Now().UTC().Add(-time.Minute)
+	seenAt := time.Now().UTC()
+	if errSnapshot := repo.ReplaceCPANodeSnapshot(ctx, "home-a", 8327, []node.Node{
+		{NodeID: "node-1", IP: "10.0.0.5", ClientCount: 1, Connected: connectedAt},
+	}, seenAt); errSnapshot != nil {
+		t.Fatalf("ReplaceCPANodeSnapshot(home-a) failed: %v", errSnapshot)
+	}
+	if errSnapshot := repo.ReplaceCPANodeSnapshot(ctx, "home-b", 8327, []node.Node{
+		{NodeID: "node-2", IP: "10.0.0.6", ClientCount: 2, Connected: connectedAt},
+	}, seenAt); errSnapshot != nil {
+		t.Fatalf("ReplaceCPANodeSnapshot(home-b) failed: %v", errSnapshot)
+	}
+
+	records, errList := repo.ListLiveCPANodes(ctx, seenAt.Add(-time.Second))
+	if errList != nil {
+		t.Fatalf("ListLiveCPANodes failed: %v", errList)
+	}
+	if len(records) != 2 {
+		t.Fatalf("cpa records = %d, want 2", len(records))
+	}
+	if records[0].HomeIP != "home-a" || records[0].NodeID != "node-1" || records[0].ClientCount != 1 || records[0].ConnectedAt.IsZero() || records[0].LastSeenAt.IsZero() {
+		t.Fatalf("first cpa record = %+v, want home-a/node-1 snapshot", records[0])
+	}
+
+	if errSnapshot := repo.ReplaceCPANodeSnapshot(ctx, "home-a", 8327, nil, seenAt.Add(time.Second)); errSnapshot != nil {
+		t.Fatalf("ReplaceCPANodeSnapshot(home-a empty) failed: %v", errSnapshot)
+	}
+	records, errList = repo.ListLiveCPANodes(ctx, seenAt.Add(-time.Second))
+	if errList != nil {
+		t.Fatalf("ListLiveCPANodes after replace failed: %v", errList)
+	}
+	if len(records) != 1 || records[0].NodeID != "node-2" {
+		t.Fatalf("cpa records after replace = %+v, want only node-2", records)
+	}
+}
+
 func TestOpenSQLite_ConfiguresLocalConcurrency(t *testing.T) {
 	t.Parallel()
 

@@ -249,6 +249,7 @@ The table below is extracted from the final Home route registry built by `intern
 | `GET` | `/routing/strategy` |
 | `PATCH` | `/routing/strategy` |
 | `PUT` | `/routing/strategy` |
+| `GET` | `/topology` |
 | `GET` | `/usage-queue` |
 | `GET` | `/usage-statistics-enabled` |
 | `PATCH` | `/usage-statistics-enabled` |
@@ -505,11 +506,12 @@ Example response:
       "ip": "10.0.0.12",
       "node_id": "node-1",
       "connected_time": "2026-05-27T10:30:00Z",
+      "last_seen_at": "2026-05-27T10:30:02Z",
       "client_count": 1,
       "healthy": true,
+      "home_id": "10.0.0.10:8327",
       "home_ip": "10.0.0.10",
       "home_port": 8327,
-      "last_seen_at": "2026-05-27T10:30:05Z",
       "plugin_report_state": "reported_ok",
       "plugin_report_statuses": [
         {
@@ -532,11 +534,12 @@ Example response:
 | `nodes[].node_id` | string | CPA node ID derived from the Home client certificate when available. |
 | `nodes[].ip` | string | Node IP address. |
 | `nodes[].connected_time` | string | First connection time for the active node entry. |
+| `nodes[].last_seen_at` | string | Time when the serving Home node last refreshed this CPA connection snapshot in the shared database. |
 | `nodes[].client_count` | integer | Active RESP subscription connection count from this IP. |
 | `nodes[].healthy` | boolean | Whether the node has an active RESP subscription connection. Plugin reports do not make this field unhealthy. |
-| `nodes[].home_ip` | string | Home node address currently serving this CPA node. |
-| `nodes[].home_port` | integer | Home node port currently serving this CPA node. |
-| `nodes[].last_seen_at` | string | Time when the serving Home node last refreshed this CPA connection snapshot in the shared database. |
+| `nodes[].home_id` | string | Home node identity serving this CPA node, formatted as `home_ip:home_port`. |
+| `nodes[].home_ip` | string | Home node IP or advertised cluster identity serving this CPA node. |
+| `nodes[].home_port` | integer | Home node RESP/cluster port serving this CPA node. |
 | `nodes[].plugin_report_state` | string | Current configured plugin observation state: `not_required`, `missing_report`, `reported_partial`, `reported_failed`, or `reported_ok`. Failed reports for plugins that are not currently required do not make this state failed. |
 | `nodes[].plugin_report_statuses` | array | Plugin reports associated with this active node, matched by node ID when possible and IP as a fallback. |
 | `plugin_report_statuses[].node_type` | string | Reporting node type, currently `cpa` for CPA node reports and reserved for `home` reports. |
@@ -545,6 +548,140 @@ Example response:
 | `plugin_report_statuses[].phase` | string | Reported task phase for this report group, such as `install`, `load`, or `delete`. |
 | `plugin_report_statuses[].ok` | boolean | Whether the node reported the task as successful. |
 | `plugin_report_statuses[].plugins` | array | Per-plugin install/load/delete results belonging to this report group. |
+
+### GET `/topology`
+
+Returns a Home + CPA topology snapshot for the database-backed Home runtime. Unlike `GET /nodes`, this route is cluster-wide and topology-oriented: Home nodes are read from the shared cluster heartbeat table, and CPA nodes are read from the shared CPA snapshot table written by each Home process, including stale snapshots that are classified by the configured heartbeat timeout.
+
+Input: none.
+
+Example response:
+
+```json
+{
+  "summary": {
+    "home_count": 2,
+    "healthy_home_count": 2,
+    "stale_home_count": 0,
+    "unknown_home_count": 0,
+    "cpa_count": 3,
+    "healthy_cpa_count": 3,
+    "stale_cpa_count": 0,
+    "unknown_cpa_count": 0,
+    "plugin_attention_count": 0,
+    "attention_count": 0,
+    "missing_master": false,
+    "stale_after_seconds": 20,
+    "retention_after_seconds": 120
+  },
+  "management": {
+    "home_id": "10.0.0.10:8327",
+    "home_ip": "10.0.0.10",
+    "home_port": 8327
+  },
+  "master": {
+    "id": "10.0.0.10:8327",
+    "ip": "10.0.0.10",
+    "port": 8327,
+    "role": "master",
+    "is_master": true,
+    "reported_master": true,
+    "health": "healthy",
+    "healthy": true,
+    "client_count": 2,
+    "started_at": "2026-05-27T10:00:00Z",
+    "last_seen_at": "2026-05-27T10:30:02Z",
+    "cpa_count": 2,
+    "healthy_cpa_count": 2,
+    "stale_cpa_count": 0,
+    "unknown_cpa_count": 0
+  },
+  "homes": [
+    {
+      "id": "10.0.0.10:8327",
+      "ip": "10.0.0.10",
+      "port": 8327,
+      "role": "master",
+      "is_master": true,
+      "reported_master": true,
+      "health": "healthy",
+      "healthy": true,
+      "client_count": 2,
+      "started_at": "2026-05-27T10:00:00Z",
+      "last_seen_at": "2026-05-27T10:30:02Z",
+      "cpa_count": 2,
+      "healthy_cpa_count": 2,
+      "stale_cpa_count": 0,
+      "unknown_cpa_count": 0
+    }
+  ],
+  "cpas": [
+    {
+      "node_id": "node-1",
+      "ip": "192.0.2.10",
+      "connected_time": "2026-05-27T10:05:00Z",
+      "last_seen_at": "2026-05-27T10:30:02Z",
+      "client_count": 1,
+      "healthy": true,
+      "health": "healthy",
+      "home_id": "10.0.0.10:8327",
+      "home_ip": "10.0.0.10",
+      "home_port": 8327,
+      "plugin_report_state": "reported_ok",
+      "plugin_report_statuses": []
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `summary.home_count` | integer | Number of known Home nodes in the shared cluster table. |
+| `summary.healthy_home_count` | integer | Home nodes whose `last_seen_at` is within `stale_after_seconds`. |
+| `summary.stale_home_count` | integer | Home nodes known to the database but past the stale cutoff. |
+| `summary.unknown_home_count` | integer | Home nodes whose health cannot be determined because required identity or heartbeat data is missing. |
+| `summary.cpa_count` | integer | Number of CPA node snapshots known to the cluster. |
+| `summary.healthy_cpa_count` | integer | CPA snapshots attached to a healthy Home and seen within the stale cutoff. |
+| `summary.stale_cpa_count` | integer | CPA snapshots whose Home or own heartbeat is stale. |
+| `summary.unknown_cpa_count` | integer | CPA snapshots whose serving Home identity or health cannot be determined. |
+| `summary.plugin_attention_count` | integer | CPA nodes with missing, partial, or failed plugin reports when plugin reports are required. |
+| `summary.attention_count` | integer | Combined operational attention count: stale/unknown Home nodes, CPA nodes needing attention counted once each, plus missing master. |
+| `summary.missing_master` | boolean | Whether no healthy Home can currently be selected as master. |
+| `summary.stale_after_seconds` | integer | Heartbeat timeout used for topology health classification. |
+| `summary.retention_after_seconds` | integer | Topology snapshot retention window. Records older than this are omitted from `homes[]` and `cpas[]`. |
+| `management.home_id` | string | Current Management runtime Home identity, formatted as `home_ip:home_port`. |
+| `management.home_ip` | string | Current Management runtime Home IP or advertised cluster identity. |
+| `management.home_port` | integer | Current Management runtime Home port. |
+| `master` | object/null | Currently selected healthy Home master, or `null` if no healthy master is available. |
+| `homes[]` | array | Home nodes as first-class topology resources. |
+| `homes[].id` | string | Home identity formatted as `ip:port`. |
+| `homes[].ip` | string | Home IP or advertised cluster identity. |
+| `homes[].port` | integer | Home cluster/RESP port. |
+| `homes[].role` | string | `master`, `follower`, or `unknown`. |
+| `homes[].is_master` | boolean | Whether this Home is the currently selected healthy master. Stale Home nodes are never marked current master. |
+| `homes[].reported_master` | boolean | Last master flag reported by that Home heartbeat. |
+| `homes[].health` | string | `healthy`, `stale`, or `unknown`. |
+| `homes[].healthy` | boolean | Whether `homes[].health` is `healthy`. |
+| `homes[].client_count` | integer | Total active CPA config subscriptions reported by that Home. |
+| `homes[].started_at` | string | Home process start time. |
+| `homes[].last_seen_at` | string | Last Home heartbeat stored in the shared database. |
+| `homes[].cpa_count` | integer | CPA snapshots currently associated with this Home. |
+| `homes[].healthy_cpa_count` | integer | Healthy CPA snapshots associated with this Home. |
+| `homes[].stale_cpa_count` | integer | Stale CPA snapshots associated with this Home. |
+| `homes[].unknown_cpa_count` | integer | Unknown-health CPA snapshots associated with this Home. |
+| `cpas[]` | array | CPA node snapshots with their serving Home identity. |
+| `cpas[].node_id` | string | CPA node ID derived from the client certificate when available. |
+| `cpas[].ip` | string | CPA node IP address observed by its serving Home. |
+| `cpas[].connected_time` | string | First observed active connection time for this CPA snapshot on its serving Home. |
+| `cpas[].last_seen_at` | string | Last time the serving Home refreshed this CPA snapshot. |
+| `cpas[].client_count` | integer | Active RESP subscription count represented by this CPA snapshot. |
+| `cpas[].healthy` | boolean | Whether `cpas[].health` is `healthy`. |
+| `cpas[].health` | string | `healthy`, `stale`, or `unknown`. |
+| `cpas[].home_id` | string | Serving Home identity, formatted as `home_ip:home_port`. |
+| `cpas[].home_ip` | string | Serving Home IP or advertised cluster identity. |
+| `cpas[].home_port` | integer | Serving Home cluster/RESP port. |
+| `cpas[].plugin_report_state` | string | Same semantics as `nodes[].plugin_report_state`. |
+| `cpas[].plugin_report_statuses` | array | Plugin reports associated with this CPA node, matched by node ID when possible and IP as a fallback. |
 
 ### GET `/latest-version`
 
@@ -2118,6 +2255,7 @@ Example response:
 | `capabilities.oauth_usage` | boolean | OAuth/file-backed credential usage 归因是否可靠。 |
 | `capabilities.logs` | boolean | 是否支持应用日志接口。 |
 | `capabilities.request_error_logs` | boolean | 是否支持 request error log file list/download。 |
+| `capabilities.topology` | boolean | Whether `GET /topology` is available for Home + CPA cluster topology. |
 | `server_info.home_version` | string | Home 构建版本。 |
 | `server_info.home_commit` | string | Home 构建 commit。 |
 | `server_info.home_build_date` | string | Home 构建时间。 |

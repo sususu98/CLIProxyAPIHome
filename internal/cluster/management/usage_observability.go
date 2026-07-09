@@ -39,6 +39,7 @@ func (h *Handler) GetCapabilities(c *gin.Context) {
 			"oauth_usage":             true,
 			"logs":                    true,
 			"request_error_logs":      true,
+			"topology":                true,
 		},
 		"server_info": gin.H{
 			"home_version":    buildinfo.Version,
