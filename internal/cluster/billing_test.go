@@ -382,6 +382,60 @@ func TestAppendUsageCreatesBillingChargeAndDeductsCredits(t *testing.T) {
 	}
 }
 
+func TestAppendUsageUnlimitedCreditsKeepsBalanceAndRecordsCharge(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	username := "unlimited@example.com"
+	unlimited := true
+	user, errCreateUser := repo.CreateUser(ctx, UserUpdate{Username: &username, CreditsUnlimited: &unlimited})
+	if errCreateUser != nil {
+		t.Fatalf("CreateUser() error = %v", errCreateUser)
+	}
+	clientKey := "client-key-unlimited"
+	if _, errCreateKey := repo.CreateAPIKeyForUser(ctx, user.ID, APIKeyUserUpdate{APIKey: &clientKey}); errCreateKey != nil {
+		t.Fatalf("CreateAPIKeyForUser() error = %v", errCreateKey)
+	}
+	if _, errCreatePrice := repo.CreateBillingModelPrice(ctx, BillingModelPriceUpdate{
+		Provider:     "openai",
+		Model:        "gpt-4.1-mini",
+		RequestPrice: 2,
+		Enabled:      true,
+	}); errCreatePrice != nil {
+		t.Fatalf("CreateBillingModelPrice() error = %v", errCreatePrice)
+	}
+
+	payload := `{"timestamp":"2026-06-10T01:02:03Z","provider":"openai","model":"gpt-4.1-mini","api_key":"client-key-unlimited","request_id":"req-unlimited","tokens":{"total_tokens":1}}`
+	if _, errUsage := repo.AppendUsage(ctx, payload, "192.0.2.10"); errUsage != nil {
+		t.Fatalf("AppendUsage() error = %v", errUsage)
+	}
+
+	charges, errCharges := repo.ListBillingCharges(ctx, BillingChargeQuery{UserID: &user.ID, Limit: 10})
+	if errCharges != nil {
+		t.Fatalf("ListBillingCharges() error = %v", errCharges)
+	}
+	if len(charges.Records) != 1 {
+		t.Fatalf("charge count = %d, want 1", len(charges.Records))
+	}
+	charge := charges.Records[0]
+	if charge.Amount != 2 {
+		t.Fatalf("charge amount = %v, want 2", charge.Amount)
+	}
+	if charge.BalanceBefore != 0 || charge.BalanceAfter != 0 {
+		t.Fatalf("charge balances = %v -> %v, want 0 -> 0", charge.BalanceBefore, charge.BalanceAfter)
+	}
+	updated, errUser := repo.GetUser(ctx, user.ID)
+	if errUser != nil {
+		t.Fatalf("GetUser() error = %v", errUser)
+	}
+	if updated.Credits != 0 {
+		t.Fatalf("credits = %v, want unchanged 0", updated.Credits)
+	}
+}
+
 func TestAppendUsageChargesCachedTokensWithCacheReadPrice(t *testing.T) {
 	t.Parallel()
 

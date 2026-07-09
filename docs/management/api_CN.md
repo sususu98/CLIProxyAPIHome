@@ -256,6 +256,8 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/users` |
 | `POST` | `/users` |
 | `DELETE` | `/users/:id` |
+| `GET` | `/users/:id/period-limits` |
+| `POST` | `/users/:id/period-limits/reset` |
 | `GET` | `/users/:id` |
 | `PATCH` | `/users/:id` |
 | `PUT` | `/users/:id` |
@@ -819,6 +821,7 @@ User records 存储在 cluster repository 中。
       "username": "alice",
       "password_set": true,
       "credits": 10.5,
+      "credits_unlimited": false,
       "mfa": { "enabled": true },
       "passkey": [{ "id": "credential-id" }],
       "created_at": "2026-05-27T10:00:00Z",
@@ -848,6 +851,7 @@ Path 参数：
     "username": "alice",
     "password_set": true,
     "credits": 10.5,
+    "credits_unlimited": false,
     "mfa": { "enabled": true },
     "passkey": [{ "id": "credential-id" }],
     "created_at": "2026-05-27T10:00:00Z",
@@ -878,6 +882,18 @@ Path 参数：
 | `username` | string | 是 | 用户名；也接受 `user_name`、`user-name`。 |
 | `password` | string | 否 | 非空明文会以 bcrypt hash 存储。已有合法 bcrypt hash 会原样保留，便于迁移。响应不返回密码材料，只返回 `password_set`。 |
 | `credits` | number | 否 | 用户点数余额；默认为 `0`。当客户端 API key 绑定到该用户且 credits `<= 0` 时，RESP `RPOP auth` 返回 `user_credits_insufficient`。对于计费工作流，优先使用 `/billing/balance-records/recharge` 和 `/billing/balance-records/deduct`，以便余额变更拥有分类账记录。 |
+| `credits_unlimited` | boolean | 否 | 为 `true` 时，派发忽略总 `credits` 余额，计费扣费也不减少余额；周期限额仍生效。默认 `false`。 |
+| `timezone` | string | 否 | 自然日/周/月使用的 IANA 时区；默认 `Asia/Shanghai`。 |
+| `limit_5h_credits` | number/null | 否 | 5 小时 credits 限额。`null` 清除/关闭。`0` 立即不可用。 |
+| `window_mode_5h` | string | 否 | `first_use`（默认；别名 `fixed`）或 `sliding`。 |
+| `limit_1d_credits` | number/null | 否 | 1 天 credits 限额。 |
+| `window_mode_1d` | string | 否 | `first_use`、`sliding`（别名 `rolling`）或 `calendar`（默认 `first_use`）。 |
+| `limit_7d_credits` | number/null | 否 | 7 天 credits 限额。 |
+| `window_mode_7d` | string | 否 | `first_use`、`sliding`（别名 `rolling`）或 `calendar`（默认 `first_use`）。 |
+| `week_reset_day` | integer | 否 | 自然周起点，`1=周一` .. `7=周日`（默认 `1`）。 |
+| `week_reset_hour` | integer | 否 | 自然周起点小时 `0-23`（默认 `0`）。 |
+| `limit_30d_credits` | number/null | 否 | 30 天/自然月 credits 限额。 |
+| `window_mode_30d` | string | 否 | `first_use`、`sliding`（别名 `rolling`）或 `calendar`（默认 `first_use`）。`calendar` 为自然月。 |
 | `mfa` | any valid JSON | 否 | 存入 `user.mfa`。 |
 | `passkey` | any valid JSON | 否 | 存入 `user.passkey`。 |
 
@@ -900,8 +916,65 @@ Path 参数：
 ```
 
 所有字段均可选；如果出现 `username`，则不能为空。`credits` 如果出现，会替换用户当前点数余额。对于计费工作流，优先使用 `/billing/balance-records/recharge` 和 `/billing/balance-records/deduct`，以便余额变更拥有分类账记录。
+当用户需要无限总余额、但仍受独立周期限额约束时，将 `credits_unlimited` 设为 `true`。
 
 输出：与 `GET /users/:id` 相同。
+
+
+### GET `/users/:id/period-limits`
+
+返回用户周期限额配置与当前用量。
+
+响应包含 `timezone`、`credits`、`credits_unlimited` 和 `windows[]`：
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | `5h`、`1d`、`7d` 或 `30d`。 |
+| `enabled` | 已配置限额时为 `true`（`limit != null`）。 |
+| `limit` | 窗口 credits 上限；`null` 表示关闭。 |
+| `used` | 当前窗口已消费 credits（`SUM(billing_charge.amount)`）。 |
+| `remaining` | 启用时为 `max(limit - used, 0)`。 |
+| `mode` | 规范值为 `first_use`、`sliding` 或 `calendar`（`calendar` 仅 `1d`/`7d`/`30d`）。别名 `fixed`→`first_use`，`rolling`→`sliding`。 |
+| `window_start` / `window_end` / `reset_at` | 活跃窗口边界。 |
+| `usage_epoch` | 软重置标记；只统计该时间之后的扣费。 |
+
+`5h` 支持 `first_use`（默认，**首次成功计费扣费**开 5h 窗；兼容别名 `fixed`）或 `sliding`（滚动 5h）。`1d`/`7d`/`30d` 支持 `first_use`（默认，首次计费起算时长；兼容别名 `fixed`）、`sliding`（滚动时长）或 `calendar`（自然日/周/月）。派发探测不会打开 `first_use` 窗口。自然周期使用 `timezone`（默认 `Asia/Shanghai`）。自然周使用 `week_reset_day`（1=周一..7=周日）和 `week_reset_hour`。自然 `30d` 按自然月计算。
+
+产品对齐（Claude Code / Codex）：
+- 短窗 `5h` 默认 `first_use`：首次成功计费开启 5 小时会话窗，窗内是 credits 预算（不是“能连续工作 5 小时”）。
+- 长窗 `7d`/`30d` 可独立叠加；两层同时生效（AND）。
+- 需要自然日/周/月刷新时，对 `1d`/`7d`/`30d` 选 `calendar`。
+- 需要“随时间滚动恢复”时选 `sliding`（别名 `rolling`）。
+
+### POST `/users/:id/period-limits/reset`
+
+软重置周期计数，不删除账单历史。
+
+请求体：
+
+```json
+{ "windows": ["5h", "1d"], "mode": "counter" }
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `windows` | string[] | 否 | `5h`/`1d`/`7d`/`30d` 子集。空/省略表示全部。 |
+| `mode` | string | 否 | `counter`（默认）：对选中窗口设置 `usage_epoch_* = now` 并清除对应 `period_window_start_*`。`window_only`：清除 `period_window_start_*`；对 `sliding`/`calendar` 窗口同时写 `usage_epoch_*`（否则无法真正清零 used）。 |
+
+响应：
+
+```json
+{
+  "status": "ok",
+  "user_id": 1,
+  "reset": { "mode": "counter", "windows": ["5h", "1d"], "at": "2026-07-09T12:00:00Z" },
+  "limits": { "user_id": 1, "windows": [] }
+}
+```
+
+周期限额在派发时对用户名下所有 API key 生效（`user_credits_insufficient` 与 `user_period_limit_exceeded`）。当 `credits_unlimited=true` 时跳过总余额检查，但已启用的周期窗口仍会拦截。
+
+执行模型为 **soft limit**：费用在请求完成后才记账，因此允许尾笔/并发 in-flight 请求把 used 顶过 limit；下一笔派发会被拦截。`first_use` 在首次 **billable charge** 开窗，不在 dispatch 探活时开窗。
 
 ### DELETE `/users/:id`
 

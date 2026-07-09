@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	homeerrors "github.com/router-for-me/CLIProxyAPIHome/internal/errors"
 	"gorm.io/gorm"
 )
 
@@ -407,9 +406,9 @@ func (r *Repository) AllowedDispatchIDsForAPIKey(ctx context.Context, apiKey str
 	if errFirst != nil {
 		return nil, nil, errFirst
 	}
-	errCredits := ensureAPIKeyUserCreditsAvailable(ctx, db, &record)
-	if errCredits != nil {
-		return nil, nil, errCredits
+	errBilling := ensureAPIKeyUserBillingAllowed(ctx, db, &record)
+	if errBilling != nil {
+		return nil, nil, errBilling
 	}
 
 	authIDs, errAuthIDs := allowedAuthIDsForAPIKeyRecord(ctx, db, &record)
@@ -424,28 +423,7 @@ func (r *Repository) AllowedDispatchIDsForAPIKey(ctx context.Context, apiKey str
 }
 
 func ensureAPIKeyUserCreditsAvailable(ctx context.Context, db *gorm.DB, record *APIKeyRecord) error {
-	if db == nil {
-		return fmt.Errorf("database connection is nil")
-	}
-	if record == nil {
-		return fmt.Errorf("api key record is nil")
-	}
-	userID := normalizeOptionalUserID(record.UserID)
-	if userID == nil {
-		return nil
-	}
-	user := UserRecord{}
-	errFirst := db.WithContext(contextOrBackground(ctx)).
-		Select("id", "credits").
-		Where("id = ?", *userID).
-		First(&user).Error
-	if errFirst != nil {
-		return errFirst
-	}
-	if user.Credits <= 0 {
-		return fmt.Errorf("%s: %s", homeerrors.TypeUserCreditsInsufficient, homeerrors.MessageUserCreditsInsufficient)
-	}
-	return nil
+	return ensureAPIKeyUserBillingAllowed(ctx, db, record)
 }
 
 // AllowedAuthIDsForAPIKey returns auth IDs allowed by the API key channel bindings.

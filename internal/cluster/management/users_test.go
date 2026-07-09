@@ -1,6 +1,7 @@
 package management
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
@@ -65,4 +66,54 @@ func stringValue(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func TestOptionalJSONFloatNullAndValue(t *testing.T) {
+	t.Parallel()
+
+	var body userWriteRequest
+	if err := json.Unmarshal([]byte(`{"limit_1d_credits":null,"limit_5h_credits":12.5}`), &body); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if !body.Limit1d.set || !body.Limit1d.clear {
+		t.Fatalf("limit_1d = %+v, want set+clear", body.Limit1d)
+	}
+	if !body.Limit5h.set || body.Limit5h.clear || body.Limit5h.value != 12.5 {
+		t.Fatalf("limit_5h = %+v, want value 12.5", body.Limit5h)
+	}
+	update, ok := userUpdateFromRequest(nil, body, false)
+	if !ok {
+		t.Fatal("userUpdateFromRequest failed")
+	}
+	if !update.Limit1dCredits.Set || !update.Limit1dCredits.Clear {
+		t.Fatalf("update.Limit1dCredits = %+v", update.Limit1dCredits)
+	}
+	if !update.Limit5hCredits.Set || update.Limit5hCredits.Clear || update.Limit5hCredits.Value != 12.5 {
+		t.Fatalf("update.Limit5hCredits = %+v", update.Limit5hCredits)
+	}
+}
+
+func TestUserRecordToMapIncludesPeriodLimitFields(t *testing.T) {
+	t.Parallel()
+
+	limit := 9.0
+	item := userRecordToMap(&cluster.UserRecord{
+		Username:         "alice",
+		CreditsUnlimited: true,
+		Limit5hCredits:   &limit,
+		// Legacy alias "rolling" must surface as canonical "sliding".
+		WindowMode1d: cluster.PeriodWindowModeRolling,
+	})
+	if item["limit_5h_credits"] == nil {
+		t.Fatalf("limit_5h_credits missing: %#v", item)
+	}
+	if item["window_mode_1d"] != cluster.PeriodWindowModeSliding {
+		t.Fatalf("window_mode_1d = %v, want sliding", item["window_mode_1d"])
+	}
+	if item["timezone"] != cluster.DefaultUserTimezone {
+		t.Fatalf("timezone = %v", item["timezone"])
+	}
+	if item["credits_unlimited"] != true {
+		t.Fatalf("credits_unlimited = %v, want true", item["credits_unlimited"])
+	}
 }

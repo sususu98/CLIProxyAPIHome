@@ -196,15 +196,41 @@ func (PluginTaskRecord) TableName() string {
 }
 
 type UserRecord struct {
-	ID        uint           `gorm:"column:id;primaryKey;autoIncrement;index:idx_user_active_order,priority:2"`
-	Username  string         `gorm:"column:username;not null;index;index:idx_user_username_active,priority:1"`
-	Password  string         `gorm:"column:password;type:text"`
-	Credits   float64        `gorm:"column:credits;not null;default:0"`
-	MFA       JSONB          `gorm:"column:mfa"`
-	Passkey   JSONB          `gorm:"column:passkey"`
-	CreatedAt time.Time      `gorm:"column:created_at"`
-	UpdatedAt time.Time      `gorm:"column:updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_user_active_order,priority:1;index:idx_user_username_active,priority:2"`
+	ID               uint    `gorm:"column:id;primaryKey;autoIncrement;index:idx_user_active_order,priority:2"`
+	Username         string  `gorm:"column:username;not null;index;index:idx_user_username_active,priority:1"`
+	Password         string  `gorm:"column:password;type:text"`
+	Credits          float64 `gorm:"column:credits;not null;default:0"`
+	CreditsUnlimited bool    `gorm:"column:credits_unlimited;not null;default:false"`
+	Timezone         string  `gorm:"column:timezone;not null;default:Asia/Shanghai"`
+	// Period cost limits (null = disabled). Subject is user; all API keys inherit.
+	// window_mode_*: first_use (default; first billable charge opens a duration
+	// window, Claude/Codex-style session), sliding (rolling last-N duration),
+	// calendar (natural day/week/month; 1d/7d/30d only). Legacy alias: fixed -> first_use.
+	Limit5hCredits  *float64 `gorm:"column:limit_5h_credits"`
+	WindowMode5h    string   `gorm:"column:window_mode_5h;not null;default:first_use"`
+	Limit1dCredits  *float64 `gorm:"column:limit_1d_credits"`
+	WindowMode1d    string   `gorm:"column:window_mode_1d;not null;default:first_use"`
+	Limit7dCredits  *float64 `gorm:"column:limit_7d_credits"`
+	WindowMode7d    string   `gorm:"column:window_mode_7d;not null;default:first_use"`
+	WeekResetDay    int      `gorm:"column:week_reset_day;not null;default:1"`
+	WeekResetHour   int      `gorm:"column:week_reset_hour;not null;default:0"`
+	Limit30dCredits *float64 `gorm:"column:limit_30d_credits"`
+	WindowMode30d   string   `gorm:"column:window_mode_30d;not null;default:first_use"`
+	// first_use window runtime state (first billable charge opens the window).
+	PeriodWindowStart5h  *time.Time `gorm:"column:period_window_start_5h"`
+	PeriodWindowStart1d  *time.Time `gorm:"column:period_window_start_1d"`
+	PeriodWindowStart7d  *time.Time `gorm:"column:period_window_start_7d"`
+	PeriodWindowStart30d *time.Time `gorm:"column:period_window_start_30d"`
+	// Soft reset markers: SUM only counts charges at/after max(window_lower, epoch).
+	UsageEpoch5h  *time.Time     `gorm:"column:usage_epoch_5h"`
+	UsageEpoch1d  *time.Time     `gorm:"column:usage_epoch_1d"`
+	UsageEpoch7d  *time.Time     `gorm:"column:usage_epoch_7d"`
+	UsageEpoch30d *time.Time     `gorm:"column:usage_epoch_30d"`
+	MFA           JSONB          `gorm:"column:mfa"`
+	Passkey       JSONB          `gorm:"column:passkey"`
+	CreatedAt     time.Time      `gorm:"column:created_at"`
+	UpdatedAt     time.Time      `gorm:"column:updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"column:deleted_at;index;index:idx_user_active_order,priority:1;index:idx_user_username_active,priority:2"`
 }
 
 // TableName returns the database table name.

@@ -5,6 +5,7 @@ const (
 	TypeModelNotFound           = "model_not_found"
 	TypeRequestRetryExceeded    = "request_retry_exceeded"
 	TypeUserCreditsInsufficient = "user_credits_insufficient"
+	TypeUserPeriodLimitExceeded = "user_period_limit_exceeded"
 )
 
 const (
@@ -23,6 +24,7 @@ const (
 	MessageInvalidAPIKey                    = "invalid api key"
 	MessageRequestRetryExceeded             = "request retry limit exceeded"
 	MessageUserCreditsInsufficient          = "insufficient user credits"
+	MessageUserPeriodLimitExceeded          = "period limit exceeded"
 
 	MessageModelDoesNotExistFmt = "model %s does not exist"
 )
