@@ -42,19 +42,7 @@ func (h *Handler) ListNodes(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "plugin_status_load_failed", errStatuses)
 		return
 	}
-	statusesByNodeID := make(map[string][]node.PluginTaskStatus)
-	statusesByIP := make(map[string][]node.PluginTaskStatus)
-	for _, status := range taskStatuses {
-		nodeID := strings.TrimSpace(status.NodeID)
-		if nodeID != "" {
-			statusesByNodeID[nodeID] = append(statusesByNodeID[nodeID], status)
-		}
-		clientIP := strings.TrimSpace(status.ClientIP)
-		if clientIP == "" {
-			continue
-		}
-		statusesByIP[clientIP] = append(statusesByIP[clientIP], status)
-	}
+	statusesByNodeID, statusesByIP := pluginStatusesByNode(taskStatuses)
 	requiredPluginIDs := h.pluginTaskRequiredIDs(ctx)
 	activeNodes, errNodes := h.activeCPANodes(ctx)
 	if errNodes != nil {
@@ -68,15 +56,17 @@ func (h *Handler) ListNodes(c *gin.Context) {
 			statuses = statusesByIP[activeNode.IP]
 		}
 		state := pluginReportState(statuses, requiredPluginIDs)
+		homeID := topologyHomeID(activeNode.HomeIP, activeNode.HomePort)
 		nodes = append(nodes, gin.H{
 			"node_id":                activeNode.NodeID,
 			"ip":                     activeNode.IP,
 			"connected_time":         activeNode.Connected,
+			"last_seen_at":           activeNode.LastSeenAt,
 			"client_count":           activeNode.ClientCount,
 			"healthy":                activeNode.ClientCount > 0,
+			"home_id":                homeID,
 			"home_ip":                activeNode.HomeIP,
 			"home_port":              activeNode.HomePort,
-			"last_seen_at":           activeNode.LastSeenAt,
 			"plugin_report_state":    state,
 			"plugin_report_statuses": statuses,
 		})

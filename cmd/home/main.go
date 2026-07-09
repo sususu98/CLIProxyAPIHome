@@ -494,7 +494,7 @@ func resolveDatabaseNodeConfig(clusterCfg *cluster.Config, clusterExists bool) c
 		nodeCfg.HeartbeatInterval = 5 * time.Second
 	}
 	if nodeCfg.HeartbeatTimeout <= 0 {
-		nodeCfg.HeartbeatTimeout = 20 * time.Second
+		nodeCfg.HeartbeatTimeout = cluster.DefaultHeartbeatTimeout()
 	}
 	if nodeCfg.EventPollInterval <= 0 {
 		nodeCfg.EventPollInterval = 3 * time.Second

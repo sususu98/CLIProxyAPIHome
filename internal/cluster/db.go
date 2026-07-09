@@ -13,6 +13,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const migrationAdvisoryLockKey int64 = 749327842680272315
+
 // Open opens the resource.
 func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
 	// Keep validation before state changes so failures leave existing data intact.
@@ -100,6 +102,18 @@ func AutoMigrate(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("database connection is nil")
 	}
+	if db.Dialector != nil && db.Dialector.Name() == "postgres" {
+		return db.Transaction(func(tx *gorm.DB) error {
+			if errLock := tx.Exec("SELECT pg_advisory_xact_lock(?)", migrationAdvisoryLockKey).Error; errLock != nil {
+				return errLock
+			}
+			return autoMigrate(tx)
+		})
+	}
+	return autoMigrate(db)
+}
+
+func autoMigrate(db *gorm.DB) error {
 	if errMigrate := db.AutoMigrate(&AuthRecord{}, &ConfigRecord{}, &KVRecord{}, &PluginStatusRecord{}, &PluginTaskRecord{}, &UserRecord{}, &APIKeyRecord{}, &ChannelGroupRecord{}, &ChannelGroupDetailRecord{}, &ModelGroupRecord{}, &ModelGroupDetailRecord{}, &ClusterNodeRecord{}, &CPANodeRecord{}, &ClusterEventRecord{}, &UsageRecord{}, &BillingModelPriceRecord{}, &BillingBalanceRecord{}, &BillingChargeRecord{}, &ProxyPoolRecord{}, &AppLogRecord{}, &OAuthSessionRecord{}, &CertificateRecord{}); errMigrate != nil {
 		return errMigrate
 	}

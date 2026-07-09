@@ -432,6 +432,24 @@ func (r *Repository) ListLiveClusterNodes(ctx context.Context, cutoff time.Time)
 	return records, nil
 }
 
+// ListClusterNodes returns known Home cluster nodes, optionally bounded by last seen time.
+func (r *Repository) ListClusterNodes(ctx context.Context, cutoff time.Time) ([]ClusterNodeRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	var records []ClusterNodeRecord
+	query := db.WithContext(contextOrBackground(ctx)).Where("port > ?", 0)
+	if !cutoff.IsZero() {
+		query = query.Where("last_seen_at >= ?", cutoff)
+	}
+	errFind := query.Order("started_at ASC, ip ASC, port ASC").Find(&records).Error
+	if errFind != nil {
+		return nil, errFind
+	}
+	return records, nil
+}
+
 // ReplaceCPANodeSnapshot replaces the active CPA connection snapshot owned by one Home node.
 func (r *Repository) ReplaceCPANodeSnapshot(ctx context.Context, homeIP string, homePort int, nodes []node.Node, seenAt time.Time) error {
 	db, errDB := r.database()
@@ -512,6 +530,25 @@ func (r *Repository) ListLiveCPANodes(ctx context.Context, cutoff time.Time) ([]
 		Where("last_seen_at >= ?", cutoff).
 		Order("connected_at ASC, client_ip ASC, node_id ASC, home_ip ASC, home_port ASC").
 		Find(&records).Error
+	if errFind != nil {
+		return nil, errFind
+	}
+	return records, nil
+}
+
+// ListCPANodeSnapshots returns known CPA node snapshots, optionally bounded by last seen time.
+func (r *Repository) ListCPANodeSnapshots(ctx context.Context, cutoff time.Time) ([]CPANodeRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+
+	var records []CPANodeRecord
+	query := db.WithContext(contextOrBackground(ctx))
+	if !cutoff.IsZero() {
+		query = query.Where("last_seen_at >= ?", cutoff)
+	}
+	errFind := query.Order("home_ip ASC, home_port ASC, connected_at ASC, client_ip ASC, node_id ASC").Find(&records).Error
 	if errFind != nil {
 		return nil, errFind
 	}

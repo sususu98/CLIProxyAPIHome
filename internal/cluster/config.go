@@ -145,7 +145,7 @@ func (c *Config) applyDefaults() {
 		c.Node.HeartbeatInterval = 5 * time.Second
 	}
 	if c.Node.HeartbeatTimeout == 0 {
-		c.Node.HeartbeatTimeout = 20 * time.Second
+		c.Node.HeartbeatTimeout = DefaultHeartbeatTimeout()
 	}
 	if c.Node.EventPollInterval == 0 {
 		c.Node.EventPollInterval = 3 * time.Second

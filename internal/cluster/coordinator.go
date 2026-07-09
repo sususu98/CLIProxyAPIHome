@@ -21,6 +21,11 @@ const (
 	defaultHeartbeatTimeout  = 20 * time.Second
 )
 
+// DefaultHeartbeatTimeout returns the default cluster heartbeat timeout.
+func DefaultHeartbeatTimeout() time.Duration {
+	return defaultHeartbeatTimeout
+}
+
 type CoordinatorOptions struct {
 	HeartbeatInterval time.Duration
 	HeartbeatTimeout  time.Duration
