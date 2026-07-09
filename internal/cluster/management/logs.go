@@ -97,13 +97,17 @@ func (h *Handler) GetLogs(c *gin.Context) {
 	})
 }
 
-// DownloadRequestLogByID downloads a request log file by path request ID and optional query home IP.
+// DownloadRequestLogByID downloads a request log file by path request ID and optional query Home identity.
 func (h *Handler) DownloadRequestLogByID(c *gin.Context) {
 	requestID := strings.TrimSpace(c.Param("id"))
 	if requestID == "" {
 		requestID = firstNonEmptyQuery(c, "request_id", "request-id", "id")
 	}
-	h.downloadRequestLog(c, firstNonEmptyQuery(c, "home_ip", "home-ip"), requestID)
+	homePort, ok := requestLogHomePortQuery(c)
+	if !ok {
+		return
+	}
+	h.downloadRequestLog(c, firstNonEmptyQuery(c, "home_ip", "home-ip"), homePort, requestID)
 }
 
 // DownloadLocalRequestLogByID downloads a request log file from this Home only.
@@ -112,30 +116,34 @@ func (h *Handler) DownloadLocalRequestLogByID(c *gin.Context) {
 	if requestID == "" {
 		requestID = firstNonEmptyQuery(c, "request_id", "request-id", "id")
 	}
-	h.downloadLocalRequestLog(c, firstNonEmptyQuery(c, "home_ip", "home-ip"), requestID)
+	homePort, ok := requestLogHomePortQuery(c)
+	if !ok {
+		return
+	}
+	h.downloadLocalRequestLog(c, firstNonEmptyQuery(c, "home_ip", "home-ip"), homePort, requestID)
 }
 
-func (h *Handler) downloadRequestLog(c *gin.Context, homeIP string, requestID string) {
+func (h *Handler) downloadRequestLog(c *gin.Context, homeIP string, homePort int, requestID string) {
 	homeIP = strings.TrimSpace(homeIP)
 	requestID = strings.TrimSpace(requestID)
 	if !validateRequestLogParams(c, homeIP, requestID) {
 		return
 	}
-	if homeIP != "" && h.nodeIP != "" && homeIP != h.nodeIP {
-		h.forwardRequestLogByID(c, homeIP, requestID)
+	if h.requestLogTargetIsRemote(homeIP, homePort) {
+		h.forwardRequestLogByID(c, homeIP, homePort, requestID)
 		return
 	}
 
-	h.downloadLocalRequestLog(c, homeIP, requestID)
+	h.downloadLocalRequestLog(c, homeIP, homePort, requestID)
 }
 
-func (h *Handler) downloadLocalRequestLog(c *gin.Context, homeIP string, requestID string) {
+func (h *Handler) downloadLocalRequestLog(c *gin.Context, homeIP string, homePort int, requestID string) {
 	homeIP = strings.TrimSpace(homeIP)
 	requestID = strings.TrimSpace(requestID)
 	if !validateRequestLogParams(c, homeIP, requestID) {
 		return
 	}
-	if homeIP != "" && h.nodeIP != "" && homeIP != h.nodeIP {
+	if h.requestLogTargetIsRemote(homeIP, homePort) {
 		respondError(c, http.StatusNotFound, "not_found", fmt.Errorf("home log file is not local to this node"))
 		return
 	}
@@ -153,6 +161,30 @@ func (h *Handler) downloadLocalRequestLog(c *gin.Context, homeIP string, request
 	c.FileAttachment(path, name)
 }
 
+func requestLogHomePortQuery(c *gin.Context) (int, bool) {
+	raw := firstNonEmptyQuery(c, "home_port", "home-port")
+	if raw == "" {
+		return 0, true
+	}
+	parsed, errParse := strconv.Atoi(raw)
+	if errParse != nil || parsed <= 0 {
+		respondError(c, http.StatusBadRequest, "invalid_home_port", fmt.Errorf("home_port must be a positive integer"))
+		return 0, false
+	}
+	return parsed, true
+}
+
+func (h *Handler) requestLogTargetIsRemote(homeIP string, homePort int) bool {
+	homeIP = strings.TrimSpace(homeIP)
+	if homeIP != "" && h.nodeIP != "" && homeIP != h.nodeIP {
+		return true
+	}
+	if homePort > 0 && h.nodePort > 0 && homePort != h.nodePort {
+		return true
+	}
+	return false
+}
+
 func validateRequestLogParams(c *gin.Context, homeIP string, requestID string) bool {
 	if requestID == "" {
 		respondError(c, http.StatusBadRequest, "missing_request_id", fmt.Errorf("request_id is required"))
@@ -165,7 +197,7 @@ func validateRequestLogParams(c *gin.Context, homeIP string, requestID string) b
 	return true
 }
 
-func (h *Handler) forwardRequestLogByID(c *gin.Context, homeIP string, requestID string) {
+func (h *Handler) forwardRequestLogByID(c *gin.Context, homeIP string, homePort int, requestID string) {
 	if h == nil || h.repo == nil {
 		respondError(c, http.StatusServiceUnavailable, "cluster_unavailable", fmt.Errorf("cluster repository is unavailable"))
 		return
@@ -178,7 +210,7 @@ func (h *Handler) forwardRequestLogByID(c *gin.Context, homeIP string, requestID
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 
-	target, errTarget := h.requestLogTargetNode(ctx, homeIP)
+	target, errTarget := h.requestLogTargetNode(ctx, homeIP, homePort)
 	if errTarget != nil {
 		respondError(c, http.StatusInternalServerError, "node_lookup_failed", errTarget)
 		return
@@ -201,6 +233,9 @@ func (h *Handler) forwardRequestLogByID(c *gin.Context, homeIP string, requestID
 	}
 	query := targetURL.Query()
 	query.Set("home_ip", homeIP)
+	if homePort > 0 {
+		query.Set("home_port", strconv.Itoa(homePort))
+	}
 	targetURL.RawQuery = query.Encode()
 
 	req, errRequest := http.NewRequestWithContext(ctx, http.MethodGet, targetURL.String(), nil)
@@ -232,7 +267,7 @@ func (h *Handler) forwardRequestLogByID(c *gin.Context, homeIP string, requestID
 	}
 }
 
-func (h *Handler) requestLogTargetNode(ctx context.Context, homeIP string) (*cluster.ClusterNodeRecord, error) {
+func (h *Handler) requestLogTargetNode(ctx context.Context, homeIP string, homePort int) (*cluster.ClusterNodeRecord, error) {
 	homeIP = strings.TrimSpace(homeIP)
 	if homeIP == "" {
 		return nil, nil
@@ -242,7 +277,10 @@ func (h *Handler) requestLogTargetNode(ctx context.Context, homeIP string) (*clu
 		return nil, errNodes
 	}
 	for i := range nodes {
-		if strings.TrimSpace(nodes[i].IP) == homeIP && nodes[i].Port > 0 {
+		if strings.TrimSpace(nodes[i].IP) != homeIP || nodes[i].Port <= 0 {
+			continue
+		}
+		if homePort <= 0 || nodes[i].Port == homePort {
 			return &nodes[i], nil
 		}
 	}
