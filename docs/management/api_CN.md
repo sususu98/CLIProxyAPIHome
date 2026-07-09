@@ -583,12 +583,12 @@ openai-compatibility
 ```json
 {
   "summary": {
-    "home_count": 2,
-    "healthy_home_count": 2,
+    "home_count": 1,
+    "healthy_home_count": 1,
     "stale_home_count": 0,
     "unknown_home_count": 0,
-    "cpa_count": 3,
-    "healthy_cpa_count": 3,
+    "cpa_count": 1,
+    "healthy_cpa_count": 1,
     "stale_cpa_count": 0,
     "unknown_cpa_count": 0,
     "plugin_attention_count": 0,
@@ -611,11 +611,11 @@ openai-compatibility
     "reported_master": true,
     "health": "healthy",
     "healthy": true,
-    "client_count": 2,
+    "client_count": 1,
     "started_at": "2026-05-27T10:00:00Z",
     "last_seen_at": "2026-05-27T10:30:02Z",
-    "cpa_count": 2,
-    "healthy_cpa_count": 2,
+    "cpa_count": 1,
+    "healthy_cpa_count": 1,
     "stale_cpa_count": 0,
     "unknown_cpa_count": 0
   },
@@ -629,11 +629,11 @@ openai-compatibility
       "reported_master": true,
       "health": "healthy",
       "healthy": true,
-      "client_count": 2,
+      "client_count": 1,
       "started_at": "2026-05-27T10:00:00Z",
       "last_seen_at": "2026-05-27T10:30:02Z",
-      "cpa_count": 2,
-      "healthy_cpa_count": 2,
+      "cpa_count": 1,
+      "healthy_cpa_count": 1,
       "stale_cpa_count": 0,
       "unknown_cpa_count": 0
     }
