@@ -1353,7 +1353,7 @@ func (h *Handler) requestLogIndexItemResponse(record *cluster.UsageObservability
 	requestID := strings.TrimSpace(record.RequestID)
 	homeIP := strings.TrimSpace(record.Runtime.HomeIP)
 	homePort := record.Runtime.HomePort
-	available, fileName, sizeBytes := h.usageRequestLogAvailability(homeIP, requestID)
+	available, fileName, sizeBytes := h.usageRequestLogAvailability(homeIP, homePort, requestID)
 	var downloadURL any
 	if available {
 		value := "/request-log-by-id/" + url.PathEscape(requestID)
@@ -1429,13 +1429,12 @@ func requestLogIndexStringValue(value any) string {
 	}
 }
 
-func (h *Handler) usageRequestLogAvailability(homeIP string, requestID string) (bool, any, any) {
+func (h *Handler) usageRequestLogAvailability(homeIP string, homePort int, requestID string) (bool, any, any) {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
 		return false, nil, nil
 	}
-	homeIP = strings.TrimSpace(homeIP)
-	if h != nil && h.nodeIP != "" && homeIP != "" && homeIP != h.nodeIP {
+	if h.requestLogTargetIsRemote(homeIP, homePort) {
 		return false, nil, nil
 	}
 	name, path, errFind := findRequestLogFile(homeLogDirectory, requestID)
@@ -1453,8 +1452,7 @@ func (h *Handler) usageRequestLogExcerpt(record *cluster.UsageObservabilityRecor
 	if record == nil {
 		return []string{}
 	}
-	homeIP := strings.TrimSpace(record.Runtime.HomeIP)
-	if h != nil && h.nodeIP != "" && homeIP != "" && homeIP != h.nodeIP {
+	if h.requestLogTargetIsRemote(record.Runtime.HomeIP, record.Runtime.HomePort) {
 		return []string{}
 	}
 	_, path, errFind := findRequestLogFile(homeLogDirectory, record.RequestID)
@@ -1495,7 +1493,7 @@ func (h *Handler) usageRecordSummaryResponse(record *cluster.UsageObservabilityR
 		return gin.H{}
 	}
 	recordCopy := *record
-	available, _, _ := h.usageRequestLogAvailability(recordCopy.Runtime.HomeIP, recordCopy.RequestID)
+	available, _, _ := h.usageRequestLogAvailability(recordCopy.Runtime.HomeIP, recordCopy.Runtime.HomePort, recordCopy.RequestID)
 	recordCopy.Runtime.RequestLogAvailable = available
 	return usageRecordSummaryResponse(&recordCopy)
 }
@@ -1634,7 +1632,7 @@ func (h *Handler) usageExportRecordMap(record *cluster.UsageObservabilityRecord)
 		return map[string]any{}
 	}
 	recordCopy := *record
-	available, _, _ := h.usageRequestLogAvailability(recordCopy.Runtime.HomeIP, recordCopy.RequestID)
+	available, _, _ := h.usageRequestLogAvailability(recordCopy.Runtime.HomeIP, recordCopy.Runtime.HomePort, recordCopy.RequestID)
 	recordCopy.Runtime.RequestLogAvailable = available
 	return usageExportRecordMap(&recordCopy)
 }

@@ -1735,7 +1735,7 @@ func usageObservabilityAggregateSQLIdentity(groupBy string) (string, string) {
 		id := `COALESCE(NULLIF("usage"."executor_type", ''), 'unknown')`
 		return id, id
 	case "status_code":
-		id := `CASE WHEN "usage"."failed" THEN CAST("usage"."fail_status_code" AS TEXT) ELSE '200' END`
+		id := `CAST(` + usageObservabilityEffectiveStatusCodeSQL() + ` AS TEXT)`
 		return id, id
 	default:
 		id := `COALESCE(NULLIF("usage"."provider", ''), 'unknown')`
@@ -1952,7 +1952,7 @@ func usageObservabilityDistinctStatusCodes(ctx context.Context, db *gorm.DB, que
 	type valueRow struct {
 		Value int `gorm:"column:value"`
 	}
-	expression := `CASE WHEN "usage"."failed" THEN "usage"."fail_status_code" WHEN "usage"."upstream_status_code" > 0 THEN "usage"."upstream_status_code" ELSE 200 END`
+	expression := usageObservabilityEffectiveStatusCodeSQL()
 	var rows []valueRow
 	scope := usageObservabilityRecordScope(db.WithContext(ctx).Table("usage"), query).
 		Where(expression + ` > 0`).
@@ -2169,10 +2169,7 @@ func usageObservabilityStatusScope(scope *gorm.DB, status string) *gorm.DB {
 	default:
 		statusCode, errAtoi := strconv.Atoi(value)
 		if errAtoi == nil {
-			if statusCode >= 200 && statusCode < 400 {
-				return scope.Where(`"usage"."failed" = ?`, false)
-			}
-			return scope.Where(`"usage"."fail_status_code" = ?`, statusCode)
+			return usageObservabilityEffectiveStatusCodeScope(scope, statusCode)
 		}
 		return scope
 	}
@@ -2182,10 +2179,15 @@ func usageObservabilityStatusCodeScope(scope *gorm.DB, statusCode *int) *gorm.DB
 	if statusCode == nil || *statusCode <= 0 {
 		return scope
 	}
-	if *statusCode >= 200 && *statusCode < 400 {
-		return scope.Where(`"usage"."failed" = ?`, false)
-	}
-	return scope.Where(`"usage"."fail_status_code" = ?`, *statusCode)
+	return usageObservabilityEffectiveStatusCodeScope(scope, *statusCode)
+}
+
+func usageObservabilityEffectiveStatusCodeScope(scope *gorm.DB, statusCode int) *gorm.DB {
+	return scope.Where(usageObservabilityEffectiveStatusCodeSQL()+` = ?`, statusCode)
+}
+
+func usageObservabilityEffectiveStatusCodeSQL() string {
+	return `CASE WHEN "usage"."failed" THEN "usage"."fail_status_code" WHEN "usage"."upstream_status_code" > 0 THEN "usage"."upstream_status_code" ELSE 200 END`
 }
 
 func usageObservabilityEventTypeScope(scope *gorm.DB, eventType string) *gorm.DB {
@@ -2318,7 +2320,7 @@ func usageObservabilityRecordFromRow(row *usageObservabilityRecordRow) UsageObse
 		EventType:          usageObservabilityEventType(row, payload),
 		Status:             usageObservabilityRecordStatus(row.Failed),
 		Failed:             row.Failed,
-		StatusCode:         usageObservabilityStatusCode(row.Failed, row.FailStatusCode),
+		StatusCode:         usageObservabilityEffectiveStatusCode(row),
 		UpstreamStatusCode: firstNonZeroInt(row.UpstreamStatusCode, int(firstIntFromPayload(payload, "upstream_status_code", "upstream.status_code", "response.status_code"))),
 		Source:             strings.TrimSpace(row.Source),
 		Provider:           strings.TrimSpace(row.Provider),
@@ -2597,7 +2599,7 @@ func usageObservabilityAggregateIdentity(row *usageObservabilityRecordRow, group
 		id := firstNonEmptyUsageObservabilityString(row.ExecutorType, "unknown")
 		return id, UsageObservabilityAggregateItem{ID: id, Label: id, Metadata: map[string]any{}}
 	case "status_code":
-		statusCode := usageObservabilityStatusCode(row.Failed, row.FailStatusCode)
+		statusCode := usageObservabilityEffectiveStatusCode(row)
 		id := strconv.Itoa(statusCode)
 		return id, UsageObservabilityAggregateItem{
 			ID:    id,
@@ -3234,9 +3236,15 @@ func usageObservabilityRecordStatus(failed bool) string {
 	return "success"
 }
 
-func usageObservabilityStatusCode(failed bool, failStatusCode int) int {
-	if failed {
-		return failStatusCode
+func usageObservabilityEffectiveStatusCode(row *usageObservabilityRecordRow) int {
+	if row == nil {
+		return httpStatusOK
+	}
+	if row.Failed {
+		return row.FailStatusCode
+	}
+	if row.UpstreamStatusCode > 0 {
+		return row.UpstreamStatusCode
 	}
 	return httpStatusOK
 }

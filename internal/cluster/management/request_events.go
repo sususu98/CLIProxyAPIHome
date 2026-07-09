@@ -154,7 +154,7 @@ func (h *Handler) requestEventResponse(record *cluster.UsageObservabilityRecord)
 		return gin.H{}
 	}
 	recordCopy := *record
-	available, _, _ := h.usageRequestLogAvailability(recordCopy.Runtime.HomeIP, recordCopy.RequestID)
+	available, _, _ := h.usageRequestLogAvailability(recordCopy.Runtime.HomeIP, recordCopy.Runtime.HomePort, recordCopy.RequestID)
 	recordCopy.Runtime.RequestLogAvailable = available
 	return requestEventResponse(&recordCopy)
 }

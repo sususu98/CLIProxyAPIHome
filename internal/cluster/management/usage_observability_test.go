@@ -180,7 +180,7 @@ func TestListRequestEventsReturnsFrontendContract(t *testing.T) {
 	if !ok {
 		t.Fatalf("item = %T, want object", items[0])
 	}
-	if item["id"] != "evt_1" || item["event_type"] != "completion" || item["status"] != "success" || item["upstream_status_code"] != float64(201) {
+	if item["id"] != "evt_1" || item["event_type"] != "completion" || item["status"] != "success" || item["status_code"] != float64(201) || item["upstream_status_code"] != float64(201) {
 		t.Fatalf("item identity = %#v, want request event identity", item)
 	}
 	runtime, ok := item["runtime"].(map[string]any)
@@ -236,6 +236,44 @@ func TestGetRequestEventFilterOptionsReturnsDistinctOptions(t *testing.T) {
 		if !stringSliceContains(payload[key], want) {
 			t.Fatalf("%s = %#v, want %q", key, payload[key], want)
 		}
+	}
+}
+
+func TestListRequestEventsFiltersEffectiveStatusCode(t *testing.T) {
+	handler, closeRepo := newUsageObservabilityTestHandler(t)
+	defer closeRepo()
+	seedUsageObservabilityManagementRecord(t, handler)
+
+	payload := `{"timestamp":"2026-06-10T01:02:04Z","event_type":"completion","provider":"openai","model":"gpt-4.1-mini","api_key":"client-key-secret-1234","request_id":"req-obs-200","cpa_node_id":"cpa-a","cpa_label":"cpa-a:8317","endpoint":"/v1/chat/completions","executor_type":"CodexWebsocketsExecutor","auth_index":"auth-observability","auth_type":"oauth","latency_ms":100,"tokens":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	if _, errUsage := handler.repo.AppendUsageWithRuntime(context.Background(), payload, cluster.UsageRuntimeMetadata{HomeIP: "192.0.2.10", HomePort: 8327}); errUsage != nil {
+		t.Fatalf("AppendUsage(200) error = %v", errUsage)
+	}
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/request-events", handler.ListRequestEvents)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/request-events?status_code=201&limit=10", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want %d", resp.Code, resp.Body.String(), http.StatusOK)
+	}
+	var response map[string]any
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &response); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if response["total"] != float64(1) {
+		t.Fatalf("total = %v, want only upstream status 201", response["total"])
+	}
+	items, ok := response["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("items = %#v, want one item", response["items"])
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok || item["request_id"] != "req-obs-1" {
+		t.Fatalf("item = %#v, want req-obs-1", items[0])
 	}
 }
 
@@ -308,6 +346,67 @@ func TestGetRequestEventReturnsDetailWithRedactedLogExcerpt(t *testing.T) {
 	excerpt, ok := payload["log_excerpt"].([]any)
 	if !ok || len(excerpt) == 0 {
 		t.Fatalf("log_excerpt = %#v, want non-empty array", payload["log_excerpt"])
+	}
+}
+
+func TestGetRequestEventIgnoresLocalLogWhenHomePortDiffers(t *testing.T) {
+	handler, closeRepo := newUsageObservabilityTestHandler(t)
+	defer closeRepo()
+	handler.nodePort = 8327
+
+	requestID := "req-same-ip-port"
+	payload := `{"timestamp":"2026-06-10T01:02:05Z","event_type":"completion","provider":"openai","model":"gpt-4.1-mini","request_id":"req-same-ip-port","endpoint":"/v1/chat/completions","latency_ms":100,"tokens":{"total_tokens":1}}`
+	record, errUsage := handler.repo.AppendUsageWithRuntime(context.Background(), payload, cluster.UsageRuntimeMetadata{HomeIP: "192.0.2.10", HomePort: 8328})
+	if errUsage != nil {
+		t.Fatalf("AppendUsage(remote port) error = %v", errUsage)
+	}
+
+	if errMkdir := os.MkdirAll(homeLogDirectory, 0o755); errMkdir != nil {
+		t.Fatalf("MkdirAll(logs) error = %v", errMkdir)
+	}
+	logPath := filepath.Join(homeLogDirectory, "20260610010205-"+requestID+".log")
+	if errWrite := os.WriteFile(logPath, []byte("local log should not match remote port\n"), 0o644); errWrite != nil {
+		t.Fatalf("WriteFile(log) error = %v", errWrite)
+	}
+	defer func() {
+		if errRemove := os.Remove(logPath); errRemove != nil && !os.IsNotExist(errRemove) {
+			t.Errorf("remove log: %v", errRemove)
+		}
+	}()
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/request-events/:id", handler.GetRequestEvent)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/request-events/evt_%d?include_logs=true", record.ID), nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want %d", resp.Code, resp.Body.String(), http.StatusOK)
+	}
+	var response map[string]any
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &response); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	event, ok := response["event"].(map[string]any)
+	if !ok {
+		t.Fatalf("event = %T, want object", response["event"])
+	}
+	related, ok := event["related"].(map[string]any)
+	if !ok {
+		t.Fatalf("related = %T, want object", event["related"])
+	}
+	requestLog, ok := related["request_log"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_log = %T, want object", related["request_log"])
+	}
+	if requestLog["available"] != false || requestLog["download_url"] != nil {
+		t.Fatalf("request_log = %#v, want unavailable remote-port log", requestLog)
+	}
+	excerpt, ok := response["log_excerpt"].([]any)
+	if !ok || len(excerpt) != 0 {
+		t.Fatalf("log_excerpt = %#v, want empty for remote-port log", response["log_excerpt"])
 	}
 }
 
