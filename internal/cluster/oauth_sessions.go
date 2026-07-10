@@ -16,6 +16,9 @@ const (
 	oauthCompletedSessionTTL = time.Minute
 )
 
+// ErrOAuthSessionNotPending reports that session data can no longer be changed.
+var ErrOAuthSessionNotPending = errors.New("oauth session is not pending")
+
 // NewOAuthSessionRecord creates a new o auth session record.
 func NewOAuthSessionRecord(provider, state string, data map[string]any, now time.Time) (*OAuthSessionRecord, error) {
 	// Resolve credential context before calling upstream OAuth services.
@@ -75,6 +78,9 @@ func (r *Repository) UpsertOAuthSession(ctx context.Context, record *OAuthSessio
 	if record.ExpiresAt.IsZero() {
 		record.ExpiresAt = record.UpdatedAt.Add(OAuthSessionTTL)
 	}
+	if errDelete := deleteExpiredCompletedOAuthSessions(ctx, db, time.Now().UTC()); errDelete != nil {
+		return errDelete
+	}
 	return db.WithContext(contextOrBackground(ctx)).Save(record).Error
 }
 
@@ -99,9 +105,7 @@ func (r *Repository) GetOAuthSession(ctx context.Context, state string) (*OAuthS
 	}
 	now := time.Now().UTC()
 	if !record.ExpiresAt.IsZero() && !record.ExpiresAt.After(now) && strings.EqualFold(record.Status, "complete") {
-		if errDelete := db.WithContext(contextOrBackground(ctx)).
-			Where("state = ? AND status = ? AND expires_at <= ?", state, "complete", now).
-			Delete(&OAuthSessionRecord{}).Error; errDelete != nil {
+		if errDelete := deleteExpiredCompletedOAuthSessions(ctx, db, now); errDelete != nil {
 			return nil, errDelete
 		}
 		return nil, nil
@@ -115,6 +119,12 @@ func (r *Repository) GetOAuthSession(ctx context.Context, state string) (*OAuthS
 		}
 	}
 	return record, nil
+}
+
+func deleteExpiredCompletedOAuthSessions(ctx context.Context, db *gorm.DB, now time.Time) error {
+	return db.WithContext(contextOrBackground(ctx)).
+		Where("status = ? AND expires_at <= ?", "complete", now).
+		Delete(&OAuthSessionRecord{}).Error
 }
 
 // MergeOAuthSessionData merges an o auth session data.
@@ -134,6 +144,9 @@ func (r *Repository) MergeOAuthSessionData(ctx context.Context, state string, va
 	}
 	if record == nil {
 		return fmt.Errorf("oauth session not found")
+	}
+	if strings.TrimSpace(record.Status) != "" {
+		return ErrOAuthSessionNotPending
 	}
 	data, errData := OAuthSessionData(record)
 	if errData != nil {
@@ -159,7 +172,18 @@ func (r *Repository) MergeOAuthSessionData(ctx context.Context, state string, va
 	}
 	record.Data = JSONB(rawData)
 	record.UpdatedAt = time.Now().UTC()
-	return db.WithContext(contextOrBackground(ctx)).Save(record).Error
+	result := db.WithContext(contextOrBackground(ctx)).
+		Model(record).
+		Where("state = ? AND status = ?", state, "").
+		Select("data", "updated_at").
+		Updates(record)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrOAuthSessionNotPending
+	}
+	return nil
 }
 
 // CompleteOAuthSession handles a complete o auth session.

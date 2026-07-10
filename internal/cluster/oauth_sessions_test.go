@@ -2,9 +2,12 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func TestCompleteOAuthSessionCreatesShortLivedTombstone(t *testing.T) {
@@ -83,11 +86,11 @@ func TestCompleteOAuthSessionDoesNotExtendTombstone(t *testing.T) {
 	}
 }
 
-func TestGetOAuthSessionRemovesExpiredCompletedTombstone(t *testing.T) {
+func TestUpsertOAuthSessionRemovesAllExpiredCompletedTombstones(t *testing.T) {
 	repo, ctx := newOAuthSessionTestRepository(t)
 	now := time.Now().UTC()
 	completedAt := now.Add(-2 * time.Minute)
-	record := &OAuthSessionRecord{
+	expired := &OAuthSessionRecord{
 		State:       "expired-completed-state",
 		Provider:    "codex",
 		Status:      "complete",
@@ -96,24 +99,83 @@ func TestGetOAuthSessionRemovesExpiredCompletedTombstone(t *testing.T) {
 		ExpiresAt:   now.Add(-time.Minute),
 		CompletedAt: &completedAt,
 	}
-	if errUpsert := repo.UpsertOAuthSession(ctx, record); errUpsert != nil {
+	if errUpsert := repo.UpsertOAuthSession(ctx, expired); errUpsert != nil {
 		t.Fatalf("UpsertOAuthSession() error = %v", errUpsert)
 	}
+	active, errActive := NewOAuthSessionRecord("codex", "active-state", nil, now)
+	if errActive != nil {
+		t.Fatalf("NewOAuthSessionRecord() error = %v", errActive)
+	}
+	if errUpsert := repo.UpsertOAuthSession(ctx, active); errUpsert != nil {
+		t.Fatalf("UpsertOAuthSession() active error = %v", errUpsert)
+	}
 
-	got, errGet := repo.GetOAuthSession(ctx, record.State)
+	got, errGet := repo.GetOAuthSession(ctx, active.State)
 	if errGet != nil {
 		t.Fatalf("GetOAuthSession() error = %v", errGet)
 	}
-	if got != nil {
-		t.Fatalf("GetOAuthSession() = %+v, want expired tombstone removed", got)
+	if got == nil || got.State != active.State {
+		t.Fatalf("GetOAuthSession() = %+v, want active session", got)
 	}
 
 	var count int64
-	if errCount := repo.db.Model(&OAuthSessionRecord{}).Where("state = ?", record.State).Count(&count).Error; errCount != nil {
+	if errCount := repo.db.Model(&OAuthSessionRecord{}).Where("state = ?", expired.State).Count(&count).Error; errCount != nil {
 		t.Fatalf("count expired tombstone: %v", errCount)
 	}
 	if count != 0 {
 		t.Fatalf("expired tombstone count = %d, want 0", count)
+	}
+}
+
+func TestMergeOAuthSessionDataDoesNotOverwriteConcurrentCompletion(t *testing.T) {
+	repo, ctx := newOAuthSessionTestRepository(t)
+	record, errRecord := NewOAuthSessionRecord("codex", "concurrent-completion-state", map[string]any{"code_verifier": "secret"}, time.Now().UTC())
+	if errRecord != nil {
+		t.Fatalf("NewOAuthSessionRecord() error = %v", errRecord)
+	}
+	if errUpsert := repo.UpsertOAuthSession(ctx, record); errUpsert != nil {
+		t.Fatalf("UpsertOAuthSession() error = %v", errUpsert)
+	}
+	sqlDB, errDB := repo.db.DB()
+	if errDB != nil {
+		t.Fatalf("DB() error = %v", errDB)
+	}
+	sqlDB.SetMaxOpenConns(2)
+	sqlDB.SetMaxIdleConns(2)
+
+	mergeReachedUpdate := make(chan struct{})
+	releaseMerge := make(chan struct{})
+	if errCallback := repo.db.Callback().Update().Before("gorm:update").Register("test:block_oauth_merge", func(tx *gorm.DB) {
+		session, ok := tx.Statement.Dest.(*OAuthSessionRecord)
+		if !ok || session.State != record.State || session.Status != "" {
+			return
+		}
+		mergeReachedUpdate <- struct{}{}
+		<-releaseMerge
+	}); errCallback != nil {
+		t.Fatalf("register update callback: %v", errCallback)
+	}
+
+	mergeDone := make(chan error, 1)
+	go func() {
+		mergeDone <- repo.MergeOAuthSessionData(context.Background(), record.State, map[string]any{"callback_received_at": "late"})
+	}()
+
+	<-mergeReachedUpdate
+	if errComplete := repo.CompleteOAuthSession(ctx, record.State); errComplete != nil {
+		t.Fatalf("CompleteOAuthSession() error = %v", errComplete)
+	}
+	close(releaseMerge)
+	if errMerge := <-mergeDone; !errors.Is(errMerge, ErrOAuthSessionNotPending) {
+		t.Fatalf("MergeOAuthSessionData() error = %v, want ErrOAuthSessionNotPending", errMerge)
+	}
+
+	completed, errGet := repo.GetOAuthSession(ctx, record.State)
+	if errGet != nil {
+		t.Fatalf("GetOAuthSession() error = %v", errGet)
+	}
+	if completed == nil || completed.Status != "complete" || completed.CompletedAt == nil || len(completed.Data) != 0 {
+		t.Fatalf("completed session = %+v, want unchanged completed tombstone", completed)
 	}
 }
 
