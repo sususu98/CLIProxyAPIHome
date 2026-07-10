@@ -16,6 +16,8 @@ import (
 type billingModelPriceRequest struct {
 	Provider                  *string  `json:"provider"`
 	Model                     *string  `json:"model"`
+	ServiceTier               *string  `json:"service_tier"`
+	MinInputTokens            *int64   `json:"min_input_tokens"`
 	InputPricePerMillion      *float64 `json:"input_price_per_million"`
 	OutputPricePerMillion     *float64 `json:"output_price_per_million"`
 	CacheReadPricePerMillion  *float64 `json:"cache_read_price_per_million"`
@@ -24,6 +26,10 @@ type billingModelPriceRequest struct {
 	Source                    *string  `json:"source"`
 	Enabled                   *bool    `json:"enabled"`
 	Note                      *string  `json:"note"`
+}
+
+type billingSettingsRequest struct {
+	ServiceTierSource *string `json:"service_tier_source"`
 }
 
 type billingBalanceRequest struct {
@@ -209,7 +215,38 @@ func (h *Handler) ListBillingModelPrices(c *gin.Context) {
 	for index := range records {
 		items = append(items, billingModelPriceResponse(&records[index]))
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	c.JSON(http.StatusOK, gin.H{"price_rule_schema_version": 2, "items": items})
+}
+
+func (h *Handler) GetBillingSettings(c *gin.Context) {
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	settings, errSettings := h.repo.GetBillingSettings(ctx)
+	if errSettings != nil {
+		respondError(c, http.StatusInternalServerError, "billing_settings_load_failed", errSettings)
+		return
+	}
+	c.JSON(http.StatusOK, settings)
+}
+
+func (h *Handler) UpdateBillingSettings(c *gin.Context) {
+	var body billingSettingsRequest
+	if errBind := c.ShouldBindJSON(&body); errBind != nil {
+		respondError(c, http.StatusBadRequest, "invalid_body", errBind)
+		return
+	}
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	settings, errSettings := h.repo.UpdateBillingSettings(ctx, cluster.BillingSettingsPatch{ServiceTierSource: body.ServiceTierSource})
+	if errSettings != nil {
+		if strings.Contains(errSettings.Error(), "service_tier_source") {
+			respondError(c, http.StatusBadRequest, "invalid_body", errSettings)
+			return
+		}
+		respondError(c, http.StatusInternalServerError, "billing_settings_update_failed", errSettings)
+		return
+	}
+	c.JSON(http.StatusOK, settings)
 }
 
 func (h *Handler) applyBillingBalance(c *gin.Context, recordType string) {
@@ -255,6 +292,8 @@ func billingModelPriceUpdateFromRequest(c *gin.Context, body billingModelPriceRe
 	update := cluster.BillingModelPriceUpdate{
 		Provider:                  strings.TrimSpace(billingStringValue(body.Provider)),
 		Model:                     strings.TrimSpace(billingStringValue(body.Model)),
+		ServiceTier:               strings.TrimSpace(billingStringValue(body.ServiceTier)),
+		MinInputTokens:            int64Value(body.MinInputTokens),
 		InputPricePerMillion:      floatValue(body.InputPricePerMillion),
 		OutputPricePerMillion:     floatValue(body.OutputPricePerMillion),
 		CacheReadPricePerMillion:  floatValue(body.CacheReadPricePerMillion),
@@ -273,6 +312,10 @@ func billingModelPriceUpdateFromRequest(c *gin.Context, body billingModelPriceRe
 	}
 	if update.Model == "" {
 		respondError(c, http.StatusBadRequest, "invalid_body", fmt.Errorf("model is required"))
+		return update, false
+	}
+	if update.MinInputTokens < 0 {
+		respondError(c, http.StatusBadRequest, "invalid_body", fmt.Errorf("min_input_tokens must be non-negative"))
 		return update, false
 	}
 	for name, value := range map[string]float64{
@@ -308,6 +351,15 @@ func billingModelPricePatchFromRequest(c *gin.Context, body billingModelPriceReq
 		}
 		patch.Model = &model
 	}
+	if body.ServiceTier != nil {
+		serviceTier := strings.TrimSpace(*body.ServiceTier)
+		patch.ServiceTier = &serviceTier
+	}
+	if body.MinInputTokens != nil && *body.MinInputTokens < 0 {
+		respondError(c, http.StatusBadRequest, "invalid_body", fmt.Errorf("min_input_tokens must be non-negative"))
+		return patch, false
+	}
+	patch.MinInputTokens = body.MinInputTokens
 	for name, value := range map[string]*float64{
 		"input_price_per_million":       body.InputPricePerMillion,
 		"output_price_per_million":      body.OutputPricePerMillion,
@@ -351,6 +403,13 @@ func floatValue(value *float64) float64 {
 	return *value
 }
 
+func int64Value(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
 func billingModelPriceResponse(record *cluster.BillingModelPriceRecord) gin.H {
 	if record == nil {
 		return gin.H{}
@@ -359,6 +418,8 @@ func billingModelPriceResponse(record *cluster.BillingModelPriceRecord) gin.H {
 		"id":                            record.ID,
 		"provider":                      record.Provider,
 		"model":                         record.Model,
+		"service_tier":                  record.ServiceTier,
+		"min_input_tokens":              record.MinInputTokens,
 		"input_price_per_million":       record.InputPricePerMillion,
 		"output_price_per_million":      record.OutputPricePerMillion,
 		"cache_read_price_per_million":  record.CacheReadPricePerMillion,

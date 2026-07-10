@@ -90,6 +90,8 @@ func TestClusterManagementBillingWriteRoutesRegistered(t *testing.T) {
 		{Method: http.MethodGet, Path: "/billing/charges"},
 		{Method: http.MethodGet, Path: "/billing/balance-records"},
 		{Method: http.MethodGet, Path: "/billing/model-prices"},
+		{Method: http.MethodGet, Path: "/billing/settings"},
+		{Method: http.MethodPatch, Path: "/billing/settings"},
 		{Method: http.MethodPost, Path: "/billing/balance-records/recharge"},
 		{Method: http.MethodPost, Path: "/billing/balance-records/deduct"},
 		{Method: http.MethodPost, Path: "/billing/model-prices"},

@@ -21,7 +21,7 @@ func TestPostBillingModelPriceCreatesRule(t *testing.T) {
 	handler, closeRepo := newBillingManagementTestHandler(t)
 	defer closeRepo()
 
-	body := []byte(`{"provider":"openai","model":"gpt-4.1-mini","input_price_per_million":2,"output_price_per_million":8,"enabled":true}`)
+	body := []byte(`{"provider":"openai","model":"gpt-4.1-mini","service_tier":"standard","min_input_tokens":272001,"input_price_per_million":2,"output_price_per_million":8,"enabled":true}`)
 	resp := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(resp)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/billing/model-prices", bytes.NewReader(body))
@@ -54,6 +54,52 @@ func TestPostBillingModelPriceCreatesRule(t *testing.T) {
 	}
 	if modelPrice["input_price_per_million"] != float64(2) {
 		t.Fatalf("model_price.input_price_per_million = %v, want 2", modelPrice["input_price_per_million"])
+	}
+	if modelPrice["service_tier"] != "standard" || modelPrice["min_input_tokens"] != float64(272001) {
+		t.Fatalf("model_price tier/band = %v/%v", modelPrice["service_tier"], modelPrice["min_input_tokens"])
+	}
+}
+
+func TestListBillingModelPricesReturnsSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	handler, closeRepo := newBillingManagementTestHandler(t)
+	defer closeRepo()
+	resp := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(resp)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/billing/model-prices", nil)
+	handler.ListBillingModelPrices(ctx)
+
+	var payload map[string]any
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &payload); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if payload["price_rule_schema_version"] != float64(2) {
+		t.Fatalf("price_rule_schema_version = %v, want 2", payload["price_rule_schema_version"])
+	}
+}
+
+func TestBillingSettingsGetAndPatch(t *testing.T) {
+	t.Parallel()
+
+	handler, closeRepo := newBillingManagementTestHandler(t)
+	defer closeRepo()
+
+	getResp := httptest.NewRecorder()
+	getCtx, _ := gin.CreateTestContext(getResp)
+	getCtx.Request = httptest.NewRequest(http.MethodGet, "/billing/settings", nil)
+	handler.GetBillingSettings(getCtx)
+	if getResp.Code != http.StatusOK || !bytes.Contains(getResp.Body.Bytes(), []byte(`"service_tier_source":"request"`)) {
+		t.Fatalf("GET status/body = %d %s", getResp.Code, getResp.Body.String())
+	}
+
+	patchResp := httptest.NewRecorder()
+	patchCtx, _ := gin.CreateTestContext(patchResp)
+	patchCtx.Request = httptest.NewRequest(http.MethodPatch, "/billing/settings", bytes.NewBufferString(`{"service_tier_source":"response"}`))
+	patchCtx.Request.Header.Set("Content-Type", "application/json")
+	handler.UpdateBillingSettings(patchCtx)
+	if patchResp.Code != http.StatusOK || !bytes.Contains(patchResp.Body.Bytes(), []byte(`"service_tier_source":"response"`)) {
+		t.Fatalf("PATCH status/body = %d %s", patchResp.Code, patchResp.Body.String())
 	}
 }
 
