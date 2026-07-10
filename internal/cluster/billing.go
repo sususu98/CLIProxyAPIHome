@@ -1173,7 +1173,7 @@ func billingChargeAmount(usage *UsageRecord, snapshot BillingPriceSnapshot) floa
 	// OpenAI-style cached_tokens are included in input_tokens. Claude reports
 	// cache_read_tokens/cache_creation_tokens as separate billing buckets.
 	cacheWriteTokens := usage.CacheCreationTokens
-	if cacheReadTokens == 0 && usage.CachedTokens > 0 {
+	if !billingUsesSeparateCacheBuckets(usage) {
 		cacheReadTokens = usage.CachedTokens
 		inputTokens -= cacheReadTokens
 		if snapshot.CacheWritePricePerMillion > 0 {
@@ -1210,11 +1210,21 @@ func billingCacheTokens(usage *UsageRecord) int64 {
 	if usage == nil {
 		return 0
 	}
-	total := usage.CacheReadTokens + usage.CacheCreationTokens
-	if total != 0 {
-		return total
+	if billingUsesSeparateCacheBuckets(usage) {
+		return usage.CacheReadTokens + usage.CacheCreationTokens
 	}
-	return usage.CachedTokens
+	return usage.CachedTokens + usage.CacheCreationTokens
+}
+
+func billingUsesSeparateCacheBuckets(usage *UsageRecord) bool {
+	if usage == nil {
+		return false
+	}
+	if usage.CacheReadTokens != 0 {
+		return true
+	}
+	provider := strings.ToLower(strings.TrimSpace(usage.Provider))
+	return strings.Contains(provider, "claude") || strings.Contains(provider, "anthropic")
 }
 
 func billingAPIKeyID(record *APIKeyRecord) *uint {
