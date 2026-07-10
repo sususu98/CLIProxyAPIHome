@@ -193,6 +193,25 @@ func TestBillingCacheTokensIncludesOpenAICacheReadAndWrite(t *testing.T) {
 	}
 }
 
+func TestBillingOpenAICompatibleProviderNameDoesNotSelectClaudeBuckets(t *testing.T) {
+	t.Parallel()
+
+	usage := &UsageRecord{
+		Provider:            "openai-compatible-anthropic",
+		ExecutorType:        "OpenAICompatExecutor",
+		InputTokens:         100,
+		CachedTokens:        30,
+		CacheCreationTokens: 20,
+	}
+	snapshot := BillingPriceSnapshot{InputPricePerMillion: 10, CacheReadPricePerMillion: 2, CacheWritePricePerMillion: 12.5}
+	if got, want := billingChargeAmount(usage, snapshot), 0.00081; math.Abs(got-want) > 1e-12 {
+		t.Fatalf("billingChargeAmount() = %.9f, want %.9f", got, want)
+	}
+	if got, want := billingCacheTokens(usage), int64(50); got != want {
+		t.Fatalf("billingCacheTokens() = %d, want %d", got, want)
+	}
+}
+
 func TestBillingSettingsDefaultToRequest(t *testing.T) {
 	t.Parallel()
 

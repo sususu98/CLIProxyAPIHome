@@ -1226,7 +1226,14 @@ func billingUsesSeparateCacheBuckets(usage *UsageRecord) bool {
 	if usage.CacheReadTokens != 0 {
 		return true
 	}
+	executorType := strings.ToLower(strings.TrimSpace(usage.ExecutorType))
+	if executorType == "openaicompatexecutor" {
+		return false
+	}
 	provider := strings.ToLower(strings.TrimSpace(usage.Provider))
+	if provider == "openai-compatibility" || strings.HasPrefix(provider, "openai-compatible-") {
+		return false
+	}
 	return strings.Contains(provider, "claude") || strings.Contains(provider, "anthropic")
 }
 
