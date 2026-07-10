@@ -261,7 +261,11 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errSession)
 		return
 	}
-	if session == nil || strings.EqualFold(session.Status, "complete") {
+	if session == nil {
+		c.JSON(http.StatusOK, gin.H{"status": "error", "error": "unknown or expired state"})
+		return
+	}
+	if strings.EqualFold(session.Status, "complete") {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return
 	}

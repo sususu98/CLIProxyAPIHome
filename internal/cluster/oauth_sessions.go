@@ -11,7 +11,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const OAuthSessionTTL = 20 * time.Minute
+const (
+	OAuthSessionTTL          = 20 * time.Minute
+	oauthCompletedSessionTTL = time.Minute
+)
 
 // NewOAuthSessionRecord creates a new o auth session record.
 func NewOAuthSessionRecord(provider, state string, data map[string]any, now time.Time) (*OAuthSessionRecord, error) {
@@ -94,10 +97,19 @@ func (r *Repository) GetOAuthSession(ctx context.Context, state string) (*OAuthS
 	if errFirst != nil {
 		return nil, errFirst
 	}
-	if !record.ExpiresAt.IsZero() && time.Now().UTC().After(record.ExpiresAt) && record.Status == "" {
+	now := time.Now().UTC()
+	if !record.ExpiresAt.IsZero() && !record.ExpiresAt.After(now) && strings.EqualFold(record.Status, "complete") {
+		if errDelete := db.WithContext(contextOrBackground(ctx)).
+			Where("state = ? AND status = ? AND expires_at <= ?", state, "complete", now).
+			Delete(&OAuthSessionRecord{}).Error; errDelete != nil {
+			return nil, errDelete
+		}
+		return nil, nil
+	}
+	if !record.ExpiresAt.IsZero() && !record.ExpiresAt.After(now) && record.Status == "" {
 		record.Status = "error"
 		record.Error = "OAuth flow timed out"
-		record.UpdatedAt = time.Now().UTC()
+		record.UpdatedAt = now
 		if errSave := db.WithContext(contextOrBackground(ctx)).Save(record).Error; errSave != nil {
 			return nil, errSave
 		}
@@ -159,12 +171,13 @@ func (r *Repository) CompleteOAuthSession(ctx context.Context, state string) err
 	now := time.Now().UTC()
 	return db.WithContext(contextOrBackground(ctx)).
 		Model(&OAuthSessionRecord{}).
-		Where("state = ?", strings.TrimSpace(state)).
+		Where("state = ? AND status != ?", strings.TrimSpace(state), "complete").
 		Updates(map[string]any{
 			"status":       "complete",
 			"error":        "",
+			"data":         nil,
 			"updated_at":   now,
-			"expires_at":   now.Add(OAuthSessionTTL),
+			"expires_at":   now.Add(oauthCompletedSessionTTL),
 			"completed_at": &now,
 		}).Error
 }
@@ -182,7 +195,7 @@ func (r *Repository) SetOAuthSessionError(ctx context.Context, state string, mes
 	now := time.Now().UTC()
 	return db.WithContext(contextOrBackground(ctx)).
 		Model(&OAuthSessionRecord{}).
-		Where("state = ?", strings.TrimSpace(state)).
+		Where("state = ? AND status != ?", strings.TrimSpace(state), "complete").
 		Updates(map[string]any{
 			"status":     "error",
 			"error":      message,
