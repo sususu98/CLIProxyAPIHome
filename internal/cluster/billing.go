@@ -34,7 +34,10 @@ const (
 	billingOverviewTopLimit = 10
 )
 
-var ErrBillingDuplicateModelPrice = errors.New("billing model price already exists")
+var (
+	ErrBillingDuplicateModelPrice = errors.New("billing model price already exists")
+	ErrBillingInvalidModelPrice   = errors.New("invalid billing model price")
+)
 
 type BillingModelPriceRecord struct {
 	ID                        string         `gorm:"column:id;primaryKey"`
@@ -274,7 +277,7 @@ func (r *Repository) UpdateBillingSettings(ctx context.Context, patch BillingSet
 
 func (r *Repository) CreateBillingModelPrice(ctx context.Context, update BillingModelPriceUpdate) (*BillingModelPriceRecord, error) {
 	if errValidate := validateBillingModelPriceUpdate(update); errValidate != nil {
-		return nil, errValidate
+		return nil, fmt.Errorf("%w: %v", ErrBillingInvalidModelPrice, errValidate)
 	}
 	db, errDB := r.database()
 	if errDB != nil {
@@ -326,7 +329,7 @@ func (r *Repository) UpdateBillingModelPrice(ctx context.Context, id string, pat
 		return nil, gorm.ErrRecordNotFound
 	}
 	if errValidate := validateBillingModelPricePatch(patch); errValidate != nil {
-		return nil, errValidate
+		return nil, fmt.Errorf("%w: %v", ErrBillingInvalidModelPrice, errValidate)
 	}
 	db, errDB := r.database()
 	if errDB != nil {
@@ -1263,7 +1266,7 @@ func billingSettingsFromDB(ctx context.Context, db *gorm.DB) (BillingSettings, e
 		return settings, nil
 	}
 	if errUnmarshal := json.Unmarshal(record.Value, &settings); errUnmarshal != nil {
-		return BillingSettings{}, errUnmarshal
+		return BillingSettings{ServiceTierSource: BillingServiceTierSourceRequest}, nil
 	}
 	source, errSource := normalizeBillingServiceTierSource(settings.ServiceTierSource)
 	if errSource != nil {

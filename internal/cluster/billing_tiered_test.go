@@ -208,6 +208,35 @@ func TestBillingSettingsDefaultToRequest(t *testing.T) {
 	}
 }
 
+func TestBillingMalformedSettingsFallBackAndCanBeRepaired(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	if _, errSet := repo.KVSet(ctx, billingSettingsKVKey, []byte("not-json"), 0, KVSetModeAlways); errSet != nil {
+		t.Fatalf("KVSet() error = %v", errSet)
+	}
+	settings, errSettings := repo.GetBillingSettings(ctx)
+	if errSettings != nil {
+		t.Fatalf("GetBillingSettings() error = %v", errSettings)
+	}
+	if settings.ServiceTierSource != BillingServiceTierSourceRequest {
+		t.Fatalf("service tier source = %q, want request", settings.ServiceTierSource)
+	}
+	payload := `{"timestamp":"2026-07-11T00:00:00Z","provider":"openai","model":"gpt-test","tokens":{"input_tokens":1}}`
+	if _, errUsage := repo.AppendUsage(ctx, payload, ""); errUsage != nil {
+		t.Fatalf("AppendUsage() error = %v", errUsage)
+	}
+	settings, errSettings = repo.UpdateBillingSettings(ctx, BillingSettingsPatch{ServiceTierSource: stringPtr(BillingServiceTierSourceResponse)})
+	if errSettings != nil {
+		t.Fatalf("UpdateBillingSettings() error = %v", errSettings)
+	}
+	if settings.ServiceTierSource != BillingServiceTierSourceResponse {
+		t.Fatalf("repaired service tier source = %q, want response", settings.ServiceTierSource)
+	}
+}
+
 func TestBillingSnapshotJSONIncludesTierAndBandAudit(t *testing.T) {
 	t.Parallel()
 

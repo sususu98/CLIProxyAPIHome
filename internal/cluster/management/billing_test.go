@@ -60,6 +60,36 @@ func TestPostBillingModelPriceCreatesRule(t *testing.T) {
 	}
 }
 
+func TestBillingModelPriceRejectsInvalidServiceTierAsBadRequest(t *testing.T) {
+	t.Parallel()
+
+	handler, closeRepo := newBillingManagementTestHandler(t)
+	defer closeRepo()
+
+	postResp := httptest.NewRecorder()
+	postCtx, _ := gin.CreateTestContext(postResp)
+	postCtx.Request = httptest.NewRequest(http.MethodPost, "/billing/model-prices", bytes.NewBufferString(`{"provider":"openai","model":"gpt-test","service_tier":"bad tier"}`))
+	postCtx.Request.Header.Set("Content-Type", "application/json")
+	handler.CreateBillingModelPrice(postCtx)
+	if postResp.Code != http.StatusBadRequest {
+		t.Fatalf("POST status = %d body=%s, want 400", postResp.Code, postResp.Body.String())
+	}
+
+	price, errCreate := handler.repo.CreateBillingModelPrice(context.Background(), cluster.BillingModelPriceUpdate{Provider: "openai", Model: "gpt-test", Enabled: true})
+	if errCreate != nil {
+		t.Fatalf("CreateBillingModelPrice() error = %v", errCreate)
+	}
+	patchResp := httptest.NewRecorder()
+	patchCtx, _ := gin.CreateTestContext(patchResp)
+	patchCtx.Request = httptest.NewRequest(http.MethodPatch, "/billing/model-prices/"+price.ID, bytes.NewBufferString(`{"service_tier":"bad tier"}`))
+	patchCtx.Request.Header.Set("Content-Type", "application/json")
+	patchCtx.Params = gin.Params{{Key: "id", Value: price.ID}}
+	handler.UpdateBillingModelPrice(patchCtx)
+	if patchResp.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH status = %d body=%s, want 400", patchResp.Code, patchResp.Body.String())
+	}
+}
+
 func TestListBillingModelPricesReturnsSchemaVersion(t *testing.T) {
 	t.Parallel()
 

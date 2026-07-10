@@ -53,6 +53,10 @@ func (h *Handler) CreateBillingModelPrice(c *gin.Context) {
 	defer cancel()
 	record, errCreate := h.repo.CreateBillingModelPrice(ctx, update)
 	if errCreate != nil {
+		if errors.Is(errCreate, cluster.ErrBillingInvalidModelPrice) {
+			respondError(c, http.StatusBadRequest, "invalid_body", errCreate)
+			return
+		}
 		if errors.Is(errCreate, cluster.ErrBillingDuplicateModelPrice) {
 			respondError(c, http.StatusConflict, "model_price_exists", errCreate)
 			return
@@ -83,6 +87,10 @@ func (h *Handler) UpdateBillingModelPrice(c *gin.Context) {
 	defer cancel()
 	record, errUpdate := h.repo.UpdateBillingModelPrice(ctx, id, patch)
 	if errUpdate != nil {
+		if errors.Is(errUpdate, cluster.ErrBillingInvalidModelPrice) {
+			respondError(c, http.StatusBadRequest, "invalid_body", errUpdate)
+			return
+		}
 		if errors.Is(errUpdate, gorm.ErrRecordNotFound) {
 			respondError(c, http.StatusNotFound, "model_price_not_found", errUpdate)
 			return
