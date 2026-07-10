@@ -118,6 +118,8 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `POST` | `/billing/model-prices` |
 | `PATCH` | `/billing/model-prices/:id` |
 | `DELETE` | `/billing/model-prices/:id` |
+| `GET` | `/billing/settings` |
+| `PATCH` | `/billing/settings` |
 | `GET` | `/usage/overview` |
 | `GET` | `/usage/records` |
 | `GET` | `/usage/records/:id` |
@@ -1418,8 +1420,8 @@ Query 参数：
       "balance_after": 18.75,
       "request_id": "req_xxx",
       "endpoint": "/v1/chat/completions",
-      "matched_price_rule": "price_xxx",
-      "price_snapshot": { "request_price": 0, "input_price_per_million": 1.25 }
+      "matched_price_rule": "openai:gpt-5.5:standard:272001",
+      "price_snapshot": { "request_price": 0, "input_price_per_million": 2.5, "matched_service_tier": "standard", "min_input_tokens": 272001, "requested_service_tier": "priority", "response_service_tier": "default", "service_tier_source": "response", "effective_service_tier": "standard", "response_tier_fallback": false }
     }
   ],
   "total": 1,
@@ -1510,6 +1512,8 @@ Query 参数：
 
 列出模型价格规则。
 
+响应始终包含 `price_rule_schema_version: 2`，即使 `items` 为空。规则先匹配规范化后的精确 service tier，再回退到兼容通配符 `*`，然后选择不大于 usage 原始 input-token 数量的最大 `min_input_tokens`。
+
 查询参数：
 
 | 参数 | 类型 | 说明 |
@@ -1525,6 +1529,8 @@ Query 参数：
 | `id` | string | 模型价格记录 ID。 |
 | `provider` | string | Provider 名称。 |
 | `model` | string | Model 名称。 |
+| `service_tier` | string | 规范化后的 service tier，或兼容通配符 `*`。 |
+| `min_input_tokens` | integer | 上下文分段的包含式下界。 |
 | `input_price_per_million` | number | Input-token 价格。 |
 | `output_price_per_million` | number | Output-token 价格。 |
 | `cache_read_price_per_million` | number | Cache-read token 价格。 |
@@ -1546,6 +1552,8 @@ Query 参数：
 | --- | --- | --- | --- |
 | `provider` | string | 是 | Provider 名称。 |
 | `model` | string | 是 | Model 名称。 |
+| `service_tier` | string | 否 | 精确 tier 或 `*`，默认 `*`；空值、`auto`、`default`、`standard` 请求均按 Standard 匹配。 |
+| `min_input_tokens` | integer | 否 | 非负、包含式上下文分段下界，默认 `0`。 |
 | `input_price_per_million` | number | 否 | 非负 input-token 价格。 |
 | `output_price_per_million` | number | 否 | 非负 output-token 价格。 |
 | `cache_read_price_per_million` | number | 否 | 非负 cache-read token 价格。 |
@@ -1582,6 +1590,24 @@ Query 参数：
 ```json
 { "status": "ok" }
 ```
+
+### GET `/billing/settings`
+
+返回 DB-backed 计费匹配策略。`service_tier_source` 默认为 `request`，允许值为 `request` 或 `response`。
+
+```json
+{ "service_tier_source": "request" }
+```
+
+### PATCH `/billing/settings`
+
+局部更新计费设置。在 `response` 模式下，如果 response tier 缺失，会回退到 request tier，并在扣费价格快照中记录该回退。
+
+```json
+{ "service_tier_source": "response" }
+```
+
+扣费 `price_snapshot` 审计数据包含 `requested_service_tier`、可选的 `response_service_tier`、`service_tier_source`、`effective_service_tier`、`response_tier_fallback`、`matched_service_tier` 和 `min_input_tokens`。上下文分段使用原始 input-token 总数。OpenAI 风格的独立 cache-read 与 cache-write 价格会从普通 input 中扣除；cache-write 价格为零时，cache-write 仍按普通 input 计费。Claude 风格的独立缓存桶保持现有行为。
 
 ### GET `/proxy/proxy-pools`
 

@@ -24,17 +24,27 @@ const (
 	BillingPriceSourceDefault = "default"
 	BillingPriceSourceSync    = "sync"
 
+	BillingServiceTierWildcard       = "*"
+	BillingServiceTierSourceRequest  = "request"
+	BillingServiceTierSourceResponse = "response"
+	billingSettingsKVKey             = "billing.settings"
+
 	billingIDRandomBytes    = 12
 	billingCreditMaxRetries = 5
 	billingOverviewTopLimit = 10
 )
 
-var ErrBillingDuplicateModelPrice = errors.New("billing model price already exists")
+var (
+	ErrBillingDuplicateModelPrice = errors.New("billing model price already exists")
+	ErrBillingInvalidModelPrice   = errors.New("invalid billing model price")
+)
 
 type BillingModelPriceRecord struct {
 	ID                        string         `gorm:"column:id;primaryKey"`
 	Provider                  string         `gorm:"column:provider;not null;index:idx_billing_model_price_lookup,priority:1"`
 	Model                     string         `gorm:"column:model;not null;index:idx_billing_model_price_lookup,priority:2"`
+	ServiceTier               string         `gorm:"column:service_tier;not null;default:*"`
+	MinInputTokens            int64          `gorm:"column:min_input_tokens;not null;default:0"`
 	InputPricePerMillion      float64        `gorm:"column:input_price_per_million;not null;default:0"`
 	OutputPricePerMillion     float64        `gorm:"column:output_price_per_million;not null;default:0"`
 	CacheReadPricePerMillion  float64        `gorm:"column:cache_read_price_per_million;not null;default:0"`
@@ -95,6 +105,8 @@ func (BillingChargeRecord) TableName() string { return "billing_charge" }
 type BillingModelPriceUpdate struct {
 	Provider                  string
 	Model                     string
+	ServiceTier               string
+	MinInputTokens            int64
 	InputPricePerMillion      float64
 	OutputPricePerMillion     float64
 	CacheReadPricePerMillion  float64
@@ -108,6 +120,8 @@ type BillingModelPriceUpdate struct {
 type BillingModelPricePatch struct {
 	Provider                  *string
 	Model                     *string
+	ServiceTier               *string
+	MinInputTokens            *int64
 	InputPricePerMillion      *float64
 	OutputPricePerMillion     *float64
 	CacheReadPricePerMillion  *float64
@@ -214,11 +228,56 @@ type BillingPriceSnapshot struct {
 	CacheReadPricePerMillion  float64 `json:"cache_read_price_per_million"`
 	CacheWritePricePerMillion float64 `json:"cache_write_price_per_million"`
 	RequestPrice              float64 `json:"request_price"`
+	MatchedServiceTier        string  `json:"matched_service_tier"`
+	MinInputTokens            int64   `json:"min_input_tokens"`
+	RequestedServiceTier      string  `json:"requested_service_tier"`
+	ResponseServiceTier       string  `json:"response_service_tier,omitempty"`
+	ServiceTierSource         string  `json:"service_tier_source"`
+	EffectiveServiceTier      string  `json:"effective_service_tier"`
+	ResponseTierFallback      bool    `json:"response_tier_fallback"`
+}
+
+type BillingSettings struct {
+	ServiceTierSource string `json:"service_tier_source"`
+}
+
+type BillingSettingsPatch struct {
+	ServiceTierSource *string
+}
+
+func (r *Repository) GetBillingSettings(ctx context.Context) (BillingSettings, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return BillingSettings{}, errDB
+	}
+	return billingSettingsFromDB(ctx, db)
+}
+
+func (r *Repository) UpdateBillingSettings(ctx context.Context, patch BillingSettingsPatch) (BillingSettings, error) {
+	settings, errSettings := r.GetBillingSettings(ctx)
+	if errSettings != nil {
+		return BillingSettings{}, errSettings
+	}
+	if patch.ServiceTierSource != nil {
+		source, errSource := normalizeBillingServiceTierSource(*patch.ServiceTierSource)
+		if errSource != nil {
+			return BillingSettings{}, errSource
+		}
+		settings.ServiceTierSource = source
+	}
+	raw, errMarshal := json.Marshal(settings)
+	if errMarshal != nil {
+		return BillingSettings{}, errMarshal
+	}
+	if _, errSet := r.KVSet(ctx, billingSettingsKVKey, raw, 0, KVSetModeAlways); errSet != nil {
+		return BillingSettings{}, errSet
+	}
+	return settings, nil
 }
 
 func (r *Repository) CreateBillingModelPrice(ctx context.Context, update BillingModelPriceUpdate) (*BillingModelPriceRecord, error) {
 	if errValidate := validateBillingModelPriceUpdate(update); errValidate != nil {
-		return nil, errValidate
+		return nil, fmt.Errorf("%w: %v", ErrBillingInvalidModelPrice, errValidate)
 	}
 	db, errDB := r.database()
 	if errDB != nil {
@@ -228,6 +287,8 @@ func (r *Repository) CreateBillingModelPrice(ctx context.Context, update Billing
 		ID:                        billingID("price"),
 		Provider:                  strings.ToLower(strings.TrimSpace(update.Provider)),
 		Model:                     strings.TrimSpace(update.Model),
+		ServiceTier:               normalizeBillingPriceServiceTier(update.ServiceTier),
+		MinInputTokens:            update.MinInputTokens,
 		InputPricePerMillion:      update.InputPricePerMillion,
 		OutputPricePerMillion:     update.OutputPricePerMillion,
 		CacheReadPricePerMillion:  update.CacheReadPricePerMillion,
@@ -268,7 +329,7 @@ func (r *Repository) UpdateBillingModelPrice(ctx context.Context, id string, pat
 		return nil, gorm.ErrRecordNotFound
 	}
 	if errValidate := validateBillingModelPricePatch(patch); errValidate != nil {
-		return nil, errValidate
+		return nil, fmt.Errorf("%w: %v", ErrBillingInvalidModelPrice, errValidate)
 	}
 	db, errDB := r.database()
 	if errDB != nil {
@@ -509,7 +570,7 @@ func (r *Repository) ListBillingModelPrices(ctx context.Context, query BillingMo
 	}
 
 	var records []BillingModelPriceRecord
-	if errFind := scope.Order("provider ASC, model ASC, created_at DESC, id DESC").Find(&records).Error; errFind != nil {
+	if errFind := scope.Order("provider ASC, model ASC, service_tier ASC, min_input_tokens ASC, created_at DESC, id DESC").Find(&records).Error; errFind != nil {
 		return nil, errFind
 	}
 	return records, nil
@@ -611,6 +672,12 @@ func validateBillingModelPriceUpdate(update BillingModelPriceUpdate) error {
 	if strings.TrimSpace(update.Model) == "" {
 		return fmt.Errorf("model is required")
 	}
+	if errTier := validateBillingPriceServiceTier(update.ServiceTier); errTier != nil {
+		return errTier
+	}
+	if update.MinInputTokens < 0 {
+		return fmt.Errorf("min_input_tokens must be non-negative")
+	}
 	for name, value := range map[string]float64{
 		"input_price_per_million":       update.InputPricePerMillion,
 		"output_price_per_million":      update.OutputPricePerMillion,
@@ -631,6 +698,14 @@ func validateBillingModelPricePatch(patch BillingModelPricePatch) error {
 	}
 	if patch.Model != nil && strings.TrimSpace(*patch.Model) == "" {
 		return fmt.Errorf("model is required")
+	}
+	if patch.ServiceTier != nil {
+		if errTier := validateBillingPriceServiceTier(*patch.ServiceTier); errTier != nil {
+			return errTier
+		}
+	}
+	if patch.MinInputTokens != nil && *patch.MinInputTokens < 0 {
+		return fmt.Errorf("min_input_tokens must be non-negative")
 	}
 	for name, value := range map[string]*float64{
 		"input_price_per_million":       patch.InputPricePerMillion,
@@ -653,6 +728,12 @@ func billingModelPricePatchUpdates(patch BillingModelPricePatch) map[string]any 
 	}
 	if patch.Model != nil {
 		updates["model"] = strings.TrimSpace(*patch.Model)
+	}
+	if patch.ServiceTier != nil {
+		updates["service_tier"] = normalizeBillingPriceServiceTier(*patch.ServiceTier)
+	}
+	if patch.MinInputTokens != nil {
+		updates["min_input_tokens"] = *patch.MinInputTokens
 	}
 	if patch.InputPricePerMillion != nil {
 		updates["input_price_per_million"] = *patch.InputPricePerMillion
@@ -1023,19 +1104,49 @@ func billingPriceSnapshotForUsage(ctx context.Context, tx *gorm.DB, usage *Usage
 	}
 	provider := strings.ToLower(strings.TrimSpace(usage.Provider))
 	model := strings.TrimSpace(usage.Model)
+	settings, errSettings := billingSettingsFromDB(ctx, tx)
+	if errSettings != nil {
+		return nil, BillingPriceSnapshot{}, errSettings
+	}
+	requestedTier := normalizeBillingEffectiveServiceTier(firstNonEmptyBillingString(usage.RequestServiceTier, usage.ServiceTier))
+	responseTierRaw := strings.TrimSpace(usage.ResponseServiceTier)
+	effectiveTier := requestedTier
+	responseFallback := false
+	if settings.ServiceTierSource == BillingServiceTierSourceResponse {
+		if responseTierRaw == "" {
+			responseFallback = true
+		} else {
+			effectiveTier = normalizeBillingEffectiveServiceTier(responseTierRaw)
+		}
+	}
 	price := &BillingModelPriceRecord{}
 	result := tx.WithContext(contextOrBackground(ctx)).
-		Where("provider = ? AND model = ? AND enabled = ?", provider, model, true).
-		Order("id ASC").
+		Where("provider = ? AND model = ? AND enabled = ? AND service_tier = ? AND min_input_tokens <= ?", provider, model, true, effectiveTier, usage.InputTokens).
+		Order("min_input_tokens DESC, id ASC").
 		Limit(1).
 		Find(price)
 	if result.Error != nil {
 		return nil, BillingPriceSnapshot{}, result.Error
 	}
 	if result.RowsAffected == 0 {
+		result = tx.WithContext(contextOrBackground(ctx)).
+			Where("provider = ? AND model = ? AND enabled = ? AND service_tier = ? AND min_input_tokens <= ?", provider, model, true, BillingServiceTierWildcard, usage.InputTokens).
+			Order("min_input_tokens DESC, id ASC").
+			Limit(1).
+			Find(price)
+		if result.Error != nil {
+			return nil, BillingPriceSnapshot{}, result.Error
+		}
+	}
+	if result.RowsAffected == 0 {
 		return nil, BillingPriceSnapshot{
-			Provider: provider,
-			Model:    model,
+			Provider:             provider,
+			Model:                model,
+			RequestedServiceTier: requestedTier,
+			ResponseServiceTier:  responseTierRaw,
+			ServiceTierSource:    settings.ServiceTierSource,
+			EffectiveServiceTier: effectiveTier,
+			ResponseTierFallback: responseFallback,
 		}, nil
 	}
 	return price, BillingPriceSnapshot{
@@ -1046,6 +1157,13 @@ func billingPriceSnapshotForUsage(ctx context.Context, tx *gorm.DB, usage *Usage
 		CacheReadPricePerMillion:  price.CacheReadPricePerMillion,
 		CacheWritePricePerMillion: price.CacheWritePricePerMillion,
 		RequestPrice:              price.RequestPrice,
+		MatchedServiceTier:        price.ServiceTier,
+		MinInputTokens:            price.MinInputTokens,
+		RequestedServiceTier:      requestedTier,
+		ResponseServiceTier:       responseTierRaw,
+		ServiceTierSource:         settings.ServiceTierSource,
+		EffectiveServiceTier:      effectiveTier,
+		ResponseTierFallback:      responseFallback,
 	}, nil
 }
 
@@ -1057,18 +1175,25 @@ func billingChargeAmount(usage *UsageRecord, snapshot BillingPriceSnapshot) floa
 	cacheReadTokens := usage.CacheReadTokens
 	// OpenAI-style cached_tokens are included in input_tokens. Claude reports
 	// cache_read_tokens/cache_creation_tokens as separate billing buckets.
-	if cacheReadTokens == 0 && usage.CacheCreationTokens == 0 && usage.CachedTokens > 0 {
+	cacheWriteTokens := usage.CacheCreationTokens
+	if !billingUsesSeparateCacheBuckets(usage) {
 		cacheReadTokens = usage.CachedTokens
 		inputTokens -= cacheReadTokens
+		if snapshot.CacheWritePricePerMillion > 0 {
+			inputTokens -= cacheWriteTokens
+		}
 		if inputTokens < 0 {
 			inputTokens = 0
 		}
+	}
+	if snapshot.CacheWritePricePerMillion == 0 {
+		cacheWriteTokens = 0
 	}
 	return snapshot.RequestPrice +
 		float64(inputTokens)*snapshot.InputPricePerMillion/1000000 +
 		float64(usage.OutputTokens)*snapshot.OutputPricePerMillion/1000000 +
 		float64(cacheReadTokens)*snapshot.CacheReadPricePerMillion/1000000 +
-		float64(usage.CacheCreationTokens)*snapshot.CacheWritePricePerMillion/1000000
+		float64(cacheWriteTokens)*snapshot.CacheWritePricePerMillion/1000000
 }
 
 func billingUsageHasBillableActivity(usage *UsageRecord, amount float64) bool {
@@ -1088,11 +1213,28 @@ func billingCacheTokens(usage *UsageRecord) int64 {
 	if usage == nil {
 		return 0
 	}
-	total := usage.CacheReadTokens + usage.CacheCreationTokens
-	if total != 0 {
-		return total
+	if billingUsesSeparateCacheBuckets(usage) {
+		return usage.CacheReadTokens + usage.CacheCreationTokens
 	}
-	return usage.CachedTokens
+	return usage.CachedTokens + usage.CacheCreationTokens
+}
+
+func billingUsesSeparateCacheBuckets(usage *UsageRecord) bool {
+	if usage == nil {
+		return false
+	}
+	if usage.CacheReadTokens != 0 {
+		return true
+	}
+	executorType := strings.ToLower(strings.TrimSpace(usage.ExecutorType))
+	if executorType == "openaicompatexecutor" {
+		return false
+	}
+	provider := strings.ToLower(strings.TrimSpace(usage.Provider))
+	if provider == "openai-compatibility" || strings.HasPrefix(provider, "openai-compatible-") {
+		return false
+	}
+	return strings.Contains(provider, "claude") || strings.Contains(provider, "anthropic")
 }
 
 func billingAPIKeyID(record *APIKeyRecord) *uint {
@@ -1114,7 +1256,70 @@ func billingMatchedPriceRule(record *BillingModelPriceRecord) string {
 	if record == nil {
 		return "default:zero"
 	}
-	return record.Provider + ":" + record.Model
+	return fmt.Sprintf("%s:%s:%s:%d", record.Provider, record.Model, record.ServiceTier, record.MinInputTokens)
+}
+
+func billingSettingsFromDB(ctx context.Context, db *gorm.DB) (BillingSettings, error) {
+	settings := BillingSettings{ServiceTierSource: BillingServiceTierSourceRequest}
+	if db == nil {
+		return settings, fmt.Errorf("database connection is nil")
+	}
+	record := KVRecord{}
+	result := db.WithContext(contextOrBackground(ctx)).Where("key = ?", billingSettingsKVKey).Limit(1).Find(&record)
+	if result.Error != nil {
+		return settings, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return settings, nil
+	}
+	if errUnmarshal := json.Unmarshal(record.Value, &settings); errUnmarshal != nil {
+		return BillingSettings{ServiceTierSource: BillingServiceTierSourceRequest}, nil
+	}
+	source, errSource := normalizeBillingServiceTierSource(settings.ServiceTierSource)
+	if errSource != nil {
+		settings.ServiceTierSource = BillingServiceTierSourceRequest
+	} else {
+		settings.ServiceTierSource = source
+	}
+	return settings, nil
+}
+
+func normalizeBillingServiceTierSource(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", BillingServiceTierSourceRequest:
+		return BillingServiceTierSourceRequest, nil
+	case BillingServiceTierSourceResponse:
+		return BillingServiceTierSourceResponse, nil
+	default:
+		return "", fmt.Errorf("service_tier_source must be request or response")
+	}
+}
+
+func normalizeBillingEffectiveServiceTier(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "auto", "default", "standard":
+		return "standard"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func normalizeBillingPriceServiceTier(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return BillingServiceTierWildcard
+	}
+	if value == BillingServiceTierWildcard {
+		return value
+	}
+	return normalizeBillingEffectiveServiceTier(value)
+}
+
+func validateBillingPriceServiceTier(value string) error {
+	if strings.ContainsAny(strings.TrimSpace(value), " ,") {
+		return fmt.Errorf("service_tier must be one normalized tier or *")
+	}
+	return nil
 }
 
 func firstNonEmptyBillingString(values ...string) string {
@@ -1186,5 +1391,8 @@ func migrateBillingIndexes(db *gorm.DB) error {
 	if errDrop := db.Exec(`DROP INDEX IF EXISTS idx_billing_model_price_active_unique`).Error; errDrop != nil {
 		return errDrop
 	}
-	return db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_model_price_active_unique ON billing_model_price (provider, model) WHERE deleted_at IS NULL AND enabled = TRUE`).Error
+	if errDefaults := db.Model(&BillingModelPriceRecord{}).Where("service_tier IS NULL OR service_tier = ?", "").Update("service_tier", BillingServiceTierWildcard).Error; errDefaults != nil {
+		return errDefaults
+	}
+	return db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_model_price_active_unique ON billing_model_price (provider, model, service_tier, min_input_tokens) WHERE deleted_at IS NULL AND enabled = TRUE`).Error
 }

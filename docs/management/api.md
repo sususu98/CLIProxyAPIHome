@@ -118,6 +118,8 @@ The table below is extracted from the final Home route registry built by `intern
 | `POST` | `/billing/model-prices` |
 | `PATCH` | `/billing/model-prices/:id` |
 | `DELETE` | `/billing/model-prices/:id` |
+| `GET` | `/billing/settings` |
+| `PATCH` | `/billing/settings` |
 | `GET` | `/usage/overview` |
 | `GET` | `/usage/records` |
 | `GET` | `/usage/records/:id` |
@@ -1418,8 +1420,8 @@ Response shape:
       "balance_after": 18.75,
       "request_id": "req_xxx",
       "endpoint": "/v1/chat/completions",
-      "matched_price_rule": "price_xxx",
-      "price_snapshot": { "request_price": 0, "input_price_per_million": 1.25 }
+      "matched_price_rule": "openai:gpt-5.5:standard:272001",
+      "price_snapshot": { "request_price": 0, "input_price_per_million": 2.5, "matched_service_tier": "standard", "min_input_tokens": 272001, "requested_service_tier": "priority", "response_service_tier": "default", "service_tier_source": "response", "effective_service_tier": "standard", "response_tier_fallback": false }
     }
   ],
   "total": 1,
@@ -1510,6 +1512,8 @@ Response:
 
 Lists model price rules.
 
+The response always includes `price_rule_schema_version: 2`, including when `items` is empty. Rules match exact normalized service tiers before the `*` compatibility wildcard, then select the greatest `min_input_tokens` not exceeding the usage record's original input-token count.
+
 Query parameters:
 
 | Parameter | Type | Description |
@@ -1525,6 +1529,8 @@ Model price fields:
 | `id` | string | Model price record ID. |
 | `provider` | string | Provider name. |
 | `model` | string | Model name. |
+| `service_tier` | string | Normalized service tier, or `*` as a compatibility wildcard. |
+| `min_input_tokens` | integer | Inclusive lower bound of the context band. |
 | `input_price_per_million` | number | Input-token price. |
 | `output_price_per_million` | number | Output-token price. |
 | `cache_read_price_per_million` | number | Cache-read token price. |
@@ -1546,6 +1552,8 @@ Request body fields:
 | --- | --- | --- | --- |
 | `provider` | string | yes | Provider name. |
 | `model` | string | yes | Model name. |
+| `service_tier` | string | no | Exact tier or `*`; defaults to `*`. Empty, `auto`, `default`, and `standard` requests normalize to Standard matching. |
+| `min_input_tokens` | integer | no | Non-negative inclusive context-band lower bound; defaults to `0`. |
 | `input_price_per_million` | number | no | Non-negative input-token price. |
 | `output_price_per_million` | number | no | Non-negative output-token price. |
 | `cache_read_price_per_million` | number | no | Non-negative cache-read token price. |
@@ -1582,6 +1590,24 @@ Response:
 ```json
 { "status": "ok" }
 ```
+
+### GET `/billing/settings`
+
+Returns the DB-backed billing matching policy. `service_tier_source` is `request` by default and may be `request` or `response`.
+
+```json
+{ "service_tier_source": "request" }
+```
+
+### PATCH `/billing/settings`
+
+Partially updates billing settings. In `response` mode, a missing response tier falls back to the request tier and records that fallback in the charge price snapshot.
+
+```json
+{ "service_tier_source": "response" }
+```
+
+Charge `price_snapshot` audit data includes `requested_service_tier`, optional `response_service_tier`, `service_tier_source`, `effective_service_tier`, `response_tier_fallback`, `matched_service_tier`, and `min_input_tokens`. Context-band selection uses the original total input count. Separately priced OpenAI cached reads and cache writes are removed from ordinary input; when a cache-write price is zero, cache writes remain ordinary input. Claude-style separate cache buckets retain their existing behavior.
 
 ### GET `/proxy/proxy-pools`
 

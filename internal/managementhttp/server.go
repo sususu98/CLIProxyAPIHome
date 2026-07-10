@@ -214,6 +214,8 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodGet, "/billing/charges", handler.ListBillingCharges)
 	r.Set(http.MethodGet, "/billing/balance-records", handler.ListBillingBalanceRecords)
 	r.Set(http.MethodGet, "/billing/model-prices", handler.ListBillingModelPrices)
+	r.Set(http.MethodGet, "/billing/settings", handler.GetBillingSettings)
+	r.Set(http.MethodPatch, "/billing/settings", handler.UpdateBillingSettings)
 	r.Set(http.MethodGet, "/proxy/proxy-pools", handler.ListProxyPoolItems)
 	r.Set(http.MethodPost, "/billing/balance-records/recharge", handler.RechargeBillingBalance)
 	r.Set(http.MethodPost, "/billing/balance-records/deduct", handler.DeductBillingBalance)
