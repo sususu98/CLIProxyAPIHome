@@ -2177,7 +2177,10 @@ Query 参数：
 { "status": "ok" }
 { "status": "wait" }
 { "status": "error", "error": "Authentication failed" }
+{ "status": "error", "error": "unknown or expired state" }
 ```
+
+未知或已过期的 state token 会返回错误，不再被视为已完成。已完成 session 会作为短期 tombstone 保留，使最后一次轮询能够返回 `{ "status": "ok" }`；tombstone 过期后，同一 state 会按未知状态处理。
 
 对于插件 OAuth session，该接口会轮询 Home 已加载的插件。插件返回 success 后，Home 会把插件返回的 auth data 转成 DB-backed auth records，注册该 auth 的模型，完成 OAuth session，然后返回 `{ "status": "ok" }`。
 

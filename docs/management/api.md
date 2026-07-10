@@ -2177,7 +2177,10 @@ Example responses:
 { "status": "ok" }
 { "status": "wait" }
 { "status": "error", "error": "Authentication failed" }
+{ "status": "error", "error": "unknown or expired state" }
 ```
+
+Unknown or expired state tokens return an error instead of being treated as completed. Completed sessions remain available as short-lived tombstones so the final poll can return `{ "status": "ok" }`; after the tombstone expires, the same state is treated as unknown.
 
 For plugin OAuth sessions, this route polls the Home-loaded plugin. When the plugin returns success, Home converts the returned auth data into DB-backed auth records, registers models for the auths, completes the OAuth session, and then returns `{ "status": "ok" }`.
 

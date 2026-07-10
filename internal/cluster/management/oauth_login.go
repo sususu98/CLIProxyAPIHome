@@ -261,7 +261,11 @@ func (h *Handler) GetAuthStatus(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errSession)
 		return
 	}
-	if session == nil || strings.EqualFold(session.Status, "complete") {
+	if session == nil {
+		c.JSON(http.StatusOK, gin.H{"status": "error", "error": "unknown or expired state"})
+		return
+	}
+	if strings.EqualFold(session.Status, "complete") {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return
 	}
@@ -373,10 +377,13 @@ func (h *Handler) handleOAuthCallback(c *gin.Context) {
 	}
 
 	if errorMessage != "" {
-		_ = h.repo.MergeOAuthSessionData(ctx, state, map[string]any{
+		if errMerge := h.repo.MergeOAuthSessionData(ctx, state, map[string]any{
 			"callback_received_at": time.Now().UTC().Format(time.RFC3339),
 			"callback_error":       errorMessage,
-		})
+		}); errMerge != nil {
+			respondOAuthSessionMergeError(c, errMerge)
+			return
+		}
 		if errSet := h.repo.SetOAuthSessionError(ctx, state, "Authentication failed"); errSet != nil {
 			respondError(c, http.StatusInternalServerError, "oauth_session_failed", errSet)
 			return
@@ -387,7 +394,7 @@ func (h *Handler) handleOAuthCallback(c *gin.Context) {
 
 	if isPlugin {
 		if errMerge := h.repo.MergeOAuthSessionData(ctx, state, pluginOAuthCallbackSessionData(code, provider)); errMerge != nil {
-			respondError(c, http.StatusInternalServerError, "oauth_session_failed", errMerge)
+			respondOAuthSessionMergeError(c, errMerge)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -397,12 +404,20 @@ func (h *Handler) handleOAuthCallback(c *gin.Context) {
 	if errMerge := h.repo.MergeOAuthSessionData(ctx, state, map[string]any{
 		"callback_received_at": time.Now().UTC().Format(time.RFC3339),
 	}); errMerge != nil {
-		respondError(c, http.StatusInternalServerError, "oauth_session_failed", errMerge)
+		respondOAuthSessionMergeError(c, errMerge)
 		return
 	}
 
 	go h.processOAuthCallback(provider, state, code)
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+func respondOAuthSessionMergeError(c *gin.Context, errMerge error) {
+	if errors.Is(errMerge, cluster.ErrOAuthSessionNotPending) {
+		c.JSON(http.StatusConflict, gin.H{"status": "error", "error": "oauth flow is not pending"})
+		return
+	}
+	respondError(c, http.StatusInternalServerError, "oauth_session_failed", errMerge)
 }
 
 // processOAuthCallback handles a process o auth callback.
