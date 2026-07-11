@@ -118,8 +118,12 @@ The table below is extracted from the final Home route registry built by `intern
 | `POST` | `/billing/model-prices` |
 | `PATCH` | `/billing/model-prices/:id` |
 | `DELETE` | `/billing/model-prices/:id` |
+| `POST` | `/billing/model-prices/import/preview` |
+| `POST` | `/billing/model-prices/import/apply` |
+| `GET` | `/billing/model-prices/import/operations/:id` |
 | `GET` | `/billing/settings` |
 | `PATCH` | `/billing/settings` |
+| `GET` | `/billing/settings/diagnostics` |
 | `GET` | `/usage/overview` |
 | `GET` | `/usage/records` |
 | `GET` | `/usage/records/:id` |
@@ -1535,12 +1539,14 @@ Model price fields:
 | `output_price_per_million` | number | Output-token price. |
 | `cache_read_price_per_million` | number | Cache-read token price. |
 | `cache_write_price_per_million` | number | Cache-write token price. |
+| `cache_write_price_configured` | boolean | Whether cache-write pricing is explicitly configured, including an explicit zero. |
 | `request_price` | number | Per-request price. |
 | `source` | string | Price source. |
 | `enabled` | boolean | Whether the rule is active. |
 | `note` | string | Operator note. |
 | `created_at` | string | Creation time. |
 | `updated_at` | string | Last update time. |
+| `revision` | integer | Monotonic rule revision used by import conflict detection. |
 
 ### POST `/billing/model-prices`
 
@@ -1607,7 +1613,29 @@ Partially updates billing settings. In `response` mode, a missing response tier 
 { "service_tier_source": "response" }
 ```
 
-Charge `price_snapshot` audit data includes `requested_service_tier`, optional `response_service_tier`, `service_tier_source`, `effective_service_tier`, `response_tier_fallback`, `matched_service_tier`, and `min_input_tokens`. Context-band selection uses the original total input count. Separately priced OpenAI cached reads and cache writes are removed from ordinary input; when a cache-write price is zero, cache writes remain ordinary input. Claude-style separate cache buckets retain their existing behavior.
+Charge `price_snapshot` audit data includes `requested_service_tier`, optional `response_service_tier`, `service_tier_source`, `effective_service_tier`, `response_tier_fallback`, `matched_service_tier`, and `min_input_tokens`. Context-band selection uses the original total input count. Separately priced OpenAI cached reads and explicitly configured cache writes are removed from ordinary input; an omitted cache-write price remains ordinary input, while an explicitly configured zero-price bucket remains auditable. Claude-style separate cache buckets retain their existing behavior.
+
+### POST `/billing/model-prices/import/preview`
+
+Creates a server-side, immutable `models.dev` import preview. The server fetches and pins the source snapshot; clients provide targets, matching policy, aliases, row multipliers, and optional source-match overrides. The response contains `preview_id`, `preview_revision`, source provenance, `generated_at`, `expires_at`, explicit `atomic: true`, rows, and an exact summary.
+
+Preview targets currently describe only the wildcard base rule (`service_tier: "*"`, `min_input_tokens: 0`); other target scopes are rejected rather than silently rewritten. A matched row includes official prices, final multiplied prices, `cache_write_price_configured`, the exact `write_rule`, optional complete `existing_rule` snapshot with `revision`, and a machine-readable reason. Models.dev context bands create distinct wildcard rows at their inclusive lower bounds. `row_multipliers` apply to the exact returned row key, including a context-band key. Unsupported dimensions, malformed or invalid prices/bands, duplicate bands, or a tier that omits a price dimension configured by its base rule make the whole target non-applicable; the server never imports a potentially undercharged subset.
+
+`policy.overwrite_mode` is `missing`, `sync`, or `all`. `missing` creates only absent rules, `sync` may update prior `source=sync` rules, and `all` may overwrite manual/default rules. Preview rows requiring an overwrite use action `overwrite` and require confirmation on apply.
+
+### POST `/billing/model-prices/import/apply`
+
+Applies selected rows from a preview in one database transaction. The body contains `preview_id`, `preview_revision`, non-empty unique `selected_keys`, `confirm_overwrite`, and `idempotency_key`; the same key may also be sent in the `Idempotency-Key` header and must match when both are present.
+
+The server rejects an expired preview with `410`, a revision mismatch with `412`, changed existing rules (including a concurrent create of the same identity) with `409`, and invalid selections, policy confirmation, or idempotency-key reuse with a different request with `422`. Replaying an equivalent request with the same idempotency key returns the original immutable operation result without additional writes. A successful synchronous response is `200` with `operation_id`, `preview_id`, `status: "applied"`, `atomic: true`, `applied_at`, summary, and a result for every selected row. Every successful row includes its non-empty `resource_id`. Expired previews are retained for up to 24 hours for diagnostics, and completed operation results for up to 30 days; both are cleaned during later preview creation.
+
+### GET `/billing/model-prices/import/operations/:id`
+
+Returns the persisted immutable operation result for an import apply. Unknown operation IDs return `404`. The current implementation completes apply synchronously; therefore returned terminal status is `applied` rather than `pending` or `running`.
+
+### GET `/billing/settings/diagnostics`
+
+Returns bounded billing-tier evidence derived from stored usage: `supported`, `window_start`, `window_end`, `eligible_requests`, `response_tier_requests`, `fallback_requests`, and optional `last_response_tier_at`. Eligible requests are the recent records that contain a request service tier; fallback requests are eligible records without a response service tier. This endpoint reports observed payload data only; it does not infer response-tier coverage.
 
 ### GET `/proxy/proxy-pools`
 

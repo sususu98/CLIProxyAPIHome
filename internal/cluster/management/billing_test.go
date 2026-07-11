@@ -5,15 +5,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 )
+
+type billingImportRoundTripper func(*http.Request) (*http.Response, error)
+
+func (fn billingImportRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
 
 func TestPostBillingModelPriceCreatesRule(t *testing.T) {
 	t.Parallel()
@@ -130,6 +138,153 @@ func TestBillingSettingsGetAndPatch(t *testing.T) {
 	handler.UpdateBillingSettings(patchCtx)
 	if patchResp.Code != http.StatusOK || !bytes.Contains(patchResp.Body.Bytes(), []byte(`"service_tier_source":"response"`)) {
 		t.Fatalf("PATCH status/body = %d %s", patchResp.Code, patchResp.Body.String())
+	}
+}
+
+func TestParseBillingModelPriceImportCatalogPreservesContextBandAndConfiguredZero(t *testing.T) {
+	t.Parallel()
+
+	catalog, errCatalog := parseBillingModelPriceImportCatalog([]byte(`{
+  "openai": {"models": {"gpt-import": {"id": "gpt-import", "cost": {
+    "input": 2, "output": 8, "cache_write": 0,
+    "context_over_200k": {"input": 3, "output": 12},
+    "tiers": [{"input": 4, "output": 16, "cache_write": 0, "tier": {"type": "context", "size": 272000}}]
+  }}}}
+}`), modelsDevCatalogURL, time.Date(2026, time.July, 11, 0, 0, 0, 0, time.UTC))
+	if errCatalog != nil {
+		t.Fatalf("parseBillingModelPriceImportCatalog() error = %v", errCatalog)
+	}
+	if len(catalog.Models) != 1 || catalog.Models[0].Cost == nil || !catalog.Models[0].Cost.CacheWriteConfigured {
+		t.Fatalf("catalog models = %#v", catalog.Models)
+	}
+	if len(catalog.Models[0].ContextBands) != 1 || catalog.Models[0].ContextBands[0].MinInputTokens != 272001 || !catalog.Models[0].ContextBands[0].Cost.CacheWriteConfigured {
+		t.Fatalf("context bands = %#v", catalog.Models[0].ContextBands)
+	}
+}
+
+func TestParseBillingModelPriceImportCatalogMarksIncompleteTierUnsafe(t *testing.T) {
+	t.Parallel()
+
+	catalog, errCatalog := parseBillingModelPriceImportCatalog([]byte(`{
+  "requesty": {"models": {"google/gemini-tier": {"cost": {
+    "input": 1.25, "output": 10, "cache_read": 0.125, "cache_write": 2.375,
+    "tiers": [{"input": 2.5, "output": 15, "cache_read": 0.25, "tier": {"type": "context", "size": 200000}}]
+  }}}}
+}`), modelsDevCatalogURL, time.Date(2026, time.July, 11, 0, 0, 0, 0, time.UTC))
+	if errCatalog != nil {
+		t.Fatalf("parseBillingModelPriceImportCatalog() error = %v", errCatalog)
+	}
+	if len(catalog.Models) != 1 || len(catalog.Models[0].ContextBands) != 1 || len(catalog.Models[0].ContextBands[0].MissingPriceFields) != 1 || catalog.Models[0].ContextBands[0].MissingPriceFields[0] != "cache_write" {
+		t.Fatalf("catalog context bands = %#v", catalog.Models)
+	}
+}
+
+func TestParseBillingModelPriceImportCatalogFailsClosedForMalformedPriceAndTier(t *testing.T) {
+	t.Parallel()
+
+	catalog, errCatalog := parseBillingModelPriceImportCatalog([]byte(`{
+  "openai": {"models": {
+    "gpt-malformed-price": {"cost": {"input": "not-a-number", "output": 8}},
+    "gpt-malformed-tier": {"cost": {"input": 2, "output": 8, "tiers": [{"input": 4, "output": 16, "tier": {"type": "context", "size": "not-a-number"}}]}}
+  }}
+}`), modelsDevCatalogURL, time.Date(2026, time.July, 11, 0, 0, 0, 0, time.UTC))
+	if errCatalog != nil {
+		t.Fatalf("parseBillingModelPriceImportCatalog() error = %v", errCatalog)
+	}
+	if len(catalog.Models) != 2 {
+		t.Fatalf("catalog models = %#v", catalog.Models)
+	}
+	if len(catalog.Models[0].InvalidPriceFields) != 1 || catalog.Models[0].InvalidPriceFields[0] != "input" {
+		t.Fatalf("malformed price fields = %#v", catalog.Models[0].InvalidPriceFields)
+	}
+	if len(catalog.Models[1].ContextBandIssues) != 1 || catalog.Models[1].ContextBandIssues[0] != "invalid_context_band_boundary" {
+		t.Fatalf("malformed tier issues = %#v", catalog.Models[1].ContextBandIssues)
+	}
+}
+
+func TestPreviewBillingModelPriceImportRejectsMalformedContextBand(t *testing.T) {
+	t.Parallel()
+
+	handler, closeRepo := newBillingManagementTestHandler(t)
+	defer closeRepo()
+	catalog, errCatalog := parseBillingModelPriceImportCatalog([]byte(`{
+  "openai": {"models": {"gpt-malformed-tier": {"cost": {
+    "input": 2, "output": 8,
+    "tiers": [{"input": 4, "output": 16, "tier": {"type": "context", "size": "invalid"}}]
+  }}}}
+}`), modelsDevCatalogURL, time.Now().UTC())
+	if errCatalog != nil {
+		t.Fatalf("parseBillingModelPriceImportCatalog() error = %v", errCatalog)
+	}
+	preview, errPreview := handler.repo.CreateBillingModelPriceImportPreview(context.Background(), cluster.BillingModelPriceImportPreviewInput{
+		Source:  cluster.BillingModelPriceImportSourceModelsDev,
+		Targets: []cluster.BillingModelPriceImportTarget{{Provider: "openai", Model: "gpt-malformed-tier"}},
+		Policy:  cluster.BillingModelPriceImportPolicy{OverwriteMode: "missing", DefaultMultiplier: 1, IncludeCachePrices: true},
+	}, catalog)
+	if errPreview != nil {
+		t.Fatalf("CreateBillingModelPriceImportPreview() error = %v", errPreview)
+	}
+	if len(preview.Rows) != 1 || preview.Rows[0].Status != "invalid" || preview.Rows[0].Action != "review" || preview.Rows[0].Applicable || len(preview.Rows[0].Reasons) != 1 || preview.Rows[0].Reasons[0].Code != "invalid_context_bands" {
+		t.Fatalf("preview rows = %#v", preview.Rows)
+	}
+}
+
+func TestPreviewBillingModelPriceImportFetchesModelsDevServerSide(t *testing.T) {
+	t.Parallel()
+
+	handler, closeRepo := newBillingManagementTestHandler(t)
+	defer closeRepo()
+	handler.SetModelsDevHTTPClient(&http.Client{Transport: billingImportRoundTripper(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != modelsDevCatalogURL {
+			return nil, fmt.Errorf("unexpected catalog URL %q", request.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"openai":{"models":{"gpt-import":{"cost":{"input":2,"output":8}}}}}`))}, nil
+	})})
+	response := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(response)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/billing/model-prices/import/preview", strings.NewReader(`{"source":"models.dev","targets":[{"provider":"openai","model":"gpt-import"}],"policy":{"overwrite_mode":"missing","default_multiplier":1}}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	handler.PreviewBillingModelPriceImport(ctx)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var payload map[string]any
+	if errDecode := json.Unmarshal(response.Body.Bytes(), &payload); errDecode != nil {
+		t.Fatalf("decode preview response: %v", errDecode)
+	}
+	if payload["atomic"] != true || payload["preview_id"] == "" {
+		t.Fatalf("preview response = %#v", payload)
+	}
+	rows, ok := payload["rows"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("preview rows = %#v", payload["rows"])
+	}
+	row, ok := rows[0].(map[string]any)
+	if !ok || row["row_key"] == "" {
+		t.Fatalf("preview row = %#v", rows[0])
+	}
+	applyResponse := httptest.NewRecorder()
+	applyContext, _ := gin.CreateTestContext(applyResponse)
+	applyContext.Request = httptest.NewRequest(http.MethodPost, "/billing/model-prices/import/apply", strings.NewReader(fmt.Sprintf(`{"preview_id":%q,"preview_revision":%q,"selected_keys":[%q],"idempotency_key":"preview-apply-key"}`, payload["preview_id"], payload["preview_revision"], row["row_key"])))
+	applyContext.Request.Header.Set("Content-Type", "application/json")
+	applyContext.Request.Header.Set("Idempotency-Key", "preview-apply-key")
+	handler.ApplyBillingModelPriceImport(applyContext)
+	if applyResponse.Code != http.StatusOK {
+		t.Fatalf("apply status = %d body=%s, want 200", applyResponse.Code, applyResponse.Body.String())
+	}
+	var applyPayload map[string]any
+	if errDecode := json.Unmarshal(applyResponse.Body.Bytes(), &applyPayload); errDecode != nil {
+		t.Fatalf("decode apply response: %v", errDecode)
+	}
+	applyRows, ok := applyPayload["rows"].([]any)
+	if !ok || len(applyRows) != 1 {
+		t.Fatalf("apply rows = %#v", applyPayload["rows"])
+	}
+	applyRow, ok := applyRows[0].(map[string]any)
+	if !ok || applyRow["key"] != row["row_key"] || applyRow["provider"] != "openai" || applyRow["model"] != "gpt-import" || applyRow["action"] != "create" || applyRow["status"] != "created" || applyRow["resource_id"] == "" {
+		t.Fatalf("apply row = %#v", applyRows[0])
 	}
 }
 

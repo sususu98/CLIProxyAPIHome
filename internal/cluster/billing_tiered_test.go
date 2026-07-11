@@ -37,7 +37,7 @@ func TestBillingMigrationPreservesLegacyPriceAsWildcardBaseBand(t *testing.T) {
 	if errFirst := db.First(&record, "id = ?", "legacy").Error; errFirst != nil {
 		t.Fatalf("load migrated row: %v", errFirst)
 	}
-	if record.ServiceTier != BillingServiceTierWildcard || record.MinInputTokens != 0 || record.InputPricePerMillion != 2 {
+	if record.ServiceTier != BillingServiceTierWildcard || record.MinInputTokens != 0 || record.InputPricePerMillion != 2 || record.Revision != 1 || record.CacheWritePriceConfigured {
 		t.Fatalf("migrated record = %+v", record)
 	}
 }

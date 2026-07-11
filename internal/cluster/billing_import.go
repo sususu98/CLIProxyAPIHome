@@ -1,0 +1,1024 @@
+package cluster
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"gorm.io/gorm"
+)
+
+const (
+	BillingModelPriceImportSourceModelsDev = "models.dev"
+	billingImportPreviewTTL                = 15 * time.Minute
+	billingImportPreviewRetention          = 24 * time.Hour
+	billingImportOperationRetention        = 30 * 24 * time.Hour
+	billingTierDiagnosticsWindow           = 30 * 24 * time.Hour
+)
+
+var (
+	ErrBillingImportPreviewNotFound     = errors.New("billing import preview not found")
+	ErrBillingImportPreviewExpired      = errors.New("billing import preview expired")
+	ErrBillingImportPreviewStale        = errors.New("billing import preview stale")
+	ErrBillingImportRuleConflict        = errors.New("billing import rule conflict")
+	ErrBillingImportInvalidSelection    = errors.New("billing import invalid selection")
+	ErrBillingImportOverwriteRequired   = errors.New("billing import overwrite confirmation required")
+	ErrBillingImportIdempotencyConflict = errors.New("billing import idempotency key was reused with a different request")
+	ErrBillingImportOperationNotFound   = errors.New("billing import operation not found")
+)
+
+// BillingModelPriceImportPreviewRecord stores a server-generated import plan.
+type BillingModelPriceImportPreviewRecord struct {
+	ID               string    `gorm:"column:id;primaryKey"`
+	Revision         string    `gorm:"column:revision;not null;uniqueIndex"`
+	Source           string    `gorm:"column:source;not null"`
+	SourceURL        string    `gorm:"column:source_url;not null"`
+	SourceVersion    string    `gorm:"column:source_version;not null"`
+	SourceFetchedAt  time.Time `gorm:"column:source_fetched_at;not null"`
+	SourceModelCount int       `gorm:"column:source_model_count;not null"`
+	Atomic           bool      `gorm:"column:atomic;not null;default:true"`
+	GeneratedAt      time.Time `gorm:"column:generated_at;not null"`
+	ExpiresAt        time.Time `gorm:"column:expires_at;not null;index"`
+	Payload          JSONB     `gorm:"column:payload;not null"`
+	CreatedAt        time.Time `gorm:"column:created_at;not null;index"`
+}
+
+func (BillingModelPriceImportPreviewRecord) TableName() string {
+	return "billing_model_price_import_preview"
+}
+
+// BillingModelPriceImportOperationRecord persists terminal apply results for idempotent recovery.
+type BillingModelPriceImportOperationRecord struct {
+	ID              string    `gorm:"column:id;primaryKey"`
+	PreviewID       string    `gorm:"column:preview_id;not null;index"`
+	PreviewRevision string    `gorm:"column:preview_revision;not null"`
+	IdempotencyKey  string    `gorm:"column:idempotency_key;not null;uniqueIndex"`
+	RequestHash     string    `gorm:"column:request_hash;not null"`
+	SelectionHash   string    `gorm:"column:selection_hash;not null;index"`
+	Atomic          bool      `gorm:"column:atomic;not null"`
+	Status          string    `gorm:"column:status;not null"`
+	AppliedAt       time.Time `gorm:"column:applied_at;not null"`
+	Result          JSONB     `gorm:"column:result;not null"`
+	CreatedAt       time.Time `gorm:"column:created_at;not null;index"`
+}
+
+func (BillingModelPriceImportOperationRecord) TableName() string {
+	return "billing_model_price_import_operation"
+}
+
+type BillingModelPriceImportTarget struct {
+	Provider       string   `json:"provider"`
+	Model          string   `json:"model"`
+	ServiceTier    string   `json:"service_tier"`
+	MinInputTokens int64    `json:"min_input_tokens"`
+	Label          string   `json:"label"`
+	Scopes         []string `json:"scopes"`
+}
+
+type BillingModelPriceImportMultiplierRule struct {
+	ID         string  `json:"id"`
+	Label      string  `json:"label"`
+	MatchMode  string  `json:"match_mode"`
+	Pattern    string  `json:"pattern"`
+	Multiplier float64 `json:"multiplier"`
+}
+
+type BillingModelPriceImportAlias struct {
+	TargetModel  string   `json:"target_model"`
+	SourceModels []string `json:"source_models"`
+}
+
+type BillingModelPriceImportPolicy struct {
+	OverwriteMode      string                                  `json:"overwrite_mode"`
+	DefaultMultiplier  float64                                 `json:"default_multiplier"`
+	MultiplierRules    []BillingModelPriceImportMultiplierRule `json:"multiplier_rules"`
+	Aliases            []BillingModelPriceImportAlias          `json:"aliases"`
+	RowMultipliers     map[string]float64                      `json:"row_multipliers"`
+	IncludeCachePrices bool                                    `json:"include_cache_prices"`
+	IncludeZeroCost    bool                                    `json:"include_zero_cost"`
+}
+
+type BillingModelPriceImportMatchOverride struct {
+	TargetProvider string `json:"target_provider"`
+	TargetModel    string `json:"target_model"`
+	SourceProvider string `json:"source_provider"`
+	SourceModel    string `json:"source_model"`
+}
+
+type BillingModelPriceImportPreviewInput struct {
+	Source         string                                 `json:"source"`
+	Targets        []BillingModelPriceImportTarget        `json:"targets"`
+	Policy         BillingModelPriceImportPolicy          `json:"policy"`
+	MatchOverrides []BillingModelPriceImportMatchOverride `json:"match_overrides"`
+}
+
+type BillingModelPriceImportCost struct {
+	Input                float64 `json:"input"`
+	Output               float64 `json:"output"`
+	CacheRead            float64 `json:"cache_read"`
+	CacheWrite           float64 `json:"cache_write"`
+	CacheWriteConfigured bool    `json:"cache_write_configured"`
+	Request              float64 `json:"request"`
+}
+
+type BillingModelPriceImportContextBand struct {
+	MinInputTokens        int64                       `json:"min_input_tokens"`
+	Cost                  BillingModelPriceImportCost `json:"cost"`
+	InvalidPriceFields    []string                    `json:"-"`
+	UnsupportedDimensions []string                    `json:"-"`
+	MissingPriceFields    []string                    `json:"-"`
+}
+
+type BillingModelPriceImportCatalogModel struct {
+	Provider              string                               `json:"provider"`
+	Model                 string                               `json:"model"`
+	Name                  string                               `json:"name"`
+	Cost                  *BillingModelPriceImportCost         `json:"cost"`
+	ContextBands          []BillingModelPriceImportContextBand `json:"context_bands"`
+	InvalidPriceFields    []string                             `json:"invalid_price_fields"`
+	UnsupportedDimensions []string                             `json:"unsupported_dimensions"`
+	ContextBandIssues     []string                             `json:"-"`
+}
+
+type BillingModelPriceImportCatalog struct {
+	SourceURL string                                `json:"source_url"`
+	Version   string                                `json:"version"`
+	FetchedAt time.Time                             `json:"fetched_at"`
+	Models    []BillingModelPriceImportCatalogModel `json:"models"`
+}
+
+type BillingModelPriceImportRuleSnapshot struct {
+	ID                        string  `json:"id"`
+	Provider                  string  `json:"provider"`
+	Model                     string  `json:"model"`
+	ServiceTier               string  `json:"service_tier"`
+	MinInputTokens            int64   `json:"min_input_tokens"`
+	InputPricePerMillion      float64 `json:"input_price_per_million"`
+	OutputPricePerMillion     float64 `json:"output_price_per_million"`
+	CacheReadPricePerMillion  float64 `json:"cache_read_price_per_million"`
+	CacheWritePricePerMillion float64 `json:"cache_write_price_per_million"`
+	CacheWritePriceConfigured bool    `json:"cache_write_price_configured"`
+	RequestPrice              float64 `json:"request_price"`
+	Source                    string  `json:"source"`
+	Enabled                   bool    `json:"enabled"`
+	Note                      string  `json:"note"`
+	Revision                  string  `json:"revision"`
+}
+
+type BillingModelPriceImportWriteRule struct {
+	Source                    string `json:"source"`
+	Enabled                   bool   `json:"enabled"`
+	Note                      string `json:"note"`
+	ServiceTier               string `json:"service_tier"`
+	MinInputTokens            int64  `json:"min_input_tokens"`
+	CacheWritePriceConfigured bool   `json:"cache_write_price_configured"`
+}
+
+type BillingModelPriceImportReason struct {
+	Code       string   `json:"code"`
+	Message    string   `json:"message"`
+	Candidates []string `json:"candidates,omitempty"`
+}
+
+type BillingModelPriceImportPreviewRow struct {
+	RowKey          string                               `json:"row_key"`
+	Provider        string                               `json:"provider"`
+	Model           string                               `json:"model"`
+	ServiceTier     string                               `json:"service_tier"`
+	MinInputTokens  int64                                `json:"min_input_tokens"`
+	Label           string                               `json:"label"`
+	Status          string                               `json:"status"`
+	Action          string                               `json:"action"`
+	Applicable      bool                                 `json:"applicable"`
+	SelectedDefault bool                                 `json:"selected_by_default"`
+	MatchedProvider string                               `json:"matched_provider,omitempty"`
+	MatchedModel    string                               `json:"matched_model,omitempty"`
+	MatchedName     string                               `json:"matched_name,omitempty"`
+	Official        *BillingModelPriceImportCost         `json:"official,omitempty"`
+	Multiplier      float64                              `json:"multiplier"`
+	Final           *BillingModelPriceImportCost         `json:"final,omitempty"`
+	WriteRule       *BillingModelPriceImportWriteRule    `json:"write_rule,omitempty"`
+	ExistingRule    *BillingModelPriceImportRuleSnapshot `json:"existing_rule,omitempty"`
+	Reasons         []BillingModelPriceImportReason      `json:"reasons"`
+}
+
+type BillingModelPriceImportSummary struct {
+	Total       int `json:"total"`
+	Creates     int `json:"creates"`
+	UpdatesSync int `json:"updates_sync"`
+	Overwrites  int `json:"overwrites"`
+	Skips       int `json:"skips"`
+	Reviews     int `json:"reviews"`
+	Conflicts   int `json:"conflicts"`
+	Failed      int `json:"failed"`
+}
+
+type BillingModelPriceImportPreview struct {
+	PreviewID        string                              `json:"preview_id"`
+	PreviewRevision  string                              `json:"preview_revision"`
+	Source           string                              `json:"source"`
+	SourceURL        string                              `json:"source_url"`
+	SourceVersion    string                              `json:"source_version"`
+	SourceFetchedAt  time.Time                           `json:"source_fetched_at"`
+	SourceModelCount int                                 `json:"source_model_count"`
+	GeneratedAt      time.Time                           `json:"generated_at"`
+	ExpiresAt        time.Time                           `json:"expires_at"`
+	Atomic           bool                                `json:"atomic"`
+	Rows             []BillingModelPriceImportPreviewRow `json:"rows"`
+	Summary          BillingModelPriceImportSummary      `json:"summary"`
+}
+
+type BillingModelPriceImportApplyInput struct {
+	PreviewID        string   `json:"preview_id"`
+	PreviewRevision  string   `json:"preview_revision"`
+	SelectedKeys     []string `json:"selected_keys"`
+	ConfirmOverwrite bool     `json:"confirm_overwrite"`
+	IdempotencyKey   string   `json:"idempotency_key"`
+}
+
+type BillingModelPriceImportOperationRowResult struct {
+	Key          string `json:"key"`
+	Provider     string `json:"provider"`
+	Model        string `json:"model"`
+	Action       string `json:"action"`
+	Status       string `json:"status"`
+	ResourceID   string `json:"resource_id,omitempty"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+}
+
+type BillingModelPriceImportOperation struct {
+	OperationID string                                      `json:"operation_id"`
+	PreviewID   string                                      `json:"preview_id"`
+	Status      string                                      `json:"status"`
+	Atomic      bool                                        `json:"atomic"`
+	AppliedAt   time.Time                                   `json:"applied_at"`
+	Summary     BillingModelPriceImportSummary              `json:"summary"`
+	Rows        []BillingModelPriceImportOperationRowResult `json:"rows"`
+}
+
+type BillingTierDiagnostics struct {
+	Supported            bool       `json:"supported"`
+	WindowStart          *time.Time `json:"window_start"`
+	WindowEnd            *time.Time `json:"window_end"`
+	EligibleRequests     int64      `json:"eligible_requests"`
+	ResponseTierRequests int64      `json:"response_tier_requests"`
+	FallbackRequests     int64      `json:"fallback_requests"`
+	LastResponseTierAt   *time.Time `json:"last_response_tier_at,omitempty"`
+}
+
+func (r *Repository) CreateBillingModelPriceImportPreview(ctx context.Context, input BillingModelPriceImportPreviewInput, catalog BillingModelPriceImportCatalog) (*BillingModelPriceImportPreview, error) {
+	input = normalizeBillingModelPriceImportPreviewInput(input)
+	if errValidate := validateBillingModelPriceImportPreviewInput(input, catalog); errValidate != nil {
+		return nil, errValidate
+	}
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	ctx = contextOrBackground(ctx)
+	now := time.Now().UTC()
+	if errCleanup := r.cleanupBillingModelPriceImports(ctx, db, now); errCleanup != nil {
+		return nil, errCleanup
+	}
+	var existing []BillingModelPriceRecord
+	if errFind := db.WithContext(ctx).Find(&existing).Error; errFind != nil {
+		return nil, errFind
+	}
+	preview := buildBillingModelPriceImportPreview(input, catalog, existing, now)
+	payload, errPayload := billingJSONB(preview)
+	if errPayload != nil {
+		return nil, errPayload
+	}
+	record := BillingModelPriceImportPreviewRecord{
+		ID:               preview.PreviewID,
+		Revision:         preview.PreviewRevision,
+		Source:           preview.Source,
+		SourceURL:        preview.SourceURL,
+		SourceVersion:    preview.SourceVersion,
+		SourceFetchedAt:  preview.SourceFetchedAt,
+		SourceModelCount: preview.SourceModelCount,
+		Atomic:           preview.Atomic,
+		GeneratedAt:      preview.GeneratedAt,
+		ExpiresAt:        preview.ExpiresAt,
+		Payload:          payload,
+		CreatedAt:        now,
+	}
+	if errCreate := db.WithContext(ctx).Create(&record).Error; errCreate != nil {
+		return nil, errCreate
+	}
+	return &preview, nil
+}
+
+func normalizeBillingModelPriceImportPreviewInput(input BillingModelPriceImportPreviewInput) BillingModelPriceImportPreviewInput {
+	input.Source = strings.ToLower(strings.TrimSpace(input.Source))
+	if input.Source == "" {
+		input.Source = BillingModelPriceImportSourceModelsDev
+	}
+	input.Policy.OverwriteMode = strings.ToLower(strings.TrimSpace(input.Policy.OverwriteMode))
+	if input.Policy.OverwriteMode == "" {
+		input.Policy.OverwriteMode = "missing"
+	}
+	if input.Policy.DefaultMultiplier == 0 {
+		input.Policy.DefaultMultiplier = 1
+	}
+	for index := range input.Targets {
+		input.Targets[index].Provider = strings.ToLower(strings.TrimSpace(input.Targets[index].Provider))
+		input.Targets[index].Model = strings.TrimSpace(input.Targets[index].Model)
+		input.Targets[index].ServiceTier = normalizeBillingPriceServiceTier(input.Targets[index].ServiceTier)
+		input.Targets[index].Label = strings.TrimSpace(input.Targets[index].Label)
+		for scopeIndex := range input.Targets[index].Scopes {
+			input.Targets[index].Scopes[scopeIndex] = strings.ToLower(strings.TrimSpace(input.Targets[index].Scopes[scopeIndex]))
+		}
+	}
+	for index := range input.MatchOverrides {
+		override := &input.MatchOverrides[index]
+		override.TargetProvider = strings.ToLower(strings.TrimSpace(override.TargetProvider))
+		override.TargetModel = strings.TrimSpace(override.TargetModel)
+		override.SourceProvider = strings.ToLower(strings.TrimSpace(override.SourceProvider))
+		override.SourceModel = strings.TrimSpace(override.SourceModel)
+	}
+	return input
+}
+
+func (r *Repository) ApplyBillingModelPriceImport(ctx context.Context, input BillingModelPriceImportApplyInput) (*BillingModelPriceImportOperation, error) {
+	input.PreviewID = strings.TrimSpace(input.PreviewID)
+	input.PreviewRevision = strings.TrimSpace(input.PreviewRevision)
+	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
+	if input.PreviewID == "" || input.PreviewRevision == "" || input.IdempotencyKey == "" || len(input.SelectedKeys) == 0 {
+		return nil, ErrBillingImportInvalidSelection
+	}
+	selected := normalizedBillingImportSelectedKeys(input.SelectedKeys)
+	if len(selected) != len(input.SelectedKeys) {
+		return nil, ErrBillingImportInvalidSelection
+	}
+	input.SelectedKeys = selected
+	requestHash := billingImportHash(input.PreviewID, input.PreviewRevision, strings.Join(selected, "\n"), fmt.Sprintf("%t", input.ConfirmOverwrite))
+	selectionHash := billingImportHash(input.PreviewID, input.PreviewRevision, strings.Join(selected, "\n"))
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	ctx = contextOrBackground(ctx)
+	var operation BillingModelPriceImportOperation
+	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existingOperation BillingModelPriceImportOperationRecord
+		errExisting := tx.WithContext(ctx).Where("idempotency_key = ?", input.IdempotencyKey).First(&existingOperation).Error
+		if errExisting == nil {
+			if existingOperation.RequestHash != requestHash {
+				return ErrBillingImportIdempotencyConflict
+			}
+			return unmarshalBillingImportOperation(existingOperation.Result, &operation)
+		}
+		if !errors.Is(errExisting, gorm.ErrRecordNotFound) {
+			return errExisting
+		}
+
+		var previewRecord BillingModelPriceImportPreviewRecord
+		if errPreview := tx.WithContext(ctx).First(&previewRecord, "id = ?", input.PreviewID).Error; errPreview != nil {
+			if errors.Is(errPreview, gorm.ErrRecordNotFound) {
+				return ErrBillingImportPreviewNotFound
+			}
+			return errPreview
+		}
+		if previewRecord.Revision != input.PreviewRevision {
+			return ErrBillingImportPreviewStale
+		}
+		if time.Now().UTC().After(previewRecord.ExpiresAt) {
+			return ErrBillingImportPreviewExpired
+		}
+		var preview BillingModelPriceImportPreview
+		if errPreview := json.Unmarshal(previewRecord.Payload, &preview); errPreview != nil {
+			return fmt.Errorf("decode billing import preview: %w", errPreview)
+		}
+		rowsByKey := make(map[string]BillingModelPriceImportPreviewRow, len(preview.Rows))
+		for _, row := range preview.Rows {
+			rowsByKey[row.RowKey] = row
+		}
+		selectedRows := make([]BillingModelPriceImportPreviewRow, 0, len(selected))
+		for _, key := range selected {
+			row, ok := rowsByKey[key]
+			if !ok || !row.Applicable || row.Final == nil || row.WriteRule == nil {
+				return ErrBillingImportInvalidSelection
+			}
+			if row.Action == "overwrite" && !input.ConfirmOverwrite {
+				return ErrBillingImportOverwriteRequired
+			}
+			if row.ExistingRule != nil {
+				var current BillingModelPriceRecord
+				expectedRevision, errRevision := strconv.ParseInt(row.ExistingRule.Revision, 10, 64)
+				if errRevision != nil || tx.WithContext(ctx).First(&current, "id = ?", row.ExistingRule.ID).Error != nil || current.Revision != expectedRevision {
+					return ErrBillingImportRuleConflict
+				}
+			}
+			selectedRows = append(selectedRows, row)
+		}
+
+		now := time.Now().UTC()
+		operation = BillingModelPriceImportOperation{OperationID: billingID("import"), PreviewID: preview.PreviewID, Status: "applied", Atomic: preview.Atomic, AppliedAt: now}
+		for _, row := range selectedRows {
+			resourceID, errApply := applyBillingModelPriceImportRow(ctx, tx, row)
+			if errApply != nil {
+				if isBillingModelPriceConflict(errApply) {
+					return ErrBillingImportRuleConflict
+				}
+				return errApply
+			}
+			resultStatus := map[string]string{"create": "created", "update_sync": "updated", "overwrite": "overwritten"}[row.Action]
+			operation.Rows = append(operation.Rows, BillingModelPriceImportOperationRowResult{Key: row.RowKey, Provider: row.Provider, Model: row.Model, Action: row.Action, Status: resultStatus, ResourceID: resourceID})
+			incrementBillingImportSummary(&operation.Summary, row.Action, row.Status)
+		}
+		result, errResult := billingJSONB(operation)
+		if errResult != nil {
+			return errResult
+		}
+		record := BillingModelPriceImportOperationRecord{ID: operation.OperationID, PreviewID: preview.PreviewID, PreviewRevision: preview.PreviewRevision, IdempotencyKey: input.IdempotencyKey, RequestHash: requestHash, SelectionHash: selectionHash, Atomic: preview.Atomic, Status: operation.Status, AppliedAt: now, Result: result, CreatedAt: now}
+		if errCreate := tx.WithContext(ctx).Create(&record).Error; errCreate != nil {
+			if isBillingModelPriceConflict(errCreate) {
+				return ErrBillingImportRuleConflict
+			}
+			return errCreate
+		}
+		return nil
+	})
+	if errTransaction != nil {
+		return nil, errTransaction
+	}
+	return &operation, nil
+}
+
+func (r *Repository) GetBillingModelPriceImportOperation(ctx context.Context, id string) (*BillingModelPriceImportOperation, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	var record BillingModelPriceImportOperationRecord
+	if errFind := db.WithContext(contextOrBackground(ctx)).First(&record, "id = ?", strings.TrimSpace(id)).Error; errFind != nil {
+		if errors.Is(errFind, gorm.ErrRecordNotFound) {
+			return nil, ErrBillingImportOperationNotFound
+		}
+		return nil, errFind
+	}
+	operation := &BillingModelPriceImportOperation{}
+	if errDecode := unmarshalBillingImportOperation(record.Result, operation); errDecode != nil {
+		return nil, errDecode
+	}
+	return operation, nil
+}
+
+func (r *Repository) GetBillingTierDiagnostics(ctx context.Context) (BillingTierDiagnostics, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return BillingTierDiagnostics{}, errDB
+	}
+	ctx = contextOrBackground(ctx)
+	var result struct {
+		Eligible int64
+		Present  int64
+		Fallback int64
+	}
+	windowEnd := time.Now().UTC()
+	windowStart := windowEnd.Add(-billingTierDiagnosticsWindow)
+	errQuery := db.WithContext(ctx).Model(&UsageRecord{}).Where("timestamp >= ? AND request_service_tier IS NOT NULL AND request_service_tier <> ''", windowStart).Select(`
+		COUNT(*) AS eligible,
+		SUM(CASE WHEN response_service_tier IS NOT NULL AND response_service_tier <> '' THEN 1 ELSE 0 END) AS present,
+		SUM(CASE WHEN response_service_tier IS NULL OR response_service_tier = '' THEN 1 ELSE 0 END) AS fallback`).Scan(&result).Error
+	if errQuery != nil {
+		return BillingTierDiagnostics{}, errQuery
+	}
+	var lastRecord UsageRecord
+	lastResult := db.WithContext(ctx).Where("timestamp >= ? AND request_service_tier IS NOT NULL AND request_service_tier <> '' AND response_service_tier IS NOT NULL AND response_service_tier <> ''", windowStart).Order("timestamp DESC, id DESC").Limit(1).Find(&lastRecord)
+	if lastResult.Error != nil {
+		return BillingTierDiagnostics{}, lastResult.Error
+	}
+	var lastResponseTierAt *time.Time
+	if lastResult.RowsAffected > 0 {
+		value := lastRecord.Timestamp.UTC()
+		lastResponseTierAt = &value
+	}
+	return BillingTierDiagnostics{Supported: true, WindowStart: &windowStart, WindowEnd: &windowEnd, EligibleRequests: result.Eligible, ResponseTierRequests: result.Present, FallbackRequests: result.Fallback, LastResponseTierAt: lastResponseTierAt}, nil
+}
+
+func buildBillingModelPriceImportPreview(input BillingModelPriceImportPreviewInput, catalog BillingModelPriceImportCatalog, existing []BillingModelPriceRecord, now time.Time) BillingModelPriceImportPreview {
+	preview := BillingModelPriceImportPreview{PreviewID: billingID("preview"), PreviewRevision: billingID("previewrev"), Source: BillingModelPriceImportSourceModelsDev, SourceURL: catalog.SourceURL, SourceVersion: catalog.Version, SourceFetchedAt: catalog.FetchedAt.UTC(), SourceModelCount: len(catalog.Models), GeneratedAt: now, ExpiresAt: now.Add(billingImportPreviewTTL), Atomic: true}
+	existingByIdentity := make(map[string][]BillingModelPriceRecord)
+	for _, rule := range existing {
+		key := billingImportRuleIdentity(rule.Provider, rule.Model, rule.ServiceTier, rule.MinInputTokens)
+		existingByIdentity[key] = append(existingByIdentity[key], rule)
+	}
+	for _, target := range input.Targets {
+		baseKey := billingImportTargetKey(target.Provider, target.Model)
+		multiplier := billingImportMultiplier(input.Policy, target.Model, baseKey)
+		matches := billingImportCatalogMatches(catalog.Models, target, input.Policy.Aliases, input.MatchOverrides)
+		if len(matches) == 0 {
+			preview.Rows = append(preview.Rows, billingImportReviewRow(baseKey, target, multiplier, "unmatched", "no_models_dev_match", nil))
+			continue
+		}
+		if len(matches) > 1 {
+			candidates := make([]string, 0, len(matches))
+			for _, match := range matches {
+				candidates = append(candidates, match.Provider+"/"+match.Model)
+			}
+			preview.Rows = append(preview.Rows, billingImportReviewRow(baseKey, target, multiplier, "ambiguous", "multiple_matches", candidates))
+			continue
+		}
+		match := matches[0]
+		if len(match.InvalidPriceFields) > 0 {
+			preview.Rows = append(preview.Rows, billingImportReviewRow(baseKey, target, multiplier, "invalid", "invalid_price_values", nil))
+			continue
+		}
+		if len(match.UnsupportedDimensions) > 0 {
+			preview.Rows = append(preview.Rows, billingImportReviewRow(baseKey, target, multiplier, "unsupported", "unsupported_price_dimensions", match.UnsupportedDimensions))
+			continue
+		}
+		if match.Cost == nil {
+			preview.Rows = append(preview.Rows, billingImportReviewRow(baseKey, target, multiplier, "unmatched", "missing_cost", nil))
+			continue
+		}
+		if len(match.ContextBandIssues) > 0 {
+			preview.Rows = append(preview.Rows, billingImportReviewRow(baseKey, target, multiplier, "invalid", "invalid_context_bands", match.ContextBandIssues))
+			continue
+		}
+		if status, code, candidates := billingImportContextBandValidation(match.ContextBands); status != "" {
+			preview.Rows = append(preview.Rows, billingImportReviewRow(baseKey, target, multiplier, status, code, candidates))
+			continue
+		}
+		bands := append([]BillingModelPriceImportContextBand{{MinInputTokens: 0, Cost: *match.Cost}}, match.ContextBands...)
+		sort.Slice(bands, func(i, j int) bool { return bands[i].MinInputTokens < bands[j].MinInputTokens })
+		for index, band := range bands {
+			rowKey := baseKey
+			if index > 0 {
+				rowKey = fmt.Sprintf("%s::*::%d", baseKey, band.MinInputTokens)
+			}
+			rowMultiplier := billingImportMultiplier(input.Policy, target.Model, rowKey)
+			identity := billingImportRuleIdentity(target.Provider, target.Model, BillingServiceTierWildcard, band.MinInputTokens)
+			rules := existingByIdentity[identity]
+			if len(rules) > 1 {
+				preview.Rows = append(preview.Rows, billingImportScopedReviewRow(rowKey, target, rowMultiplier, "conflict", "duplicate_existing_identity", nil, band.MinInputTokens))
+				continue
+			}
+			var existingRule *BillingModelPriceRecord
+			if len(rules) == 1 {
+				existingRule = &rules[0]
+			}
+			preview.Rows = append(preview.Rows, billingImportMatchedRow(rowKey, target, match, band, rowMultiplier, input.Policy, existingRule, catalog.FetchedAt))
+		}
+	}
+	preview.Summary = billingImportPreviewSummary(preview.Rows)
+	return preview
+}
+
+func billingImportContextBandValidation(bands []BillingModelPriceImportContextBand) (string, string, []string) {
+	seen := make(map[int64]struct{}, len(bands))
+	for _, band := range bands {
+		if band.MinInputTokens <= 0 {
+			return "invalid", "invalid_context_band_boundary", nil
+		}
+		if _, ok := seen[band.MinInputTokens]; ok {
+			return "invalid", "duplicate_context_band_identity", nil
+		}
+		seen[band.MinInputTokens] = struct{}{}
+		if len(band.InvalidPriceFields) > 0 {
+			return "invalid", "invalid_context_band_prices", band.InvalidPriceFields
+		}
+		if len(band.UnsupportedDimensions) > 0 {
+			return "unsupported", "unsupported_context_band_dimensions", band.UnsupportedDimensions
+		}
+		if len(band.MissingPriceFields) > 0 {
+			return "unsupported", "incomplete_context_band_prices", band.MissingPriceFields
+		}
+	}
+	return "", "", nil
+}
+
+func billingImportMatchedRow(rowKey string, target BillingModelPriceImportTarget, match BillingModelPriceImportCatalogModel, band BillingModelPriceImportContextBand, multiplier float64, policy BillingModelPriceImportPolicy, existing *BillingModelPriceRecord, fetchedAt time.Time) BillingModelPriceImportPreviewRow {
+	final := billingImportMultiplyCost(band.Cost, multiplier, policy.IncludeCachePrices)
+	status := "matched"
+	if billingImportZeroCost(final) {
+		status = "zero_cost"
+	}
+	row := BillingModelPriceImportPreviewRow{RowKey: rowKey, Provider: strings.ToLower(strings.TrimSpace(target.Provider)), Model: strings.TrimSpace(target.Model), ServiceTier: BillingServiceTierWildcard, MinInputTokens: band.MinInputTokens, Label: strings.TrimSpace(target.Label), Status: status, MatchedProvider: match.Provider, MatchedModel: match.Model, MatchedName: match.Name, Official: &band.Cost, Multiplier: multiplier, Reasons: []BillingModelPriceImportReason{{Code: "matched", Message: "Exact models.dev match."}}}
+	if row.Label == "" {
+		row.Label = row.Model
+	}
+	if status == "zero_cost" && !policy.IncludeZeroCost {
+		row.Action = "skip"
+		return row
+	}
+	if existing != nil {
+		snapshot := billingImportRuleSnapshot(*existing)
+		row.ExistingRule = &snapshot
+	}
+	if existing == nil {
+		row.Action = "create"
+	} else if policy.OverwriteMode == "sync" && existing.Source == BillingPriceSourceSync {
+		row.Action = "update_sync"
+	} else if policy.OverwriteMode == "all" {
+		if existing.Source == BillingPriceSourceSync {
+			row.Action = "update_sync"
+		} else {
+			row.Action = "overwrite"
+		}
+	} else {
+		row.Action = "skip"
+	}
+	if row.Action == "skip" {
+		return row
+	}
+	row.Applicable, row.SelectedDefault, row.Final = true, true, &final
+	enabled := true
+	if existing != nil {
+		enabled = existing.Enabled
+	}
+	row.WriteRule = &BillingModelPriceImportWriteRule{Source: BillingPriceSourceSync, Enabled: enabled, Note: fmt.Sprintf("synced from models.dev (%s/%s) x%g @ %s", match.Provider, match.Model, multiplier, fetchedAt.UTC().Format("2006-01-02")), ServiceTier: row.ServiceTier, MinInputTokens: row.MinInputTokens, CacheWritePriceConfigured: final.CacheWriteConfigured}
+	return row
+}
+
+func billingImportReviewRow(rowKey string, target BillingModelPriceImportTarget, multiplier float64, status, code string, candidates []string) BillingModelPriceImportPreviewRow {
+	return billingImportScopedReviewRow(rowKey, target, multiplier, status, code, candidates, 0)
+}
+
+func billingImportScopedReviewRow(rowKey string, target BillingModelPriceImportTarget, multiplier float64, status, code string, candidates []string, minInputTokens int64) BillingModelPriceImportPreviewRow {
+	return BillingModelPriceImportPreviewRow{RowKey: rowKey, Provider: strings.ToLower(strings.TrimSpace(target.Provider)), Model: strings.TrimSpace(target.Model), ServiceTier: BillingServiceTierWildcard, MinInputTokens: minInputTokens, Label: strings.TrimSpace(target.Label), Status: status, Action: "review", Multiplier: multiplier, Reasons: []BillingModelPriceImportReason{{Code: code, Message: strings.ReplaceAll(code, "_", " "), Candidates: candidates}}}
+}
+
+func billingImportCatalogMatches(models []BillingModelPriceImportCatalogModel, target BillingModelPriceImportTarget, aliases []BillingModelPriceImportAlias, overrides []BillingModelPriceImportMatchOverride) []BillingModelPriceImportCatalogModel {
+	for _, override := range overrides {
+		if strings.EqualFold(strings.TrimSpace(override.TargetProvider), strings.TrimSpace(target.Provider)) && strings.EqualFold(strings.TrimSpace(override.TargetModel), strings.TrimSpace(target.Model)) {
+			for _, model := range models {
+				if strings.EqualFold(model.Provider, override.SourceProvider) && strings.EqualFold(model.Model, override.SourceModel) {
+					return []BillingModelPriceImportCatalogModel{model}
+				}
+			}
+			return nil
+		}
+	}
+	candidates := billingImportModelCandidates(target.Model, aliases)
+	preferredProviders := billingImportPreferredProviders(target.Provider, target.Model)
+	for _, candidate := range candidates {
+		for _, provider := range preferredProviders {
+			matches := billingImportModelsForProviderCandidate(models, provider, candidate)
+			if len(matches) > 0 {
+				return matches
+			}
+		}
+	}
+	for _, candidate := range candidates {
+		var firstParty []BillingModelPriceImportCatalogModel
+		for _, model := range models {
+			if !strings.EqualFold(billingImportBareModel(model.Model), billingImportBareModel(candidate)) || !billingImportFirstPartyProvider(model.Provider) {
+				continue
+			}
+			firstParty = append(firstParty, model)
+		}
+		if len(firstParty) == 1 {
+			return firstParty
+		}
+	}
+
+	var exact, bare []BillingModelPriceImportCatalogModel
+	for _, model := range models {
+		for _, candidate := range candidates {
+			if strings.EqualFold(model.Provider, target.Provider) && strings.EqualFold(model.Model, candidate) {
+				exact = append(exact, model)
+			}
+			if strings.EqualFold(billingImportBareModel(model.Model), billingImportBareModel(candidate)) {
+				bare = append(bare, model)
+			}
+		}
+	}
+	if len(exact) > 0 {
+		return billingImportUniqueCatalogMatches(exact)
+	}
+	return billingImportUniqueCatalogMatches(bare)
+}
+
+func billingImportModelsForProviderCandidate(models []BillingModelPriceImportCatalogModel, provider, candidate string) []BillingModelPriceImportCatalogModel {
+	var matches []BillingModelPriceImportCatalogModel
+	for _, model := range models {
+		if strings.EqualFold(model.Provider, provider) && (strings.EqualFold(model.Model, candidate) || strings.EqualFold(billingImportBareModel(model.Model), billingImportBareModel(candidate))) {
+			matches = append(matches, model)
+		}
+	}
+	return billingImportUniqueCatalogMatches(matches)
+}
+
+func billingImportModelCandidates(model string, aliases []BillingModelPriceImportAlias) []string {
+	model = strings.TrimSpace(model)
+	bare := billingImportBareModel(model)
+	values := []string{bare, model}
+	for _, alias := range aliases {
+		if strings.EqualFold(strings.TrimSpace(alias.TargetModel), bare) || strings.EqualFold(strings.TrimSpace(alias.TargetModel), model) {
+			values = append(values, alias.SourceModels...)
+		}
+	}
+	for _, suffix := range []string{"-thinking", "-preview", "-latest"} {
+		if strings.HasSuffix(strings.ToLower(bare), suffix) {
+			values = append(values, bare[:len(bare)-len(suffix)])
+		}
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		key := strings.ToLower(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func billingImportPreferredProviders(provider, model string) []string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	values := make([]string, 0, 6)
+	switch {
+	case strings.HasPrefix(model, "claude"):
+		values = append(values, "anthropic")
+	case strings.HasPrefix(model, "gemini"), strings.HasPrefix(model, "gemma"):
+		values = append(values, "google")
+	case strings.HasPrefix(model, "grok"):
+		values = append(values, "xai")
+	case strings.HasPrefix(model, "gpt"), strings.HasPrefix(model, "o1"), strings.HasPrefix(model, "o3"), strings.HasPrefix(model, "o4"), strings.HasPrefix(model, "codex"):
+		values = append(values, "openai")
+	}
+	values = append(values, strings.ToLower(strings.TrimSpace(provider)), "anthropic", "google", "xai", "openai")
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func billingImportFirstPartyProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "anthropic", "google", "xai", "openai":
+		return true
+	default:
+		return false
+	}
+}
+
+func billingImportUniqueCatalogMatches(models []BillingModelPriceImportCatalogModel) []BillingModelPriceImportCatalogModel {
+	seen := make(map[string]struct{}, len(models))
+	result := make([]BillingModelPriceImportCatalogModel, 0, len(models))
+	for _, model := range models {
+		key := strings.ToLower(strings.TrimSpace(model.Provider)) + "\x00" + strings.ToLower(strings.TrimSpace(model.Model))
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, model)
+	}
+	return result
+}
+
+func applyBillingModelPriceImportRow(ctx context.Context, tx *gorm.DB, row BillingModelPriceImportPreviewRow) (string, error) {
+	if row.Final == nil || row.WriteRule == nil {
+		return "", ErrBillingImportInvalidSelection
+	}
+	if row.ExistingRule == nil {
+		record := BillingModelPriceRecord{ID: billingID("price"), Provider: strings.ToLower(strings.TrimSpace(row.Provider)), Model: strings.TrimSpace(row.Model), ServiceTier: row.ServiceTier, MinInputTokens: row.MinInputTokens, InputPricePerMillion: row.Final.Input, OutputPricePerMillion: row.Final.Output, CacheReadPricePerMillion: row.Final.CacheRead, CacheWritePricePerMillion: row.Final.CacheWrite, CacheWritePriceConfigured: row.Final.CacheWriteConfigured, RequestPrice: row.Final.Request, Source: BillingPriceSourceSync, Enabled: row.WriteRule.Enabled, Note: row.WriteRule.Note, Revision: 1}
+		if errCreate := tx.WithContext(ctx).Create(&record).Error; errCreate != nil {
+			return "", errCreate
+		}
+		return record.ID, nil
+	}
+	expectedRevision, errRevision := strconv.ParseInt(row.ExistingRule.Revision, 10, 64)
+	if errRevision != nil {
+		return "", ErrBillingImportRuleConflict
+	}
+	updates := map[string]any{"input_price_per_million": row.Final.Input, "output_price_per_million": row.Final.Output, "cache_read_price_per_million": row.Final.CacheRead, "cache_write_price_per_million": row.Final.CacheWrite, "cache_write_price_configured": row.Final.CacheWriteConfigured, "request_price": row.Final.Request, "source": BillingPriceSourceSync, "enabled": row.WriteRule.Enabled, "note": row.WriteRule.Note, "revision": gorm.Expr("revision + ?", 1)}
+	result := tx.WithContext(ctx).Model(&BillingModelPriceRecord{}).Where("id = ? AND revision = ?", row.ExistingRule.ID, expectedRevision).Updates(updates)
+	if result.Error != nil {
+		return "", result.Error
+	}
+	if result.RowsAffected != 1 {
+		return "", ErrBillingImportRuleConflict
+	}
+	return row.ExistingRule.ID, nil
+}
+
+func validateBillingModelPriceImportPreviewInput(input BillingModelPriceImportPreviewInput, catalog BillingModelPriceImportCatalog) error {
+	if strings.TrimSpace(input.Source) != "" && !strings.EqualFold(strings.TrimSpace(input.Source), BillingModelPriceImportSourceModelsDev) {
+		return fmt.Errorf("unsupported import source")
+	}
+	if len(input.Targets) == 0 || strings.TrimSpace(catalog.SourceURL) == "" || catalog.FetchedAt.IsZero() {
+		return fmt.Errorf("import targets and a catalog snapshot are required")
+	}
+	if input.Policy.OverwriteMode != "missing" && input.Policy.OverwriteMode != "sync" && input.Policy.OverwriteMode != "all" {
+		return fmt.Errorf("invalid overwrite_mode")
+	}
+	if !billingImportValidNumber(input.Policy.DefaultMultiplier) || input.Policy.DefaultMultiplier <= 0 {
+		return fmt.Errorf("default_multiplier must be positive and finite")
+	}
+	seen := make(map[string]struct{})
+	for _, target := range input.Targets {
+		if target.Provider == "" || target.Model == "" || target.ServiceTier != BillingServiceTierWildcard || target.MinInputTokens != 0 {
+			return fmt.Errorf("invalid import target")
+		}
+		for _, scope := range target.Scopes {
+			if scope != "available" && scope != "static" {
+				return fmt.Errorf("invalid import target scope")
+			}
+		}
+		key := billingImportTargetKey(target.Provider, target.Model)
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("duplicate import target")
+		}
+		seen[key] = struct{}{}
+	}
+	overrides := make(map[string]struct{}, len(input.MatchOverrides))
+	for _, override := range input.MatchOverrides {
+		key := billingImportTargetKey(override.TargetProvider, override.TargetModel)
+		if override.TargetProvider == "" || override.TargetModel == "" || override.SourceProvider == "" || override.SourceModel == "" {
+			return fmt.Errorf("invalid match override")
+		}
+		if _, ok := seen[key]; !ok {
+			return fmt.Errorf("match override target is not requested")
+		}
+		if _, ok := overrides[key]; ok {
+			return fmt.Errorf("duplicate match override")
+		}
+		overrides[key] = struct{}{}
+	}
+	for _, alias := range input.Policy.Aliases {
+		if strings.TrimSpace(alias.TargetModel) == "" || len(alias.SourceModels) == 0 {
+			return fmt.Errorf("invalid alias rule")
+		}
+		for _, sourceModel := range alias.SourceModels {
+			if strings.TrimSpace(sourceModel) == "" {
+				return fmt.Errorf("invalid alias rule")
+			}
+		}
+	}
+	for _, rule := range input.Policy.MultiplierRules {
+		if !billingImportValidNumber(rule.Multiplier) || rule.Multiplier <= 0 || strings.TrimSpace(rule.Pattern) == "" || (rule.MatchMode != "" && !strings.EqualFold(rule.MatchMode, "prefix") && !strings.EqualFold(rule.MatchMode, "regex")) {
+			return fmt.Errorf("invalid multiplier rule")
+		}
+		if strings.EqualFold(rule.MatchMode, "regex") {
+			if _, errRegex := regexp.Compile("(?i)" + rule.Pattern); errRegex != nil {
+				return fmt.Errorf("invalid multiplier rule")
+			}
+		}
+	}
+	for _, multiplier := range input.Policy.RowMultipliers {
+		if !billingImportValidNumber(multiplier) || multiplier <= 0 {
+			return fmt.Errorf("invalid row multiplier")
+		}
+	}
+	return nil
+}
+
+func billingImportMultiplier(policy BillingModelPriceImportPolicy, model, rowKey string) float64 {
+	if value, ok := policy.RowMultipliers[rowKey]; ok {
+		return value
+	}
+	for _, rule := range policy.MultiplierRules {
+		if strings.EqualFold(strings.TrimSpace(rule.MatchMode), "prefix") && strings.HasPrefix(strings.ToLower(model), strings.ToLower(strings.TrimSpace(rule.Pattern))) {
+			return rule.Multiplier
+		}
+		if strings.EqualFold(strings.TrimSpace(rule.MatchMode), "regex") {
+			matcher, errMatcher := regexp.Compile("(?i)" + rule.Pattern)
+			if errMatcher == nil && matcher.MatchString(model) {
+				return rule.Multiplier
+			}
+		}
+	}
+	if policy.DefaultMultiplier == 0 {
+		return 1
+	}
+	return policy.DefaultMultiplier
+}
+
+func billingImportMultiplyCost(cost BillingModelPriceImportCost, multiplier float64, includeCache bool) BillingModelPriceImportCost {
+	result := BillingModelPriceImportCost{Input: cost.Input * multiplier, Output: cost.Output * multiplier, Request: cost.Request * multiplier}
+	if includeCache {
+		result.CacheRead = cost.CacheRead * multiplier
+		result.CacheWrite = cost.CacheWrite * multiplier
+		result.CacheWriteConfigured = cost.CacheWriteConfigured
+	}
+	return result
+}
+
+func billingImportZeroCost(cost BillingModelPriceImportCost) bool {
+	return cost.Input == 0 && cost.Output == 0 && cost.CacheRead == 0 && cost.CacheWrite == 0 && cost.Request == 0
+}
+func billingImportRuleIdentity(provider, model, tier string, min int64) string {
+	return strings.ToLower(strings.TrimSpace(provider)) + "\x00" + strings.TrimSpace(model) + "\x00" + normalizeBillingPriceServiceTier(tier) + "\x00" + fmt.Sprintf("%d", min)
+}
+func billingImportTargetKey(provider, model string) string {
+	return strings.ToLower(strings.TrimSpace(provider)) + "::" + strings.TrimSpace(model)
+}
+func billingImportBareModel(model string) string {
+	if index := strings.LastIndex(strings.TrimSpace(model), "/"); index >= 0 {
+		return strings.TrimSpace(model)[index+1:]
+	}
+	return strings.TrimSpace(model)
+}
+func billingImportRuleSnapshot(rule BillingModelPriceRecord) BillingModelPriceImportRuleSnapshot {
+	return BillingModelPriceImportRuleSnapshot{ID: rule.ID, Provider: rule.Provider, Model: rule.Model, ServiceTier: rule.ServiceTier, MinInputTokens: rule.MinInputTokens, InputPricePerMillion: rule.InputPricePerMillion, OutputPricePerMillion: rule.OutputPricePerMillion, CacheReadPricePerMillion: rule.CacheReadPricePerMillion, CacheWritePricePerMillion: rule.CacheWritePricePerMillion, CacheWritePriceConfigured: rule.CacheWritePriceConfigured, RequestPrice: rule.RequestPrice, Source: rule.Source, Enabled: rule.Enabled, Note: rule.Note, Revision: strconv.FormatInt(rule.Revision, 10)}
+}
+func billingImportPreviewSummary(rows []BillingModelPriceImportPreviewRow) BillingModelPriceImportSummary {
+	var summary BillingModelPriceImportSummary
+	for _, row := range rows {
+		incrementBillingImportSummary(&summary, row.Action, row.Status)
+	}
+	return summary
+}
+func incrementBillingImportSummary(summary *BillingModelPriceImportSummary, action, status string) {
+	summary.Total++
+	switch action {
+	case "create":
+		summary.Creates++
+	case "update_sync":
+		summary.UpdatesSync++
+	case "overwrite":
+		summary.Overwrites++
+	case "skip":
+		summary.Skips++
+	default:
+		summary.Reviews++
+	}
+	if status == "conflict" {
+		summary.Conflicts++
+	}
+}
+func normalizedBillingImportSelectedKeys(keys []string) []string {
+	values := append([]string(nil), keys...)
+	for index := range values {
+		values[index] = strings.TrimSpace(values[index])
+	}
+	sort.Strings(values)
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || (len(result) > 0 && result[len(result)-1] == value) {
+			return nil
+		}
+		result = append(result, value)
+	}
+	return result
+}
+func billingImportHash(values ...string) string {
+	sum := sha256.Sum256([]byte(strings.Join(values, "\x00")))
+	return hex.EncodeToString(sum[:])
+}
+
+func (r *Repository) cleanupBillingModelPriceImports(ctx context.Context, db *gorm.DB, now time.Time) error {
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errDelete := tx.Where("expires_at < ?", now.Add(-billingImportPreviewRetention)).Delete(&BillingModelPriceImportPreviewRecord{}).Error; errDelete != nil {
+			return errDelete
+		}
+		if errDelete := tx.Where("created_at < ?", now.Add(-billingImportOperationRetention)).Delete(&BillingModelPriceImportOperationRecord{}).Error; errDelete != nil {
+			return errDelete
+		}
+		return nil
+	})
+}
+func unmarshalBillingImportOperation(raw JSONB, target *BillingModelPriceImportOperation) error {
+	if err := json.Unmarshal(raw, target); err != nil {
+		return fmt.Errorf("decode billing import operation: %w", err)
+	}
+	return nil
+}
+func billingImportValidNumber(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
+
+func migrateBillingImportIndexes(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	for _, index := range []string{
+		"idx_billing_model_price_import_operation_selection_hash",
+		"idx_billing_model_price_import_operation_records_selection_hash",
+	} {
+		if errDrop := db.Exec("DROP INDEX IF EXISTS " + index).Error; errDrop != nil {
+			return errDrop
+		}
+	}
+	return db.Exec(`CREATE INDEX IF NOT EXISTS idx_billing_model_price_import_operation_selection_hash ON billing_model_price_import_operation (selection_hash)`).Error
+}
