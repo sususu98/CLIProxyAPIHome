@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
@@ -46,6 +47,53 @@ func TestUserBillingChargesUseAuthenticatedUserOnly(t *testing.T) {
 	}
 	secondPayload := decodeUserBillingChargeList(t, secondResp)
 	assertUserBillingChargeRequests(t, secondPayload.Items, []string{"req-second"}, []string{"req-first"})
+}
+
+func TestUserBillingChargesAcceptRFC3339TimezoneRange(t *testing.T) {
+	t.Parallel()
+
+	handler, closeRepo := newUserBillingTestHandler(t)
+	defer closeRepo()
+
+	firstUser, _ := seedUserBillingCharges(t, handler)
+	token := createUserBillingBearerToken(t, handler, firstUser.ID)
+
+	tests := []struct {
+		name        string
+		from        string
+		to          string
+		wantRequest []string
+	}{
+		{
+			name:        "Shanghai June 10 includes the charge",
+			from:        "2026-06-10T00:00:00+08:00",
+			to:          "2026-06-10T23:59:59.999999999+08:00",
+			wantRequest: []string{"req-first"},
+		},
+		{
+			name: "Shanghai June 9 excludes the charge",
+			from: "2026-06-09T00:00:00+08:00",
+			to:   "2026-06-09T23:59:59.999999999+08:00",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			query := url.Values{"from": {tt.from}, "to": {tt.to}}
+			resp := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(resp)
+			ctx.Request = httptest.NewRequest(http.MethodGet, "/billing/charges?"+query.Encode(), nil)
+			ctx.Request.Header.Set("Authorization", "Bearer "+token)
+
+			handler.ListCurrentUserBillingCharges(ctx)
+
+			if resp.Code != http.StatusOK {
+				t.Fatalf("status = %d body=%s, want 200", resp.Code, resp.Body.String())
+			}
+			payload := decodeUserBillingChargeList(t, resp)
+			assertUserBillingChargeRequests(t, payload.Items, tt.wantRequest, nil)
+		})
+	}
 }
 
 func TestUserBillingOverviewUsesAuthenticatedUserOnly(t *testing.T) {
@@ -118,15 +166,77 @@ func TestUserBillingChargesValidateQuery(t *testing.T) {
 	token := createUserBillingBearerToken(t, handler, user.ID)
 
 	tests := []struct {
-		name string
-		path string
+		name        string
+		path        string
+		wantError   string
+		wantMessage string
 	}{
-		{name: "invalid limit", path: "/billing/charges?limit=0"},
-		{name: "non integer limit", path: "/billing/charges?limit=abc"},
-		{name: "invalid offset", path: "/billing/charges?offset=-1"},
-		{name: "non integer offset", path: "/billing/charges?offset=abc"},
-		{name: "invalid from", path: "/billing/charges?from=2026-06-10T00:00:00Z"},
-		{name: "invalid to", path: "/billing/charges?to=2026-06-10T00:00:00Z"},
+		{
+			name:        "invalid limit",
+			path:        "/billing/charges?limit=0",
+			wantError:   "invalid_limit",
+			wantMessage: "limit must be a positive integer",
+		},
+		{
+			name:        "non integer limit",
+			path:        "/billing/charges?limit=abc",
+			wantError:   "invalid_limit",
+			wantMessage: "limit must be a positive integer",
+		},
+		{
+			name:        "invalid offset",
+			path:        "/billing/charges?offset=-1",
+			wantError:   "invalid_offset",
+			wantMessage: "offset must be a non-negative integer",
+		},
+		{
+			name:        "non integer offset",
+			path:        "/billing/charges?offset=abc",
+			wantError:   "invalid_offset",
+			wantMessage: "offset must be a non-negative integer",
+		},
+		{
+			name:        "invalid from",
+			path:        "/billing/charges?from=not-a-time",
+			wantError:   "invalid_from",
+			wantMessage: "from must be YYYY-MM-DD, RFC3339, or unix seconds",
+		},
+		{
+			name:        "invalid to",
+			path:        "/billing/charges?to=not-a-time",
+			wantError:   "invalid_to",
+			wantMessage: "to must be YYYY-MM-DD, RFC3339, or unix seconds",
+		},
+		{
+			name:        "unix milliseconds",
+			path:        "/billing/charges?from=1783612800000",
+			wantError:   "invalid_from",
+			wantMessage: "from must be YYYY-MM-DD, RFC3339, or unix seconds",
+		},
+		{
+			name:        "date missing separators",
+			path:        "/billing/charges?from=20260710",
+			wantError:   "invalid_from",
+			wantMessage: "from must be YYYY-MM-DD, RFC3339, or unix seconds",
+		},
+		{
+			name:        "unix seconds below supported range",
+			path:        "/billing/charges?from=946684799",
+			wantError:   "invalid_from",
+			wantMessage: "from must be YYYY-MM-DD, RFC3339, or unix seconds",
+		},
+		{
+			name:        "unix seconds above supported range",
+			path:        "/billing/charges?to=253402300800",
+			wantError:   "invalid_to",
+			wantMessage: "to must be YYYY-MM-DD, RFC3339, or unix seconds",
+		},
+		{
+			name:        "from after to",
+			path:        "/billing/charges?from=2026-07-11T00:00:00Z&to=2026-07-10T23:59:59Z",
+			wantError:   "invalid_time_range",
+			wantMessage: "from must not be after to",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -139,6 +249,112 @@ func TestUserBillingChargesValidateQuery(t *testing.T) {
 
 			if resp.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d body=%s, want 400", resp.Code, resp.Body.String())
+			}
+			var payload struct {
+				Error   string `json:"error"`
+				Message string `json:"message"`
+			}
+			if errDecode := json.Unmarshal(resp.Body.Bytes(), &payload); errDecode != nil {
+				t.Fatalf("decode error response: %v", errDecode)
+			}
+			if payload.Error != tt.wantError || payload.Message != tt.wantMessage {
+				t.Fatalf("error response = %#v, want error=%q message=%q", payload, tt.wantError, tt.wantMessage)
+			}
+		})
+	}
+}
+
+func TestUserBillingDateQuerySupportsExplicitTimeRanges(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		value    string
+		endOfDay bool
+		want     time.Time
+	}{
+		{
+			name:     "date-only end includes UTC day",
+			value:    "2026-07-10",
+			endOfDay: true,
+			want:     time.Date(2026, time.July, 10, 23, 59, 59, int(time.Second-time.Nanosecond), time.UTC),
+		},
+		{
+			name:     "RFC3339 end preserves exact nanosecond boundary",
+			value:    "2026-07-10T23:59:59.999999999+08:00",
+			endOfDay: true,
+			want:     time.Date(2026, time.July, 10, 15, 59, 59, int(time.Second-time.Nanosecond), time.UTC),
+		},
+		{
+			name:     "unix seconds",
+			value:    "1783612800",
+			endOfDay: true,
+			want:     time.Unix(1783612800, 0).UTC(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodGet, "/billing/charges", nil)
+			query := ctx.Request.URL.Query()
+			query.Set("to", tt.value)
+			ctx.Request.URL.RawQuery = query.Encode()
+
+			got, ok := userBillingDateQuery(ctx, "to", tt.endOfDay)
+			if !ok || got == nil {
+				t.Fatalf("userBillingDateQuery() = %v, %v; want a parsed time", got, ok)
+			}
+			if !got.Equal(tt.want) {
+				t.Fatalf("userBillingDateQuery() = %s, want %s", got.Format(time.RFC3339Nano), tt.want.Format(time.RFC3339Nano))
+			}
+		})
+	}
+}
+
+func TestParseUserBillingTimeValidatesUnixSecondsRange(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		raw     string
+		want    time.Time
+		wantErr bool
+	}{
+		{
+			name: "minimum supported unix second",
+			raw:  "946684800",
+			want: time.Unix(userBillingMinUnixSeconds, 0).UTC(),
+		},
+		{
+			name: "maximum supported unix second",
+			raw:  "253402300799",
+			want: time.Unix(userBillingMaxUnixSeconds, 0).UTC(),
+		},
+		{name: "before supported range", raw: "946684799", wantErr: true},
+		{name: "after supported range", raw: "253402300800", wantErr: true},
+		{name: "unix milliseconds", raw: "1783612800000", wantErr: true},
+		{name: "date missing separators", raw: "20260710", wantErr: true},
+		{name: "maximum int64", raw: "9223372036854775807", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, dateOnly, errParse := parseUserBillingTime(tt.raw)
+			if tt.wantErr {
+				if errParse == nil {
+					t.Fatalf("parseUserBillingTime(%q) error = nil, want an error", tt.raw)
+				}
+				return
+			}
+			if errParse != nil {
+				t.Fatalf("parseUserBillingTime(%q) error = %v", tt.raw, errParse)
+			}
+			if dateOnly {
+				t.Fatalf("parseUserBillingTime(%q) dateOnly = true, want false", tt.raw)
+			}
+			if !got.Equal(tt.want) {
+				t.Fatalf("parseUserBillingTime(%q) = %s, want %s", tt.raw, got.Format(time.RFC3339Nano), tt.want.Format(time.RFC3339Nano))
 			}
 		})
 	}

@@ -1348,7 +1348,7 @@ Query 参数：
 
 本节所有路径都相对于 Management API 基础 URL，例如 `/v0/management/billing/overview` 或 `/v0/management/proxy/proxy-pools`。这些不是 `/user` 路由，调用时需要管理密钥。
 
-只有 `/billing/overview`、`/billing/charges` 和 `/billing/balance-records` 会将 `from` 和 `to` 解析为 `YYYY-MM-DD`、RFC3339 或 Unix 秒。只有日期的 `to` 会包含结束 UTC 日期的完整一天。分页参数 `limit` 和 `offset` 仅适用于 `/billing/charges` 和 `/billing/balance-records`；这些路由的 `limit` 默认值为 `50`，最大值为 `200`，负数 `offset` 会规范化为 `0`。`/billing/model-prices` 仅支持 `provider`、`model` 和 `enabled` 查询参数。`/proxy/proxy-pools` 当前不解析查询参数。
+只有 `/billing/overview`、`/billing/charges` 和 `/billing/balance-records` 会将 `from` 和 `to` 解析为 `YYYY-MM-DD`、RFC3339 或 Unix 秒。纯日期值使用 UTC 日历日期，只有日期的 `to` 会包含结束 UTC 日期的完整一天。显式时间戳形式的 `to` 是包含在结果内的精确时刻，不会自动扩展。需要查询完整非 UTC 自然日的客户端应发送带目标时区偏移且覆盖到最后一纳秒的 RFC3339 边界。分页参数 `limit` 和 `offset` 仅适用于 `/billing/charges` 和 `/billing/balance-records`；这些路由的 `limit` 默认值为 `50`，最大值为 `200`，负数 `offset` 会规范化为 `0`。`/billing/model-prices` 仅支持 `provider`、`model` 和 `enabled` 查询参数。`/proxy/proxy-pools` 当前不解析查询参数。
 
 ### GET `/billing/overview`
 

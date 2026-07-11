@@ -457,7 +457,7 @@ Authorization: Bearer user.jwt.token
 
 用户计费响应不包含管理员备注、全局汇总、模型价格管理数据、代理池数据、原始 API keys、脱敏 API keys、价格快照、匹配的价格规则、endpoint、`balance_before` 或其他用户的数据。
 
-用户计费的 `from` 和 `to` 查询参数只接受 `YYYY-MM-DD`。只有日期的 `to` 会包含结束 UTC 日期的完整一天。
+用户计费的 `from` 和 `to` 查询参数接受 `YYYY-MM-DD`、RFC3339 或 Unix 秒。Unix 秒值必须位于 `2000-01-01T00:00:00Z` 到 `9999-12-31T23:59:59Z` 之间；毫秒时间戳会被拒绝。只有日期的 `to` 会包含结束 UTC 日期的完整一天。显式时间戳形式的 `to` 是包含在结果内的精确时刻，不会自动扩展。需要查询完整非 UTC 自然日的客户端应发送带目标时区偏移且覆盖到最后一纳秒的 RFC3339 边界，例如 `23:59:59.999999999+08:00`。
 
 ### GET `/billing/overview`
 
@@ -473,8 +473,8 @@ Authorization: Bearer user.jwt.token
 
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
-| `from` | string | 可选开始日期，格式为 `YYYY-MM-DD`。 |
-| `to` | string | 可选结束日期，格式为 `YYYY-MM-DD`；包含完整 UTC 当天。 |
+| `from` | string | 可选开始时间：`YYYY-MM-DD`、RFC3339 或 Unix 秒。 |
+| `to` | string | 可选结束时间，包含该时刻；纯日期包含完整 UTC 当天，显式时间戳精确保留。 |
 
 响应示例：
 
@@ -519,8 +519,8 @@ Authorization: Bearer user.jwt.token
 
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
-| `from` | string | 可选开始日期，格式为 `YYYY-MM-DD`。 |
-| `to` | string | 可选结束日期，格式为 `YYYY-MM-DD`；包含完整 UTC 当天。 |
+| `from` | string | 可选开始时间：`YYYY-MM-DD`、RFC3339 或 Unix 秒。 |
+| `to` | string | 可选结束时间，包含该时刻；纯日期包含完整 UTC 当天，显式时间戳精确保留。 |
 | `limit` | integer | 可选分页大小；默认 `50`，最大 `200`。非法的非正数或非整数会返回 `400`。 |
 | `offset` | integer | 可选分页偏移；默认 `0`。负数或非整数会返回 `400`。 |
 
@@ -566,8 +566,9 @@ Authorization: Bearer user.jwt.token
 ```json
 { "error": "bearer_token_required", "message": "bearer token is required" }
 { "error": "invalid_token", "message": "invalid token" }
-{ "error": "invalid_from", "message": "from must be YYYY-MM-DD" }
-{ "error": "invalid_to", "message": "to must be YYYY-MM-DD" }
+{ "error": "invalid_from", "message": "from must be YYYY-MM-DD, RFC3339, or unix seconds" }
+{ "error": "invalid_to", "message": "to must be YYYY-MM-DD, RFC3339, or unix seconds" }
+{ "error": "invalid_time_range", "message": "from must not be after to" }
 { "error": "invalid_limit", "message": "limit must be a positive integer" }
 { "error": "invalid_offset", "message": "offset must be a non-negative integer" }
 ```
