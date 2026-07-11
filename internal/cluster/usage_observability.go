@@ -2408,7 +2408,7 @@ func usageObservabilityAggregateItemFromRow(row *usageObservabilityAggregateRow,
 		item.ErrorRate = float64(item.FailedCount) / float64(item.RequestCount)
 	}
 	if item.TotalTokens > 0 {
-		cacheTokens := item.CachedTokens + item.CacheReadTokens + item.CacheCreationTokens
+		cacheTokens := usageObservabilityCacheTokens(item.CachedTokens, item.CacheReadTokens, item.CacheCreationTokens)
 		item.CacheRate = float64(cacheTokens) / float64(item.TotalTokens)
 	}
 	if row.TotalAmount.Valid {
@@ -2840,6 +2840,14 @@ func (a *usageObservabilityAggregateAccumulator) add(row *usageObservabilityReco
 	}
 }
 
+func usageObservabilityCacheTokens(cachedTokens int64, cacheReadTokens int64, cacheCreationTokens int64) int64 {
+	explicitTokens := cacheReadTokens + cacheCreationTokens
+	if explicitTokens > 0 {
+		return explicitTokens
+	}
+	return cachedTokens
+}
+
 func (a *usageObservabilityAggregateAccumulator) result() UsageObservabilityAggregateItem {
 	item := a.Item
 	if item.RequestCount > 0 {
@@ -2847,7 +2855,7 @@ func (a *usageObservabilityAggregateAccumulator) result() UsageObservabilityAggr
 		item.ErrorRate = float64(item.FailedCount) / float64(item.RequestCount)
 	}
 	if item.TotalTokens > 0 {
-		cacheTokens := item.CachedTokens + item.CacheReadTokens + item.CacheCreationTokens
+		cacheTokens := usageObservabilityCacheTokens(item.CachedTokens, item.CacheReadTokens, item.CacheCreationTokens)
 		item.CacheRate = float64(cacheTokens) / float64(item.TotalTokens)
 	}
 	if a.AmountValid {

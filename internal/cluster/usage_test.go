@@ -24,6 +24,18 @@ func TestUsageRecordFromPayloadStoresRequestIDAndHomeIP(t *testing.T) {
 	}
 }
 
+func TestUsageRecordFromPayloadUsesCanonicalCacheCreationField(t *testing.T) {
+	payload := `{"timestamp":"2026-07-12T01:02:03Z","tokens":{"cache_creation_tokens":11,"cache_write_tokens":22}}`
+
+	record, errRecord := UsageRecordFromPayload(payload, "192.0.2.10")
+	if errRecord != nil {
+		t.Fatalf("UsageRecordFromPayload: %v", errRecord)
+	}
+	if record.CacheCreationTokens != 11 {
+		t.Fatalf("cache creation tokens = %d, want 11", record.CacheCreationTokens)
+	}
+}
+
 func TestUsageRecordFromPayloadWithRuntimeStoresOwnershipColumns(t *testing.T) {
 	payload := `{"timestamp":"2026-07-09T01:02:03Z","request_id":"req-runtime-1","endpoint":"/v1/responses","upstream_status_code":"202","tokens":{"total_tokens":3}}`
 

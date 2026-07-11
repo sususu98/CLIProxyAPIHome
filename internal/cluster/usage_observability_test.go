@@ -259,6 +259,27 @@ func TestListUsageObservabilityRecordsJoinsBillingAndMasksClientKey(t *testing.T
 	}
 }
 
+func TestUsageObservabilityAggregateCacheRateUsesExplicitBuckets(t *testing.T) {
+	t.Parallel()
+
+	row := &usageObservabilityAggregateRow{
+		CachedTokens:        20,
+		CacheReadTokens:     20,
+		CacheCreationTokens: 10,
+		TotalTokens:         100,
+	}
+	item := usageObservabilityAggregateItemFromRow(row, "provider")
+	if item.CacheRate != 0.3 {
+		t.Fatalf("cache rate = %v, want 0.3", item.CacheRate)
+	}
+
+	accumulator := usageObservabilityAggregateAccumulator{Item: item}
+	accumulator.Item.CacheRate = 0
+	if result := accumulator.result(); result.CacheRate != 0.3 {
+		t.Fatalf("accumulator cache rate = %v, want 0.3", result.CacheRate)
+	}
+}
+
 func TestListUsageObservabilityAggregatesSortsBeforePagination(t *testing.T) {
 	t.Parallel()
 
