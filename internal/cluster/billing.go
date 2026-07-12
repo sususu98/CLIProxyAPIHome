@@ -1187,15 +1187,14 @@ func billingChargeAmount(usage *UsageRecord, snapshot BillingPriceSnapshot) floa
 	inputTokens := usage.InputTokens
 	cacheReadTokens := usage.CacheReadTokens
 	cacheWritePriceConfigured := snapshot.CacheWritePriceConfigured || snapshot.CacheWritePricePerMillion > 0
+	if cacheReadTokens == 0 && usage.CachedTokens > 0 {
+		cacheReadTokens = usage.CachedTokens
+	}
 	// OpenAI-style cached_tokens are included in input_tokens. Claude reports
 	// cache_read_tokens/cache_creation_tokens as separate billing buckets.
 	cacheWriteTokens := usage.CacheCreationTokens
-	if !billingUsesSeparateCacheBuckets(usage) {
-		cacheReadTokens = usage.CachedTokens
+	if billingCacheReadIncludedInInput(usage) {
 		inputTokens -= cacheReadTokens
-		if cacheWritePriceConfigured {
-			inputTokens -= cacheWriteTokens
-		}
 		if inputTokens < 0 {
 			inputTokens = 0
 		}
@@ -1208,6 +1207,21 @@ func billingChargeAmount(usage *UsageRecord, snapshot BillingPriceSnapshot) floa
 		float64(usage.OutputTokens)*snapshot.OutputPricePerMillion/1000000 +
 		float64(cacheReadTokens)*snapshot.CacheReadPricePerMillion/1000000 +
 		float64(cacheWriteTokens)*snapshot.CacheWritePricePerMillion/1000000
+}
+
+func billingCacheReadIncludedInInput(usage *UsageRecord) bool {
+	if usage == nil || (usage.CacheReadTokens <= 0 && usage.CachedTokens <= 0) {
+		return false
+	}
+	provider := strings.ToLower(strings.TrimSpace(usage.Provider))
+	executorType := strings.ToLower(strings.TrimSpace(usage.ExecutorType))
+	if executorType == "openaicompatexecutor" || provider == "openai-compatibility" || strings.HasPrefix(provider, "openai-compatible-") {
+		return true
+	}
+	return !strings.Contains(provider, "claude") &&
+		!strings.Contains(provider, "anthropic") &&
+		!strings.Contains(executorType, "claude") &&
+		!strings.Contains(executorType, "anthropic")
 }
 
 func billingUsageHasBillableActivity(usage *UsageRecord, amount float64) bool {

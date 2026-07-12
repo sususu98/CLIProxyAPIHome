@@ -436,6 +436,31 @@ func TestAppendUsageUnlimitedCreditsKeepsBalanceAndRecordsCharge(t *testing.T) {
 	}
 }
 
+func TestBillingChargeAmountNormalizesOpenAICacheBuckets(t *testing.T) {
+	t.Parallel()
+
+	usage := &UsageRecord{
+		Provider:            "openai",
+		InputTokens:         1000000,
+		CachedTokens:        250000,
+		CacheReadTokens:     250000,
+		CacheCreationTokens: 100000,
+	}
+	snapshot := BillingPriceSnapshot{
+		InputPricePerMillion:      2,
+		CacheReadPricePerMillion:  0.5,
+		CacheWritePricePerMillion: 3,
+	}
+	if amount := billingChargeAmount(usage, snapshot); amount != 1.925 {
+		t.Fatalf("billingChargeAmount() = %v, want 1.925", amount)
+	}
+
+	usage.CachedTokens = 0
+	if amount := billingChargeAmount(usage, snapshot); amount != 1.925 {
+		t.Fatalf("billingChargeAmount() with explicit cache read = %v, want 1.925", amount)
+	}
+}
+
 func TestAppendUsageChargesCachedTokensWithCacheReadPrice(t *testing.T) {
 	t.Parallel()
 

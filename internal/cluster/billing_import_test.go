@@ -285,14 +285,14 @@ func TestBillingModelPriceImportRejectsChangedRuleRevision(t *testing.T) {
 	}
 }
 
-func TestBillingChargeAmountDistinguishesConfiguredZeroCacheWritePrice(t *testing.T) {
+func TestBillingChargeAmountKeepsConfiguredZeroCacheWritePriceFree(t *testing.T) {
 	t.Parallel()
 
 	usage := &UsageRecord{Provider: "openai", ExecutorType: "OpenAICompatExecutor", InputTokens: 1000, CacheCreationTokens: 100}
 	configured := billingChargeAmount(usage, BillingPriceSnapshot{InputPricePerMillion: 1000, CacheWritePricePerMillion: 0, CacheWritePriceConfigured: true})
 	omitted := billingChargeAmount(usage, BillingPriceSnapshot{InputPricePerMillion: 1000, CacheWritePricePerMillion: 0})
-	if configured != 0.9 || omitted != 1 {
-		t.Fatalf("configured/omitted cache-write charge = %g/%g, want 0.9/1", configured, omitted)
+	if configured != 1 || omitted != 1 {
+		t.Fatalf("configured/omitted cache-write charge = %g/%g, want 1/1", configured, omitted)
 	}
 }
 
