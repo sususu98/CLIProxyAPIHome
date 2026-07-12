@@ -2448,7 +2448,7 @@ Key `UsageRecordSummary` fields:
 | `billing.balance_before` / `billing.balance_after` | number/null | Balance before and after the charge when linked to `billing_charge`. |
 | `runtime.home_ip` / `runtime.home_port` | string/integer/null | Home node identity that persisted the usage record. |
 | `runtime.cpa_node_id` / `runtime.cpa_ip` / `runtime.cpa_port` / `runtime.cpa_label` | mixed | CPA ownership fields. Home fills missing CPA node ID/IP from the trusted RESP/mTLS runtime identity when the CPA payload does not report them. |
-| `runtime.request_log_available` | boolean | Whether the current Home node can find a downloadable local request log file. |
+| `runtime.request_log_available` | boolean | Whether the request log is locally present or can be downloaded through configured cluster forwarding. Remote availability is routability, not a remote file-existence guarantee. |
 | `runtime.log_home_ip_required` | boolean | Whether request log download requires the Home IP. |
 
 ### GET `/usage/overview`
@@ -2511,7 +2511,7 @@ Query parameters:
 | `include_payload` | boolean | `false` | Return a redacted payload summary. |
 | `include_logs` | boolean | `false` | Return up to 20 redacted log lines when a local request log is found. Remote nodes or missing files return an empty array. |
 
-The response contains `record`, `payload_summary`, `log_excerpt`, and `related`. `payload_summary` only contains `method`, `stream`, `message_count`, and `tool_count`; raw payloads are never returned.
+The response contains `record`, `payload_summary`, `log_excerpt`, and `related`. `payload_summary` only contains `method`, `stream`, `message_count`, and `tool_count`; raw payloads are never returned. `related.request_log` contains `request_id`, `home_ip`, `home_port`, `available`, and `download_url` with the same local-file and remote-forwarding availability semantics as the request event APIs.
 
 ### GET `/usage/aggregates`
 
@@ -2581,7 +2581,7 @@ The response contains `items`, `total`, `limit`, `offset`, and `sort`. `items[]`
 | `client` | object | User, client key ID/label, redacted `client_key_masked`, and caller client IP. |
 | `error` | object | Redacted error status, upstream status, reason, message, and body preview. |
 | `tokens` / `performance` / `billing` | object | Token, latency/TTFT/TPS, and billing metadata. |
-| `related.request_log` | object | Request log link metadata, including `home_ip` and `home_port` when available. `available=true` and `download_url` are returned only when the current Home can find the local log file. |
+| `related.request_log` | object | Request log link metadata, including `home_ip` and `home_port` when available. Local availability is checked against the filesystem. For a remote Home, `available=true` and `download_url` mean cluster forwarding is configured and the download can be attempted. |
 
 ### GET `/request-events/filter-options`
 
@@ -2610,7 +2610,7 @@ Query parameters:
 | `include_logs` | boolean | `false` | Return up to 20 redacted log lines when a local request log is found. |
 | `include_related` | boolean | `false` | Compatibility parameter. The event object always includes `related`. |
 
-The response contains `event`, `payload_summary`, and `log_excerpt`. `event` has the same shape as list items. `payload_summary.body_preview` is always `null` to avoid exposing request bodies.
+The response contains `event`, `payload_summary`, and `log_excerpt`. `event` has the same shape as list items. `payload_summary.body_preview` is always `null` to avoid exposing request bodies. Log excerpts are local-only; remote logs are downloaded through `related.request_log.download_url` instead.
 
 ### GET `/request-events/export`
 
@@ -2644,7 +2644,7 @@ Returns recent-window health status by execution credential. Parameters are the 
 
 ### GET `/request-logs`
 
-Returns the request log index. The index is generated from usage records and checks the current Home node for matching local request log files.
+Returns the request log index. The index is generated from usage records. Local records are checked against the current Home filesystem; remote records are marked routable when cluster forwarding is configured.
 
 Query parameters:
 
@@ -2658,7 +2658,7 @@ Query parameters:
 | `limit` / `offset` | integer | `50` / `0` | Pagination. |
 | `search` | string | none | DB-side fuzzy search across request ID, model, provider, and status. Numeric timestamps or `.log` file name searches are matched against local file names within at most `10000` base records. |
 
-`items[]` contains `id`, `request_id`, `timestamp`, `home_ip`, `home_port`, `file_name`, `size_bytes`, `available`, `provider`, `model`, `status`, and `download_url`. `available=true` and a non-empty `download_url` are returned only when the current node can find the local file. Missing files or files owned by remote nodes return `available=false`. Actual downloads still use the existing `GET /request-log-by-id/:id`; when `home_port` is available, generated download URLs include both `home_ip` and `home_port`.
+`items[]` contains `id`, `request_id`, `timestamp`, `home_ip`, `home_port`, `file_name`, `size_bytes`, `available`, `provider`, `model`, `status`, and `download_url`. Local files return exact availability, file name, and size. Remote records return `available=true` and a non-empty `download_url` when cluster forwarding is configured; `file_name` and `size_bytes` can be `null` because the current Home does not inspect the remote filesystem. Actual downloads use `GET /request-log-by-id/:id`, and generated URLs include both `home_ip` and `home_port` when available. The download remains authoritative and can return `404` if a remote file was deleted or `502` if the target Home is unavailable.
 
 ### GET `/usage-queue`
 

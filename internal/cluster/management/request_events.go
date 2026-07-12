@@ -355,12 +355,12 @@ func requestEventRelatedResponse(record *cluster.UsageObservabilityRecord) gin.H
 			"home_ip":      record.Runtime.HomeIP,
 			"home_port":    optionalPositiveIntValue(record.Runtime.HomePort),
 			"available":    record.Runtime.RequestLogAvailable,
-			"download_url": requestEventRequestLogDownloadURL(record),
+			"download_url": requestLogDownloadURL(record),
 		},
 	}
 }
 
-func requestEventRequestLogDownloadURL(record *cluster.UsageObservabilityRecord) any {
+func requestLogDownloadURL(record *cluster.UsageObservabilityRecord) any {
 	if record == nil || !record.Runtime.RequestLogAvailable || strings.TrimSpace(record.RequestID) == "" {
 		return nil
 	}

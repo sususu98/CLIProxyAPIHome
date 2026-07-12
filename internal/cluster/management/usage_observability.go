@@ -136,15 +136,21 @@ func (h *Handler) GetUsageRecord(c *gin.Context) {
 	if includeLogs {
 		logExcerpt = h.usageRequestLogExcerpt(record)
 	}
+	recordCopy := *record
+	available, _, _ := h.usageRequestLogAvailability(recordCopy.Runtime.HomeIP, recordCopy.Runtime.HomePort, recordCopy.RequestID)
+	recordCopy.Runtime.RequestLogAvailable = available
 	c.JSON(http.StatusOK, gin.H{
-		"record":          h.usageRecordSummaryResponse(record),
+		"record":          usageRecordSummaryResponse(&recordCopy),
 		"payload_summary": payloadSummary,
 		"log_excerpt":     logExcerpt,
 		"related": gin.H{
 			"charge_id": emptyStringAsNil(record.Billing.ChargeID),
 			"request_log": gin.H{
-				"request_id": record.RequestID,
-				"home_ip":    record.Runtime.HomeIP,
+				"request_id":   recordCopy.RequestID,
+				"home_ip":      recordCopy.Runtime.HomeIP,
+				"home_port":    optionalPositiveIntValue(recordCopy.Runtime.HomePort),
+				"available":    recordCopy.Runtime.RequestLogAvailable,
+				"download_url": requestLogDownloadURL(&recordCopy),
 			},
 		},
 	})
@@ -1435,7 +1441,7 @@ func (h *Handler) usageRequestLogAvailability(homeIP string, homePort int, reque
 		return false, nil, nil
 	}
 	if h.requestLogTargetIsRemote(homeIP, homePort) {
-		return false, nil, nil
+		return h.remoteRequestLogDownloadAvailable(homeIP), nil, nil
 	}
 	name, path, errFind := findRequestLogFile(homeLogDirectory, requestID)
 	if errFind != nil {
@@ -1446,6 +1452,10 @@ func (h *Handler) usageRequestLogAvailability(homeIP string, homePort int, reque
 		return false, nil, nil
 	}
 	return true, name, info.Size()
+}
+
+func (h *Handler) remoteRequestLogDownloadAvailable(homeIP string) bool {
+	return h != nil && h.repo != nil && h.forwardTLSConfig != nil && strings.TrimSpace(homeIP) != ""
 }
 
 func (h *Handler) usageRequestLogExcerpt(record *cluster.UsageObservabilityRecord) []string {

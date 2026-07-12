@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -349,10 +350,11 @@ func TestGetRequestEventReturnsDetailWithRedactedLogExcerpt(t *testing.T) {
 	}
 }
 
-func TestGetRequestEventIgnoresLocalLogWhenHomePortDiffers(t *testing.T) {
+func TestGetRequestEventKeepsRemoteLogRoutableWhenHomePortDiffers(t *testing.T) {
 	handler, closeRepo := newUsageObservabilityTestHandler(t)
 	defer closeRepo()
 	handler.nodePort = 8327
+	handler.forwardTLSConfig = &tls.Config{}
 
 	requestID := "req-same-ip-port"
 	payload := `{"timestamp":"2026-06-10T01:02:05Z","event_type":"completion","provider":"openai","model":"gpt-4.1-mini","request_id":"req-same-ip-port","endpoint":"/v1/chat/completions","latency_ms":100,"tokens":{"total_tokens":1}}`
@@ -401,12 +403,65 @@ func TestGetRequestEventIgnoresLocalLogWhenHomePortDiffers(t *testing.T) {
 	if !ok {
 		t.Fatalf("request_log = %T, want object", related["request_log"])
 	}
-	if requestLog["available"] != false || requestLog["download_url"] != nil {
-		t.Fatalf("request_log = %#v, want unavailable remote-port log", requestLog)
+	if requestLog["available"] != true {
+		t.Fatalf("request_log.available = %v, want true", requestLog["available"])
+	}
+	wantDownloadURL := "/request-log-by-id/req-same-ip-port?home_ip=192.0.2.10&home_port=8328"
+	if requestLog["download_url"] != wantDownloadURL {
+		t.Fatalf("request_log.download_url = %v, want %s", requestLog["download_url"], wantDownloadURL)
 	}
 	excerpt, ok := response["log_excerpt"].([]any)
 	if !ok || len(excerpt) != 0 {
 		t.Fatalf("log_excerpt = %#v, want empty for remote-port log", response["log_excerpt"])
+	}
+}
+
+func TestGetUsageRecordMarksRemoteRequestLogRoutable(t *testing.T) {
+	handler, closeRepo := newUsageObservabilityTestHandler(t)
+	defer closeRepo()
+	handler.nodePort = 8327
+	handler.forwardTLSConfig = &tls.Config{}
+
+	payload := `{"timestamp":"2026-06-10T01:02:05Z","event_type":"completion","provider":"openai","model":"gpt-4.1-mini","request_id":"req-remote-usage-detail","endpoint":"/v1/chat/completions","latency_ms":100,"tokens":{"total_tokens":1}}`
+	record, errUsage := handler.repo.AppendUsageWithRuntime(context.Background(), payload, cluster.UsageRuntimeMetadata{HomeIP: "192.0.2.20", HomePort: 8328})
+	if errUsage != nil {
+		t.Fatalf("AppendUsage(remote) error = %v", errUsage)
+	}
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/usage/records/:id", handler.GetUsageRecord)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/usage/records/%d", record.ID), nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want %d", resp.Code, resp.Body.String(), http.StatusOK)
+	}
+	var response map[string]any
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &response); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	usageRecord, ok := response["record"].(map[string]any)
+	if !ok {
+		t.Fatalf("record = %T, want object", response["record"])
+	}
+	runtime, ok := usageRecord["runtime"].(map[string]any)
+	if !ok || runtime["request_log_available"] != true {
+		t.Fatalf("record.runtime = %#v, want request_log_available=true", usageRecord["runtime"])
+	}
+	related, ok := response["related"].(map[string]any)
+	if !ok {
+		t.Fatalf("related = %T, want object", response["related"])
+	}
+	requestLog, ok := related["request_log"].(map[string]any)
+	if !ok || requestLog["available"] != true {
+		t.Fatalf("related.request_log = %#v, want available=true", related["request_log"])
+	}
+	wantDownloadURL := "/request-log-by-id/req-remote-usage-detail?home_ip=192.0.2.20&home_port=8328"
+	if requestLog["download_url"] != wantDownloadURL {
+		t.Fatalf("related.request_log.download_url = %v, want %s", requestLog["download_url"], wantDownloadURL)
 	}
 }
 
@@ -1171,6 +1226,49 @@ func TestListRequestLogsMarksUnavailableWhenFileMissing(t *testing.T) {
 	}
 	if item["download_url"] != nil {
 		t.Fatalf("download_url = %v, want nil", item["download_url"])
+	}
+}
+
+func TestListRequestLogsMarksRemoteLogRoutable(t *testing.T) {
+	handler, closeRepo := newUsageObservabilityTestHandler(t)
+	defer closeRepo()
+	handler.nodePort = 8327
+	handler.forwardTLSConfig = &tls.Config{}
+
+	payload := `{"timestamp":"2026-06-10T01:02:05Z","event_type":"completion","provider":"openai","model":"gpt-4.1-mini","request_id":"req-remote-index","endpoint":"/v1/chat/completions","latency_ms":100,"tokens":{"total_tokens":1}}`
+	if _, errUsage := handler.repo.AppendUsageWithRuntime(context.Background(), payload, cluster.UsageRuntimeMetadata{HomeIP: "192.0.2.20", HomePort: 8328}); errUsage != nil {
+		t.Fatalf("AppendUsage(remote) error = %v", errUsage)
+	}
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/request-logs", handler.ListRequestLogs)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/request-logs?request_id=req-remote-index", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want %d", resp.Code, resp.Body.String(), http.StatusOK)
+	}
+	var response map[string]any
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &response); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	items, ok := response["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("items = %#v, want one item", response["items"])
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("item = %T, want object", items[0])
+	}
+	if item["available"] != true || item["file_name"] != nil || item["size_bytes"] != nil {
+		t.Fatalf("item = %#v, want routable remote log without local metadata", item)
+	}
+	wantDownloadURL := "/request-log-by-id/req-remote-index?home_ip=192.0.2.20&home_port=8328"
+	if item["download_url"] != wantDownloadURL {
+		t.Fatalf("download_url = %v, want %s", item["download_url"], wantDownloadURL)
 	}
 }
 
