@@ -22,6 +22,7 @@ type Handler struct {
 	heartbeatTimeout      time.Duration
 	forwardTLSConfig      *tls.Config
 	pluginStoreHTTPClient pluginstore.HTTPDoer
+	modelsDevHTTPClient   *http.Client
 }
 
 // NewHandler creates a new handler.
@@ -50,6 +51,14 @@ func (h *Handler) SetPluginStoreHTTPClient(client pluginstore.HTTPDoer) {
 		return
 	}
 	h.pluginStoreHTTPClient = client
+}
+
+// SetModelsDevHTTPClient sets the HTTP client used for server-side pricing imports.
+func (h *Handler) SetModelsDevHTTPClient(client *http.Client) {
+	if h == nil {
+		return
+	}
+	h.modelsDevHTTPClient = client
 }
 
 // requestContext handles a request context.

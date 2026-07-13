@@ -22,6 +22,7 @@ type billingModelPriceRequest struct {
 	OutputPricePerMillion     *float64 `json:"output_price_per_million"`
 	CacheReadPricePerMillion  *float64 `json:"cache_read_price_per_million"`
 	CacheWritePricePerMillion *float64 `json:"cache_write_price_per_million"`
+	CacheWritePriceConfigured *bool    `json:"cache_write_price_configured"`
 	RequestPrice              *float64 `json:"request_price"`
 	Source                    *string  `json:"source"`
 	Enabled                   *bool    `json:"enabled"`
@@ -306,6 +307,7 @@ func billingModelPriceUpdateFromRequest(c *gin.Context, body billingModelPriceRe
 		OutputPricePerMillion:     floatValue(body.OutputPricePerMillion),
 		CacheReadPricePerMillion:  floatValue(body.CacheReadPricePerMillion),
 		CacheWritePricePerMillion: floatValue(body.CacheWritePricePerMillion),
+		CacheWritePriceConfigured: boolValue(body.CacheWritePriceConfigured),
 		RequestPrice:              floatValue(body.RequestPrice),
 		Source:                    strings.TrimSpace(billingStringValue(body.Source)),
 		Enabled:                   true,
@@ -384,6 +386,7 @@ func billingModelPricePatchFromRequest(c *gin.Context, body billingModelPriceReq
 	patch.OutputPricePerMillion = body.OutputPricePerMillion
 	patch.CacheReadPricePerMillion = body.CacheReadPricePerMillion
 	patch.CacheWritePricePerMillion = body.CacheWritePricePerMillion
+	patch.CacheWritePriceConfigured = body.CacheWritePriceConfigured
 	patch.RequestPrice = body.RequestPrice
 	if body.Source != nil {
 		source := strings.TrimSpace(*body.Source)
@@ -411,6 +414,13 @@ func floatValue(value *float64) float64 {
 	return *value
 }
 
+func boolValue(value *bool) bool {
+	if value == nil {
+		return false
+	}
+	return *value
+}
+
 func int64Value(value *int64) int64 {
 	if value == nil {
 		return 0
@@ -432,12 +442,14 @@ func billingModelPriceResponse(record *cluster.BillingModelPriceRecord) gin.H {
 		"output_price_per_million":      record.OutputPricePerMillion,
 		"cache_read_price_per_million":  record.CacheReadPricePerMillion,
 		"cache_write_price_per_million": record.CacheWritePricePerMillion,
+		"cache_write_price_configured":  record.CacheWritePriceConfigured,
 		"request_price":                 record.RequestPrice,
 		"source":                        record.Source,
 		"enabled":                       record.Enabled,
 		"note":                          record.Note,
 		"created_at":                    record.CreatedAt,
 		"updated_at":                    record.UpdatedAt,
+		"revision":                      record.Revision,
 	}
 }
 

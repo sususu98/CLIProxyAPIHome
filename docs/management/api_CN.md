@@ -118,8 +118,12 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `POST` | `/billing/model-prices` |
 | `PATCH` | `/billing/model-prices/:id` |
 | `DELETE` | `/billing/model-prices/:id` |
+| `POST` | `/billing/model-prices/import/preview` |
+| `POST` | `/billing/model-prices/import/apply` |
+| `GET` | `/billing/model-prices/import/operations/:id` |
 | `GET` | `/billing/settings` |
 | `PATCH` | `/billing/settings` |
+| `GET` | `/billing/settings/diagnostics` |
 | `GET` | `/usage/overview` |
 | `GET` | `/usage/records` |
 | `GET` | `/usage/records/:id` |
@@ -1535,12 +1539,14 @@ Query 参数：
 | `output_price_per_million` | number | Output-token 价格。 |
 | `cache_read_price_per_million` | number | Cache-read token 价格。 |
 | `cache_write_price_per_million` | number | Cache-write token 价格。 |
+| `cache_write_price_configured` | boolean | 是否显式配置了 cache-write 价格；显式的零价格也为 `true`。 |
 | `request_price` | number | 每请求价格。 |
 | `source` | string | 价格来源。 |
 | `enabled` | boolean | 规则是否启用。 |
 | `note` | string | 操作备注。 |
 | `created_at` | string | 创建时间。 |
 | `updated_at` | string | 最近更新时间。 |
+| `revision` | integer | 用于导入并发冲突检测的单调递增规则版本。 |
 
 ### POST `/billing/model-prices`
 
@@ -1558,6 +1564,7 @@ Query 参数：
 | `output_price_per_million` | number | 否 | 非负 output-token 价格。 |
 | `cache_read_price_per_million` | number | 否 | 非负 cache-read token 价格。 |
 | `cache_write_price_per_million` | number | 否 | 非负 cache-write token 价格。 |
+| `cache_write_price_configured` | boolean | 否 | 是否显式配置 cache-write 价格，显式零价也包括在内。与 `cache_write_price_per_million: 0` 一起设置，可区分免费 cache-write bucket 与未配置价格。 |
 | `request_price` | number | 否 | 非负每请求价格。 |
 | `source` | string | 否 | 价格来源，例如 `manual`。 |
 | `enabled` | boolean | 否 | 规则是否启用；默认 `true`。 |
@@ -1607,7 +1614,29 @@ Query 参数：
 { "service_tier_source": "response" }
 ```
 
-扣费 `price_snapshot` 审计数据包含 `requested_service_tier`、可选的 `response_service_tier`、`service_tier_source`、`effective_service_tier`、`response_tier_fallback`、`matched_service_tier` 和 `min_input_tokens`。上下文分段使用原始 input-token 总数。OpenAI 风格的独立 cache-read 与 cache-write 价格会从普通 input 中扣除；cache-write 价格为零时，cache-write 仍按普通 input 计费。Claude 风格的独立缓存桶保持现有行为。
+扣费 `price_snapshot` 审计数据包含 `requested_service_tier`、可选的 `response_service_tier`、`service_tier_source`、`effective_service_tier`、`response_tier_fallback`、`matched_service_tier` 和 `min_input_tokens`。上下文分段使用原始 input-token 总数。OpenAI 风格的独立 cache-read 与显式配置的 cache-write 会从普通 input 中扣除；未配置的 cache-write 仍按普通 input 计费，而显式配置为零的 bucket 仍可审计。Claude 风格的独立缓存桶保持现有行为。
+
+### POST `/billing/model-prices/import/preview`
+
+创建服务端的不可变 `models.dev` 导入预览。服务端拉取并固定来源快照；客户端提供目标、匹配策略、别名、行倍率和可选的来源匹配覆盖。响应包含 `preview_id`、`preview_revision`、来源信息、`generated_at`、`expires_at`、明确的 `atomic: true`、行和精确汇总。
+
+当前 preview target 只描述通配符 base 规则（`service_tier: "*"`、`min_input_tokens: 0`）；其他 target scope 会被拒绝，不会被静默改写。已匹配行会包含官方价格、倍率后的最终价格、`cache_write_price_configured`、精确的 `write_rule`、带 `revision` 的完整可选 `existing_rule` 快照，以及机器可读的原因。models.dev 上下文分段会生成不同包含式下界的通配符行；`row_multipliers` 按返回的精确 row key 生效，包含 context-band 行。排除 cache 价格时，更新会保留已有 cache 价格，不会将其清空。出现不支持的价格维度、格式错误或无效的价格/分段、重复分段，或 tier 缺少 base 已配置价格维度时，整个 target 都不可应用，服务端不会导入可能低估计费的子集。
+
+`policy.overwrite_mode` 可为 `missing`、`sync` 或 `all`。`missing` 只创建缺失规则，`sync` 可更新已有 `source=sync` 规则，`all` 还可覆盖 manual/default 规则。`overwrite` 行在 apply 时必须确认。
+
+### POST `/billing/model-prices/import/apply`
+
+在一个数据库事务中应用 preview 的选中行。请求体包含 `preview_id`、`preview_revision`、非空且唯一的 `selected_keys`、`confirm_overwrite` 和 `idempotency_key`；相同 key 也可放在 `Idempotency-Key` 请求头中，两者同时存在时必须一致。
+
+预览过期返回 `410`，预览版本不符返回 `412`，已有规则已变化（包括同一身份被并发创建）返回 `409`；无效选择、未确认覆盖或用不同请求复用幂等 key 返回 `422`。相同 key 的等价重放返回原始不可变 operation，且不会再次写入。成功时同步返回 `200`，包含 `operation_id`、`preview_id`、`status: "applied"`、`atomic: true`、`applied_at`、汇总和每个选中行的结果。每个成功行都包含非空 `resource_id`。过期 preview 最多保留 24 小时用于诊断，完成的 operation 最多保留 30 天；后续创建 preview 时会清理它们。
+
+### GET `/billing/model-prices/import/operations/:id`
+
+返回持久化的不可变 apply operation 结果。未知 operation ID 返回 `404`。当前 apply 为同步执行，因此终态是 `applied`，而不是 `pending` 或 `running`。
+
+### GET `/billing/settings/diagnostics`
+
+返回基于存储 usage 的 tier 证据：`supported`、`window_start`、`window_end`、`eligible_requests`、`response_tier_requests`、`fallback_requests` 和可选的 `last_response_tier_at`。eligible request 指近期带 request service tier 的记录；fallback request 指其中没有 response service tier 的记录。该接口只报告实际观测到的 payload 数据，不推断 response-tier 覆盖率。
 
 ### GET `/proxy/proxy-pools`
 

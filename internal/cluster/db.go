@@ -114,10 +114,13 @@ func AutoMigrate(db *gorm.DB) error {
 }
 
 func autoMigrate(db *gorm.DB) error {
-	if errMigrate := db.AutoMigrate(&AuthRecord{}, &ConfigRecord{}, &KVRecord{}, &PluginStatusRecord{}, &PluginTaskRecord{}, &UserRecord{}, &APIKeyRecord{}, &ChannelGroupRecord{}, &ChannelGroupDetailRecord{}, &ModelGroupRecord{}, &ModelGroupDetailRecord{}, &ClusterNodeRecord{}, &CPANodeRecord{}, &ClusterEventRecord{}, &UsageRecord{}, &BillingModelPriceRecord{}, &BillingBalanceRecord{}, &BillingChargeRecord{}, &ProxyPoolRecord{}, &AppLogRecord{}, &OAuthSessionRecord{}, &CertificateRecord{}); errMigrate != nil {
+	if errMigrate := db.AutoMigrate(&AuthRecord{}, &ConfigRecord{}, &KVRecord{}, &PluginStatusRecord{}, &PluginTaskRecord{}, &UserRecord{}, &APIKeyRecord{}, &ChannelGroupRecord{}, &ChannelGroupDetailRecord{}, &ModelGroupRecord{}, &ModelGroupDetailRecord{}, &ClusterNodeRecord{}, &CPANodeRecord{}, &ClusterEventRecord{}, &UsageRecord{}, &BillingModelPriceRecord{}, &BillingModelPriceImportPreviewRecord{}, &BillingModelPriceImportOperationRecord{}, &BillingBalanceRecord{}, &BillingChargeRecord{}, &ProxyPoolRecord{}, &AppLogRecord{}, &OAuthSessionRecord{}, &CertificateRecord{}); errMigrate != nil {
 		return errMigrate
 	}
 	if errMigrate := migrateBillingIndexes(db); errMigrate != nil {
+		return errMigrate
+	}
+	if errMigrate := migrateBillingImportIndexes(db); errMigrate != nil {
 		return errMigrate
 	}
 	if errMigrate := migrateCertificateFingerprints(db); errMigrate != nil {
