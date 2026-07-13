@@ -543,7 +543,8 @@ func (r *Repository) GetBillingTierDiagnostics(ctx context.Context) (BillingTier
 	}
 	windowEnd := time.Now().UTC()
 	windowStart := windowEnd.Add(-billingTierDiagnosticsWindow)
-	errQuery := db.WithContext(ctx).Model(&UsageRecord{}).Where("timestamp >= ? AND request_service_tier IS NOT NULL AND request_service_tier <> ''", windowStart).Select(`
+	tierPresent := "COALESCE(NULLIF(service_tier, ''), NULLIF(request_service_tier, '')) IS NOT NULL"
+	errQuery := db.WithContext(ctx).Model(&UsageRecord{}).Where("timestamp >= ? AND "+tierPresent, windowStart).Select(`
 		COUNT(*) AS eligible,
 		COALESCE(SUM(CASE WHEN response_service_tier IS NOT NULL AND response_service_tier <> '' THEN 1 ELSE 0 END), 0) AS present,
 		COALESCE(SUM(CASE WHEN response_service_tier IS NULL OR response_service_tier = '' THEN 1 ELSE 0 END), 0) AS fallback`).Scan(&result).Error
@@ -551,7 +552,7 @@ func (r *Repository) GetBillingTierDiagnostics(ctx context.Context) (BillingTier
 		return BillingTierDiagnostics{}, errQuery
 	}
 	var lastRecord UsageRecord
-	lastResult := db.WithContext(ctx).Where("timestamp >= ? AND request_service_tier IS NOT NULL AND request_service_tier <> '' AND response_service_tier IS NOT NULL AND response_service_tier <> ''", windowStart).Order("timestamp DESC, id DESC").Limit(1).Find(&lastRecord)
+	lastResult := db.WithContext(ctx).Where("timestamp >= ? AND "+tierPresent+" AND response_service_tier IS NOT NULL AND response_service_tier <> ''", windowStart).Order("timestamp DESC, id DESC").Limit(1).Find(&lastRecord)
 	if lastResult.Error != nil {
 		return BillingTierDiagnostics{}, lastResult.Error
 	}

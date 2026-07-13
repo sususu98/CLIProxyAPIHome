@@ -1110,7 +1110,7 @@ func billingPriceSnapshotForUsage(ctx context.Context, tx *gorm.DB, usage *Usage
 	if errSettings != nil {
 		return nil, BillingPriceSnapshot{}, errSettings
 	}
-	requestedTier := normalizeBillingEffectiveServiceTier(firstNonEmptyBillingString(usage.RequestServiceTier, usage.ServiceTier))
+	requestedTier := normalizeBillingEffectiveServiceTier(firstNonEmptyBillingString(usage.ServiceTier, usage.RequestServiceTier))
 	responseTierRaw := strings.TrimSpace(usage.ResponseServiceTier)
 	effectiveTier := requestedTier
 	responseFallback := false

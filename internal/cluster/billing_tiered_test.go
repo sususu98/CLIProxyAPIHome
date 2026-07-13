@@ -42,10 +42,10 @@ func TestBillingMigrationPreservesLegacyPriceAsWildcardBaseBand(t *testing.T) {
 	}
 }
 
-func TestUsageRecordFromPayloadPreservesRequestAndResponseServiceTiers(t *testing.T) {
+func TestUsageRecordFromPayloadAcceptsLegacyRequestTier(t *testing.T) {
 	t.Parallel()
 
-	record, errRecord := UsageRecordFromPayload(`{"timestamp":"2026-07-11T00:00:00Z","service_tier":"priority","request_service_tier":"priority","response_service_tier":"default","tokens":{"input_tokens":1}}`, "")
+	record, errRecord := UsageRecordFromPayload(`{"timestamp":"2026-07-11T00:00:00Z","request_service_tier":"priority","response_service_tier":"default","tokens":{"input_tokens":1}}`, "")
 	if errRecord != nil {
 		t.Fatalf("UsageRecordFromPayload() error = %v", errRecord)
 	}
@@ -61,20 +61,52 @@ func TestUsageRecordFromPayloadDefaultsMissingTierToAuto(t *testing.T) {
 	if errRecord != nil {
 		t.Fatalf("UsageRecordFromPayload() error = %v", errRecord)
 	}
-	if record.ServiceTier != "auto" || record.RequestServiceTier != "auto" {
-		t.Fatalf("tiers = legacy:%q request:%q, want auto/auto", record.ServiceTier, record.RequestServiceTier)
+	if record.ServiceTier != "auto" || record.RequestServiceTier != "" {
+		t.Fatalf("tiers = service:%q legacy request:%q, want auto/empty", record.ServiceTier, record.RequestServiceTier)
 	}
 }
 
-func TestUsageRecordFromPayloadPrefersCanonicalAutoRequestTier(t *testing.T) {
+func TestUsageRecordFromPayloadKeepsServiceTierPrimaryOverLegacyRequestTier(t *testing.T) {
 	t.Parallel()
 
-	record, errRecord := UsageRecordFromPayload(`{"timestamp":"2026-07-13T00:00:00Z","service_tier":"default","request_service_tier":"auto","tokens":{"input_tokens":1}}`, "")
+	record, errRecord := UsageRecordFromPayload(`{"timestamp":"2026-07-13T00:00:00Z","service_tier":"default","request_service_tier":"priority","tokens":{"input_tokens":1}}`, "")
 	if errRecord != nil {
 		t.Fatalf("UsageRecordFromPayload() error = %v", errRecord)
 	}
-	if record.ServiceTier != "default" || record.RequestServiceTier != "auto" {
-		t.Fatalf("tiers = legacy:%q request:%q, want default/auto", record.ServiceTier, record.RequestServiceTier)
+	if record.ServiceTier != "default" || record.RequestServiceTier != "priority" {
+		t.Fatalf("tiers = service:%q legacy request:%q, want default/priority", record.ServiceTier, record.RequestServiceTier)
+	}
+}
+
+func TestBillingPriceMatchingPrefersServiceTierOverLegacyRequestTier(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	for _, update := range []BillingModelPriceUpdate{
+		{Provider: "openai", Model: "gpt-5.5", ServiceTier: "standard", RequestPrice: 1, Enabled: true},
+		{Provider: "openai", Model: "gpt-5.5", ServiceTier: "priority", RequestPrice: 2, Enabled: true},
+	} {
+		if _, errCreate := repo.CreateBillingModelPrice(ctx, update); errCreate != nil {
+			t.Fatalf("CreateBillingModelPrice() error = %v", errCreate)
+		}
+	}
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	_, snapshot, errSnapshot := billingPriceSnapshotForUsage(ctx, db, &UsageRecord{
+		Provider:           "openai",
+		Model:              "gpt-5.5",
+		ServiceTier:        "default",
+		RequestServiceTier: "priority",
+	})
+	if errSnapshot != nil {
+		t.Fatalf("billingPriceSnapshotForUsage() error = %v", errSnapshot)
+	}
+	if snapshot.RequestPrice != 1 || snapshot.EffectiveServiceTier != "standard" {
+		t.Fatalf("snapshot = %+v, want service_tier standard rule", snapshot)
 	}
 }
 
@@ -113,7 +145,7 @@ func TestBillingPriceMatchingUsesContextBandAndExactTier(t *testing.T) {
 		{name: "wildcard fallback", input: 272001, tier: "flex", wantPrice: 1, wantMin: 0, wantTier: "*"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			usage := &UsageRecord{Provider: "openai", Model: "gpt-5.5", InputTokens: tt.input, ServiceTier: tt.tier, RequestServiceTier: tt.tier}
+			usage := &UsageRecord{Provider: "openai", Model: "gpt-5.5", InputTokens: tt.input, ServiceTier: tt.tier}
 			_, snapshot, errSnapshot := billingPriceSnapshotForUsage(ctx, db, usage)
 			if errSnapshot != nil {
 				t.Fatalf("billingPriceSnapshotForUsage() error = %v", errSnapshot)
@@ -138,7 +170,7 @@ func TestBillingResponseTierModeFallsBackAudibly(t *testing.T) {
 		t.Fatalf("UpdateBillingSettings() error = %v", errPatch)
 	}
 	db, _ := repo.database()
-	_, snapshot, errSnapshot := billingPriceSnapshotForUsage(ctx, db, &UsageRecord{Provider: "openai", Model: "gpt-5.5", ServiceTier: "priority", RequestServiceTier: "priority"})
+	_, snapshot, errSnapshot := billingPriceSnapshotForUsage(ctx, db, &UsageRecord{Provider: "openai", Model: "gpt-5.5", ServiceTier: "priority"})
 	if errSnapshot != nil {
 		t.Fatalf("billingPriceSnapshotForUsage() error = %v", errSnapshot)
 	}
@@ -163,7 +195,7 @@ func TestBillingResponseTierModeFallsBackToStandardRuleForAuto(t *testing.T) {
 		t.Fatalf("UpdateBillingSettings() error = %v", errPatch)
 	}
 	db, _ := repo.database()
-	_, snapshot, errSnapshot := billingPriceSnapshotForUsage(ctx, db, &UsageRecord{Provider: "openai", Model: "gpt-5.5", RequestServiceTier: "auto"})
+	_, snapshot, errSnapshot := billingPriceSnapshotForUsage(ctx, db, &UsageRecord{Provider: "openai", Model: "gpt-5.5", ServiceTier: "auto"})
 	if errSnapshot != nil {
 		t.Fatalf("billingPriceSnapshotForUsage() error = %v", errSnapshot)
 	}
@@ -187,7 +219,7 @@ func TestBillingResponseTierModeUsesReportedResponseTier(t *testing.T) {
 		t.Fatalf("UpdateBillingSettings() error = %v", errPatch)
 	}
 	db, _ := repo.database()
-	_, snapshot, errSnapshot := billingPriceSnapshotForUsage(ctx, db, &UsageRecord{Provider: "openai", Model: "gpt-5.5", RequestServiceTier: "priority", ResponseServiceTier: "default"})
+	_, snapshot, errSnapshot := billingPriceSnapshotForUsage(ctx, db, &UsageRecord{Provider: "openai", Model: "gpt-5.5", ServiceTier: "priority", ResponseServiceTier: "default"})
 	if errSnapshot != nil {
 		t.Fatalf("billingPriceSnapshotForUsage() error = %v", errSnapshot)
 	}

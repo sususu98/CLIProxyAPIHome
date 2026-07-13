@@ -233,9 +233,13 @@ func usageCacheReadFallbackSQLCondition(providerColumn string, executorTypeColum
 		executorType, provider, provider, provider, provider, executorType, executorType)
 }
 
-// usageServiceTierFromPayload returns the reported service tier or the default tier.
+// usageServiceTierFromPayload returns the client-requested service tier. The
+// deprecated request_service_tier key is only used when service_tier is absent.
 func usageServiceTierFromPayload(payload string) string {
 	serviceTier := strings.TrimSpace(gjson.Get(payload, "service_tier").String())
+	if serviceTier == "" {
+		serviceTier = strings.TrimSpace(gjson.Get(payload, "request_service_tier").String())
+	}
 	if serviceTier == "" {
 		return defaultUsageServiceTier
 	}
@@ -243,11 +247,7 @@ func usageServiceTierFromPayload(payload string) string {
 }
 
 func usageRequestServiceTierFromPayload(payload string) string {
-	serviceTier := strings.TrimSpace(gjson.Get(payload, "request_service_tier").String())
-	if serviceTier != "" {
-		return serviceTier
-	}
-	return usageServiceTierFromPayload(payload)
+	return strings.TrimSpace(gjson.Get(payload, "request_service_tier").String())
 }
 
 // AppendUsage appends an usage.

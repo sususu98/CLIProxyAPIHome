@@ -505,10 +505,10 @@ func TestBillingTierDiagnosticsUsesOnlyEligibleRecentRequests(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	for _, record := range []UsageRecord{
-		{Timestamp: now, RequestServiceTier: "standard", ResponseServiceTier: "priority", PayloadJSON: JSONB(`{}`), CreatedAt: now},
+		{Timestamp: now, ServiceTier: "standard", ResponseServiceTier: "priority", PayloadJSON: JSONB(`{}`), CreatedAt: now},
 		{Timestamp: now, RequestServiceTier: "standard", PayloadJSON: JSONB(`{}`), CreatedAt: now},
 		{Timestamp: now, PayloadJSON: JSONB(`{}`), CreatedAt: now},
-		{Timestamp: now.Add(-31 * 24 * time.Hour), RequestServiceTier: "standard", PayloadJSON: JSONB(`{}`), CreatedAt: now},
+		{Timestamp: now.Add(-31 * 24 * time.Hour), ServiceTier: "standard", PayloadJSON: JSONB(`{}`), CreatedAt: now},
 	} {
 		if errCreate := db.WithContext(ctx).Create(&record).Error; errCreate != nil {
 			t.Fatalf("create usage record: %v", errCreate)
