@@ -333,63 +333,64 @@ type UsageObservabilityPayloadSummary struct {
 }
 
 type usageObservabilityRecordRow struct {
-	UsageID              uint            `gorm:"column:usage_id"`
-	Timestamp            time.Time       `gorm:"column:timestamp"`
-	LatencyMS            int64           `gorm:"column:latency_ms"`
-	TTFTMS               int64           `gorm:"column:ttft_ms"`
-	InputTokens          int64           `gorm:"column:input_tokens"`
-	OutputTokens         int64           `gorm:"column:output_tokens"`
-	ReasoningTokens      int64           `gorm:"column:reasoning_tokens"`
-	CachedTokens         int64           `gorm:"column:cached_tokens"`
-	CacheReadTokens      int64           `gorm:"column:cache_read_tokens"`
-	CacheCreationTokens  int64           `gorm:"column:cache_creation_tokens"`
-	TotalTokens          int64           `gorm:"column:total_tokens"`
-	Failed               bool            `gorm:"column:failed"`
-	FailStatusCode       int             `gorm:"column:fail_status_code"`
-	FailBody             string          `gorm:"column:fail_body"`
-	Source               string          `gorm:"column:source"`
-	Provider             string          `gorm:"column:provider"`
-	ExecutorType         string          `gorm:"column:executor_type"`
-	Model                string          `gorm:"column:model"`
-	Alias                string          `gorm:"column:alias"`
-	ReasoningEffort      string          `gorm:"column:reasoning_effort"`
-	ServiceTier          string          `gorm:"column:service_tier"`
-	Endpoint             string          `gorm:"column:endpoint"`
-	AuthType             string          `gorm:"column:auth_type"`
-	RawAPIKey            string          `gorm:"column:raw_api_key"`
-	RequestID            string          `gorm:"column:request_id"`
-	UpstreamRequestID    string          `gorm:"column:upstream_request_id"`
-	EventType            string          `gorm:"column:event_type"`
-	UpstreamStatusCode   int             `gorm:"column:upstream_status_code"`
-	HomeIP               string          `gorm:"column:home_ip"`
-	HomePort             int             `gorm:"column:home_port"`
-	CPANodeID            string          `gorm:"column:cpa_node_id"`
-	CPAIP                string          `gorm:"column:cpa_ip"`
-	CPAPort              int             `gorm:"column:cpa_port"`
-	CPALabel             string          `gorm:"column:cpa_label"`
-	PayloadJSON          JSONB           `gorm:"column:payload_json"`
-	ClientAPIKeyID       *uint           `gorm:"column:client_api_key_id"`
-	ClientAPIKeyLabel    string          `gorm:"column:client_api_key_label"`
-	ClientAPIKeyMasked   string          `gorm:"column:client_api_key_masked"`
-	ClientUserID         *uint           `gorm:"column:client_user_id"`
-	Username             string          `gorm:"column:username"`
-	ChargeID             string          `gorm:"column:charge_id"`
-	Amount               sql.NullFloat64 `gorm:"column:amount"`
-	MatchedPriceRule     string          `gorm:"column:matched_price_rule"`
-	BalanceBefore        sql.NullFloat64 `gorm:"column:balance_before"`
-	BalanceAfter         sql.NullFloat64 `gorm:"column:balance_after"`
-	UsageAuthIndex       string          `gorm:"column:usage_auth_index"`
-	AuthUUID             string          `gorm:"column:auth_uuid"`
-	AuthJSON             JSONB           `gorm:"column:auth_json"`
-	AuthID               string          `gorm:"column:auth_id"`
-	AuthIndex            string          `gorm:"column:auth_index"`
-	AuthProvider         string          `gorm:"column:auth_provider"`
-	AuthLabel            string          `gorm:"column:auth_label"`
-	AuthStatus           string          `gorm:"column:auth_status"`
-	AuthDisabled         bool            `gorm:"column:auth_disabled"`
-	AuthUnavailable      bool            `gorm:"column:auth_unavailable"`
-	AuthNextRefreshAfter sql.NullTime    `gorm:"column:auth_next_refresh_after"`
-	AuthNextRetryAfter   sql.NullTime    `gorm:"column:auth_next_retry_after"`
+	UsageID                uint            `gorm:"column:usage_id"`
+	Timestamp              time.Time       `gorm:"column:timestamp"`
+	LatencyMS              int64           `gorm:"column:latency_ms"`
+	TTFTMS                 int64           `gorm:"column:ttft_ms"`
+	InputTokens            int64           `gorm:"column:input_tokens"`
+	OutputTokens           int64           `gorm:"column:output_tokens"`
+	ReasoningTokens        int64           `gorm:"column:reasoning_tokens"`
+	CachedTokens           int64           `gorm:"column:cached_tokens"`
+	CacheReadTokens        int64           `gorm:"column:cache_read_tokens"`
+	CacheReadTokensPresent bool            `gorm:"column:cache_read_tokens_present"`
+	CacheCreationTokens    int64           `gorm:"column:cache_creation_tokens"`
+	TotalTokens            int64           `gorm:"column:total_tokens"`
+	Failed                 bool            `gorm:"column:failed"`
+	FailStatusCode         int             `gorm:"column:fail_status_code"`
+	FailBody               string          `gorm:"column:fail_body"`
+	Source                 string          `gorm:"column:source"`
+	Provider               string          `gorm:"column:provider"`
+	ExecutorType           string          `gorm:"column:executor_type"`
+	Model                  string          `gorm:"column:model"`
+	Alias                  string          `gorm:"column:alias"`
+	ReasoningEffort        string          `gorm:"column:reasoning_effort"`
+	ServiceTier            string          `gorm:"column:service_tier"`
+	Endpoint               string          `gorm:"column:endpoint"`
+	AuthType               string          `gorm:"column:auth_type"`
+	RawAPIKey              string          `gorm:"column:raw_api_key"`
+	RequestID              string          `gorm:"column:request_id"`
+	UpstreamRequestID      string          `gorm:"column:upstream_request_id"`
+	EventType              string          `gorm:"column:event_type"`
+	UpstreamStatusCode     int             `gorm:"column:upstream_status_code"`
+	HomeIP                 string          `gorm:"column:home_ip"`
+	HomePort               int             `gorm:"column:home_port"`
+	CPANodeID              string          `gorm:"column:cpa_node_id"`
+	CPAIP                  string          `gorm:"column:cpa_ip"`
+	CPAPort                int             `gorm:"column:cpa_port"`
+	CPALabel               string          `gorm:"column:cpa_label"`
+	PayloadJSON            JSONB           `gorm:"column:payload_json"`
+	ClientAPIKeyID         *uint           `gorm:"column:client_api_key_id"`
+	ClientAPIKeyLabel      string          `gorm:"column:client_api_key_label"`
+	ClientAPIKeyMasked     string          `gorm:"column:client_api_key_masked"`
+	ClientUserID           *uint           `gorm:"column:client_user_id"`
+	Username               string          `gorm:"column:username"`
+	ChargeID               string          `gorm:"column:charge_id"`
+	Amount                 sql.NullFloat64 `gorm:"column:amount"`
+	MatchedPriceRule       string          `gorm:"column:matched_price_rule"`
+	BalanceBefore          sql.NullFloat64 `gorm:"column:balance_before"`
+	BalanceAfter           sql.NullFloat64 `gorm:"column:balance_after"`
+	UsageAuthIndex         string          `gorm:"column:usage_auth_index"`
+	AuthUUID               string          `gorm:"column:auth_uuid"`
+	AuthJSON               JSONB           `gorm:"column:auth_json"`
+	AuthID                 string          `gorm:"column:auth_id"`
+	AuthIndex              string          `gorm:"column:auth_index"`
+	AuthProvider           string          `gorm:"column:auth_provider"`
+	AuthLabel              string          `gorm:"column:auth_label"`
+	AuthStatus             string          `gorm:"column:auth_status"`
+	AuthDisabled           bool            `gorm:"column:auth_disabled"`
+	AuthUnavailable        bool            `gorm:"column:auth_unavailable"`
+	AuthNextRefreshAfter   sql.NullTime    `gorm:"column:auth_next_refresh_after"`
+	AuthNextRetryAfter     sql.NullTime    `gorm:"column:auth_next_retry_after"`
 }
 
 type usageObservabilityAggregateRow struct {
@@ -876,6 +877,7 @@ func usageObservabilityTotalsSQL(db *gorm.DB, query UsageObservabilityRecordQuer
 
 func usageObservabilityTotalsSQLSelect() string {
 	credentialExpr := `NULLIF(` + usageObservabilitySQLCredentialID() + `, '')`
+	cacheReadTokensExpr := usageObservabilitySQLCacheReadTokens(`"usage"`)
 	return fmt.Sprintf(`
 		COUNT(DISTINCT "usage"."id") AS request_count,
 		SUM(CASE WHEN "usage"."failed" THEN 0 ELSE 1 END) AS success_count,
@@ -884,7 +886,7 @@ func usageObservabilityTotalsSQLSelect() string {
 		SUM("usage"."output_tokens") AS output_tokens,
 		SUM("usage"."reasoning_tokens") AS reasoning_tokens,
 		SUM("usage"."cached_tokens") AS cached_tokens,
-		SUM("usage"."cache_read_tokens") AS cache_read_tokens,
+		SUM(%s) AS cache_read_tokens,
 		SUM("usage"."cache_creation_tokens") AS cache_creation_tokens,
 		SUM("usage"."total_tokens") AS total_tokens,
 		SUM("billing_charge"."amount") AS total_amount,
@@ -895,7 +897,7 @@ func usageObservabilityTotalsSQLSelect() string {
 		COUNT(DISTINCT %s) AS active_credential_count,
 		COUNT(DISTINCT NULLIF("usage"."model", '')) AS active_model_count,
 		MIN("usage"."timestamp") AS min_timestamp,
-		MAX("usage"."timestamp") AS max_timestamp`, credentialExpr)
+		MAX("usage"."timestamp") AS max_timestamp`, cacheReadTokensExpr, credentialExpr)
 }
 
 func usageObservabilityTotalsFromRow(row *usageObservabilityTotalsRow) UsageObservabilityTotals {
@@ -999,6 +1001,7 @@ func usageObservabilityLiveSQL(db *gorm.DB, query UsageObservabilityRecordQuery,
 
 func usageObservabilityTrendSQL(db *gorm.DB, query UsageObservabilityRecordQuery, interval string, location *time.Location, bounds usageObservabilityOverviewBounds) ([]UsageObservabilityTrendPoint, error) {
 	bucketExpr, bucketArgs := usageObservabilityTrendBucketUnixSQL(db, interval, location, query, bounds)
+	cacheReadTokensExpr := usageObservabilitySQLCacheReadTokens(`"usage"`)
 	baseSelect := fmt.Sprintf(`
 		%s AS bucket_unix,
 		"usage"."latency_ms" AS latency_ms,
@@ -1006,11 +1009,11 @@ func usageObservabilityTrendSQL(db *gorm.DB, query UsageObservabilityRecordQuery
 		"usage"."output_tokens" AS output_tokens,
 		"usage"."reasoning_tokens" AS reasoning_tokens,
 		"usage"."cached_tokens" AS cached_tokens,
-		"usage"."cache_read_tokens" AS cache_read_tokens,
+		%s AS cache_read_tokens,
 		"usage"."cache_creation_tokens" AS cache_creation_tokens,
 		"usage"."total_tokens" AS total_tokens,
 		"usage"."failed" AS failed,
-		"billing_charge"."amount" AS amount`, bucketExpr)
+		"billing_charge"."amount" AS amount`, bucketExpr, cacheReadTokensExpr)
 	base := usageObservabilityUsageBillingScope(db.Table("usage"), query).Select(baseSelect, bucketArgs...)
 	var rows []usageObservabilityTrendBucketRow
 	if errFind := db.Table("(?) AS trend_source", base).
@@ -1684,7 +1687,7 @@ func usageObservabilityAggregateBaseSelect(groupBy string) string {
 		"usage"."output_tokens" AS output_tokens,
 		"usage"."reasoning_tokens" AS reasoning_tokens,
 		"usage"."cached_tokens" AS cached_tokens,
-		"usage"."cache_read_tokens" AS cache_read_tokens,
+		%s AS cache_read_tokens,
 		"usage"."cache_creation_tokens" AS cache_creation_tokens,
 		"usage"."total_tokens" AS total_tokens,
 		"billing_charge"."amount" AS amount`,
@@ -1705,7 +1708,17 @@ func usageObservabilityAggregateBaseSelect(groupBy string) string {
 		authStatusExpr,
 		authDisabledExpr,
 		authUnavailableExpr,
+		usageObservabilitySQLCacheReadTokens(`"usage"`),
 	)
+}
+
+// usageObservabilitySQLCacheReadTokens keeps aggregate queries compatible with
+// legacy CPA rows until their startup backfill has completed, without treating
+// a canonical zero from a current CPA as a legacy value.
+func usageObservabilitySQLCacheReadTokens(table string) string {
+	return fmt.Sprintf(`CASE WHEN %s."cache_read_tokens_present" = FALSE AND %s."cache_read_tokens" = 0 AND %s."cached_tokens" > 0 AND %s
+		THEN %s."cached_tokens" ELSE %s."cache_read_tokens" END`,
+		table, table, table, usageCacheReadFallbackSQLCondition(table+`."provider"`, table+`."executor_type"`), table, table)
 }
 
 func usageObservabilityAggregateSQLIdentity(groupBy string) (string, string) {
@@ -1856,6 +1869,7 @@ func usageObservabilityRecordSelect() string {
 		"usage"."reasoning_tokens" AS reasoning_tokens,
 		"usage"."cached_tokens" AS cached_tokens,
 		"usage"."cache_read_tokens" AS cache_read_tokens,
+		"usage"."cache_read_tokens_present" AS cache_read_tokens_present,
 		"usage"."cache_creation_tokens" AS cache_creation_tokens,
 		"usage"."total_tokens" AS total_tokens,
 		"usage"."failed" AS failed,
@@ -2311,6 +2325,7 @@ func usageObservabilityRecordFromRow(row *usageObservabilityRecordRow) UsageObse
 		return UsageObservabilityRecord{}
 	}
 	payload := usageObservabilityPayloadMap(row.PayloadJSON)
+	cacheReadTokens := normalizedUsageCacheReadTokens(row.Provider, row.ExecutorType, row.CachedTokens, row.CacheReadTokens, row.CacheReadTokensPresent)
 	record := UsageObservabilityRecord{
 		ID:                 strconv.FormatUint(uint64(row.UsageID), 10),
 		UsageID:            row.UsageID,
@@ -2335,7 +2350,7 @@ func usageObservabilityRecordFromRow(row *usageObservabilityRecordRow) UsageObse
 			OutputTokens:        row.OutputTokens,
 			ReasoningTokens:     row.ReasoningTokens,
 			CachedTokens:        row.CachedTokens,
-			CacheReadTokens:     row.CacheReadTokens,
+			CacheReadTokens:     cacheReadTokens,
 			CacheCreationTokens: row.CacheCreationTokens,
 			TotalTokens:         row.TotalTokens,
 		},
@@ -2823,7 +2838,7 @@ func (a *usageObservabilityAggregateAccumulator) add(row *usageObservabilityReco
 	a.Item.OutputTokens += row.OutputTokens
 	a.Item.ReasoningTokens += row.ReasoningTokens
 	a.Item.CachedTokens += row.CachedTokens
-	a.Item.CacheReadTokens += row.CacheReadTokens
+	a.Item.CacheReadTokens += normalizedUsageCacheReadTokens(row.Provider, row.ExecutorType, row.CachedTokens, row.CacheReadTokens, row.CacheReadTokensPresent)
 	a.Item.CacheCreationTokens += row.CacheCreationTokens
 	a.Item.TotalTokens += row.TotalTokens
 	if row.Amount.Valid {

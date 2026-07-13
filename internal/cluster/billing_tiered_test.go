@@ -54,6 +54,30 @@ func TestUsageRecordFromPayloadPreservesRequestAndResponseServiceTiers(t *testin
 	}
 }
 
+func TestUsageRecordFromPayloadDefaultsMissingTierToAuto(t *testing.T) {
+	t.Parallel()
+
+	record, errRecord := UsageRecordFromPayload(`{"timestamp":"2026-07-13T00:00:00Z","tokens":{"input_tokens":1}}`, "")
+	if errRecord != nil {
+		t.Fatalf("UsageRecordFromPayload() error = %v", errRecord)
+	}
+	if record.ServiceTier != "auto" || record.RequestServiceTier != "auto" {
+		t.Fatalf("tiers = legacy:%q request:%q, want auto/auto", record.ServiceTier, record.RequestServiceTier)
+	}
+}
+
+func TestUsageRecordFromPayloadPrefersCanonicalAutoRequestTier(t *testing.T) {
+	t.Parallel()
+
+	record, errRecord := UsageRecordFromPayload(`{"timestamp":"2026-07-13T00:00:00Z","service_tier":"default","request_service_tier":"auto","tokens":{"input_tokens":1}}`, "")
+	if errRecord != nil {
+		t.Fatalf("UsageRecordFromPayload() error = %v", errRecord)
+	}
+	if record.ServiceTier != "default" || record.RequestServiceTier != "auto" {
+		t.Fatalf("tiers = legacy:%q request:%q, want default/auto", record.ServiceTier, record.RequestServiceTier)
+	}
+}
+
 func TestBillingPriceMatchingUsesContextBandAndExactTier(t *testing.T) {
 	t.Parallel()
 
@@ -83,8 +107,9 @@ func TestBillingPriceMatchingUsesContextBandAndExactTier(t *testing.T) {
 		wantMin   int64
 		wantTier  string
 	}{
-		{name: "boundary stays short", input: 272000, tier: "default", wantPrice: 2, wantMin: 0, wantTier: "standard"},
-		{name: "next token selects long", input: 272001, tier: "auto", wantPrice: 4, wantMin: 272001, wantTier: "standard"},
+		{name: "default uses standard", input: 272000, tier: "default", wantPrice: 2, wantMin: 0, wantTier: "standard"},
+		{name: "standard selects long band", input: 272001, tier: "standard", wantPrice: 4, wantMin: 272001, wantTier: "standard"},
+		{name: "auto uses standard", input: 272001, tier: "auto", wantPrice: 4, wantMin: 272001, wantTier: "standard"},
 		{name: "wildcard fallback", input: 272001, tier: "flex", wantPrice: 1, wantMin: 0, wantTier: "*"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -122,6 +147,28 @@ func TestBillingResponseTierModeFallsBackAudibly(t *testing.T) {
 	}
 	if snapshot.RequestedServiceTier != "priority" || snapshot.ResponseServiceTier != "" {
 		t.Fatalf("snapshot audit tiers = %+v", snapshot)
+	}
+}
+
+func TestBillingResponseTierModeFallsBackToStandardRuleForAuto(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	if _, errCreate := repo.CreateBillingModelPrice(ctx, BillingModelPriceUpdate{Provider: "openai", Model: "gpt-5.5", ServiceTier: "standard", InputPricePerMillion: 3, Enabled: true}); errCreate != nil {
+		t.Fatalf("CreateBillingModelPrice() error = %v", errCreate)
+	}
+	if _, errPatch := repo.UpdateBillingSettings(ctx, BillingSettingsPatch{ServiceTierSource: stringPtr(BillingServiceTierSourceResponse)}); errPatch != nil {
+		t.Fatalf("UpdateBillingSettings() error = %v", errPatch)
+	}
+	db, _ := repo.database()
+	_, snapshot, errSnapshot := billingPriceSnapshotForUsage(ctx, db, &UsageRecord{Provider: "openai", Model: "gpt-5.5", RequestServiceTier: "auto"})
+	if errSnapshot != nil {
+		t.Fatalf("billingPriceSnapshotForUsage() error = %v", errSnapshot)
+	}
+	if snapshot.InputPricePerMillion != 3 || snapshot.EffectiveServiceTier != "standard" || !snapshot.ResponseTierFallback {
+		t.Fatalf("snapshot = %+v", snapshot)
 	}
 }
 
@@ -174,12 +221,12 @@ func TestBillingChargeAmountSeparatesOpenAICacheWriteWithoutCacheRead(t *testing
 	}
 }
 
-func TestBillingChargeAmountKeepsClaudeCreationOutOfInputNormalization(t *testing.T) {
+func TestBillingChargeAmountDoesNotTreatClaudeCreationAsCacheRead(t *testing.T) {
 	t.Parallel()
 
 	usage := &UsageRecord{Provider: "claude", InputTokens: 100, CachedTokens: 20, CacheCreationTokens: 20}
 	snapshot := BillingPriceSnapshot{InputPricePerMillion: 10, CacheReadPricePerMillion: 2, CacheWritePricePerMillion: 12.5}
-	if got, want := billingChargeAmount(usage, snapshot), 0.00129; math.Abs(got-want) > 1e-12 {
+	if got, want := billingChargeAmount(usage, snapshot), 0.00125; math.Abs(got-want) > 1e-12 {
 		t.Fatalf("billingChargeAmount() = %.9f, want %.9f", got, want)
 	}
 }
@@ -189,6 +236,15 @@ func TestBillingCacheTokensIncludesOpenAICacheReadAndWrite(t *testing.T) {
 
 	usage := &UsageRecord{CachedTokens: 30, CacheCreationTokens: 20}
 	if got, want := billingCacheTokens(usage), int64(50); got != want {
+		t.Fatalf("billingCacheTokens() = %d, want %d", got, want)
+	}
+}
+
+func TestBillingCacheTokensDoesNotDoubleCountAnthropicCreation(t *testing.T) {
+	t.Parallel()
+
+	usage := &UsageRecord{Provider: "openai", ExecutorType: "AnthropicExecutor", CachedTokens: 20, CacheCreationTokens: 20}
+	if got, want := billingCacheTokens(usage), int64(20); got != want {
 		t.Fatalf("billingCacheTokens() = %d, want %d", got, want)
 	}
 }

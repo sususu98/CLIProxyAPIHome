@@ -1174,10 +1174,7 @@ func billingChargeAmount(usage *UsageRecord, snapshot BillingPriceSnapshot) floa
 		return 0
 	}
 	inputTokens := usage.InputTokens
-	cacheReadTokens := usage.CacheReadTokens
-	if cacheReadTokens == 0 && usage.CachedTokens > 0 {
-		cacheReadTokens = usage.CachedTokens
-	}
+	cacheReadTokens := normalizedUsageCacheReadTokens(usage.Provider, usage.ExecutorType, usage.CachedTokens, usage.CacheReadTokens, usage.CacheReadTokensPresent)
 	// OpenAI/Codex style: cache_read/cache_write live under input_tokens details and
 	// are subsets of input_tokens. Claude/Anthropic report mutually exclusive buckets.
 	cacheWriteTokens := usage.CacheCreationTokens
@@ -1236,28 +1233,7 @@ func billingCacheTokens(usage *UsageRecord) int64 {
 	if usage == nil {
 		return 0
 	}
-	if billingUsesSeparateCacheBuckets(usage) {
-		return usage.CacheReadTokens + usage.CacheCreationTokens
-	}
-	return usage.CachedTokens + usage.CacheCreationTokens
-}
-
-func billingUsesSeparateCacheBuckets(usage *UsageRecord) bool {
-	if usage == nil {
-		return false
-	}
-	if usage.CacheReadTokens != 0 {
-		return true
-	}
-	executorType := strings.ToLower(strings.TrimSpace(usage.ExecutorType))
-	if executorType == "openaicompatexecutor" {
-		return false
-	}
-	provider := strings.ToLower(strings.TrimSpace(usage.Provider))
-	if provider == "openai-compatibility" || strings.HasPrefix(provider, "openai-compatible-") {
-		return false
-	}
-	return strings.Contains(provider, "claude") || strings.Contains(provider, "anthropic")
+	return normalizedUsageCacheReadTokens(usage.Provider, usage.ExecutorType, usage.CachedTokens, usage.CacheReadTokens, usage.CacheReadTokensPresent) + usage.CacheCreationTokens
 }
 
 func billingAPIKeyID(record *APIKeyRecord) *uint {

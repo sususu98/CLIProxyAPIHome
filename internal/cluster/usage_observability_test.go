@@ -128,6 +128,238 @@ func TestMigrateUsageDerivedColumnsBackfillsStructuredMetadata(t *testing.T) {
 	}
 }
 
+func TestUsageCacheReadBackfillBatchBackfillsLegacyRowsIdempotently(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	now := time.Date(2026, time.July, 12, 1, 2, 3, 0, time.UTC)
+	records := []*UsageRecord{
+		{
+			Timestamp:           now,
+			Provider:            "openai",
+			ExecutorType:        "OpenAICompatExecutor",
+			CachedTokens:        100,
+			CacheCreationTokens: 25,
+			PayloadJSON:         JSONB(`{}`),
+			CreatedAt:           now,
+		},
+		{
+			Timestamp:           now,
+			Provider:            "claude",
+			ExecutorType:        "ClaudeExecutor",
+			CachedTokens:        40,
+			CacheCreationTokens: 40,
+			PayloadJSON:         JSONB(`{}`),
+			CreatedAt:           now,
+		},
+		{
+			Timestamp:       now,
+			Provider:        "openai",
+			ExecutorType:    "AnthropicExecutor",
+			CachedTokens:    30,
+			PayloadJSON:     JSONB(`{}`),
+			CreatedAt:       now,
+			CacheReadTokens: 0,
+		},
+		{
+			Timestamp:       now,
+			Provider:        "openai-compatible-anthropic",
+			ExecutorType:    "OpenAICompatExecutor",
+			CachedTokens:    20,
+			PayloadJSON:     JSONB(`{}`),
+			CreatedAt:       now,
+			CacheReadTokens: 0,
+		},
+	}
+	for _, record := range records {
+		if errCreate := db.Create(record).Error; errCreate != nil {
+			t.Fatalf("Create(usage) error = %v", errCreate)
+		}
+	}
+
+	first, errBackfill := repo.RunUsageCacheReadBackfillBatch(ctx)
+	if errBackfill != nil {
+		t.Fatalf("RunUsageCacheReadBackfillBatch() error = %v", errBackfill)
+	}
+	if first.Scanned != len(records) || first.Updated != 2 || !first.Done || first.Skipped {
+		t.Fatalf("first backfill result = %+v, want scanned=%d updated=2 done=true", first, len(records))
+	}
+	second, errBackfill := repo.RunUsageCacheReadBackfillBatch(ctx)
+	if errBackfill != nil {
+		t.Fatalf("RunUsageCacheReadBackfillBatch(second) error = %v", errBackfill)
+	}
+	if second.Scanned != 0 || second.Updated != 0 || !second.Done || second.Skipped {
+		t.Fatalf("second backfill result = %+v, want completed no-op", second)
+	}
+
+	var updated []UsageRecord
+	if errFind := db.Order("id ASC").Find(&updated).Error; errFind != nil {
+		t.Fatalf("Find(usage) error = %v", errFind)
+	}
+	if len(updated) != len(records) {
+		t.Fatalf("usage record count = %d, want %d", len(updated), len(records))
+	}
+	if updated[0].CacheReadTokens != 100 || updated[0].CachedTokens != 100 || updated[0].CacheCreationTokens != 25 {
+		t.Fatalf("legacy OpenAI cache tokens = %+v, want cached/read/creation 100/100/25", updated[0])
+	}
+	if updated[1].CacheReadTokens != 0 || updated[1].CachedTokens != 40 || updated[1].CacheCreationTokens != 40 {
+		t.Fatalf("Claude cache tokens = %+v, want cached/read/creation 40/0/40", updated[1])
+	}
+	if updated[2].CacheReadTokens != 0 || updated[2].CachedTokens != 30 {
+		t.Fatalf("Anthropic executor cache tokens = %+v, want cached/read 30/0", updated[2])
+	}
+	if updated[3].CacheReadTokens != 20 || updated[3].CachedTokens != 20 {
+		t.Fatalf("OpenAI-compatible cache tokens = %+v, want cached/read 20/20", updated[3])
+	}
+}
+
+func TestUsageCacheReadBackfillBatchResumesByCursor(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	now := time.Date(2026, time.July, 12, 1, 2, 3, 0, time.UTC)
+	for _, record := range []*UsageRecord{
+		{Timestamp: now, Provider: "openai", CachedTokens: 10, PayloadJSON: JSONB(`{}`), CreatedAt: now},
+		{Timestamp: now, Provider: "claude", ExecutorType: "ClaudeExecutor", CachedTokens: 20, CacheCreationTokens: 20, PayloadJSON: JSONB(`{}`), CreatedAt: now},
+		{Timestamp: now, Provider: "openai", CachedTokens: 30, CacheReadTokens: 30, PayloadJSON: JSONB(`{}`), CreatedAt: now},
+		{Timestamp: now, Provider: "openai", CachedTokens: 40, PayloadJSON: JSONB(`{}`), CreatedAt: now},
+		{Timestamp: now, Provider: "openai", ExecutorType: "AnthropicExecutor", CachedTokens: 50, PayloadJSON: JSONB(`{}`), CreatedAt: now},
+		{Timestamp: now, Provider: "openai", CachedTokens: 60, PayloadJSON: JSONB(`{}`), CreatedAt: now},
+	} {
+		if errCreate := db.Create(record).Error; errCreate != nil {
+			t.Fatalf("Create(usage) error = %v", errCreate)
+		}
+	}
+
+	first, errBackfill := runUsageCacheReadBackfillBatch(ctx, db, 2)
+	if errBackfill != nil {
+		t.Fatalf("runUsageCacheReadBackfillBatch(first) error = %v", errBackfill)
+	}
+	if first.Scanned != 2 || first.Updated != 1 || first.Done || first.Skipped {
+		t.Fatalf("first backfill result = %+v, want scanned=2 updated=1 done=false", first)
+	}
+	second, errBackfill := runUsageCacheReadBackfillBatch(ctx, db, 2)
+	if errBackfill != nil {
+		t.Fatalf("runUsageCacheReadBackfillBatch(second) error = %v", errBackfill)
+	}
+	if second.Scanned != 2 || second.Updated != 1 || second.Done || second.Skipped {
+		t.Fatalf("second backfill result = %+v, want scanned=2 updated=1 done=false", second)
+	}
+	third, errBackfill := runUsageCacheReadBackfillBatch(ctx, db, 2)
+	if errBackfill != nil {
+		t.Fatalf("runUsageCacheReadBackfillBatch(third) error = %v", errBackfill)
+	}
+	if third.Scanned != 2 || third.Updated != 1 || !third.Done || third.Skipped {
+		t.Fatalf("third backfill result = %+v, want scanned=2 updated=1 done=true", third)
+	}
+
+	var stateRecord KVRecord
+	if errState := db.First(&stateRecord, "key = ?", usageCacheReadBackfillStateKey).Error; errState != nil {
+		t.Fatalf("First(backfill state) error = %v", errState)
+	}
+	state := usageCacheReadBackfillState{}
+	if errDecode := json.Unmarshal(stateRecord.Value, &state); errDecode != nil {
+		t.Fatalf("decode backfill state: %v", errDecode)
+	}
+	if !state.Done || state.LastScannedID != state.HighWaterID {
+		t.Fatalf("backfill state = %+v, want complete high-water cursor", state)
+	}
+
+	var records []UsageRecord
+	if errFind := db.Order("id ASC").Find(&records).Error; errFind != nil {
+		t.Fatalf("Find(usage) error = %v", errFind)
+	}
+	if len(records) != 6 {
+		t.Fatalf("usage record count = %d, want 6", len(records))
+	}
+	if records[0].CacheReadTokens != 10 || records[1].CacheReadTokens != 0 || records[2].CacheReadTokens != 30 || records[3].CacheReadTokens != 40 || records[4].CacheReadTokens != 0 || records[5].CacheReadTokens != 60 {
+		t.Fatalf("backfilled cache read tokens = %d,%d,%d,%d,%d,%d, want 10,0,30,40,0,60", records[0].CacheReadTokens, records[1].CacheReadTokens, records[2].CacheReadTokens, records[3].CacheReadTokens, records[4].CacheReadTokens, records[5].CacheReadTokens)
+	}
+}
+
+func TestUsageCacheReadBackfillSkipsCanonicalZeroRead(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	now := time.Date(2026, time.July, 12, 1, 2, 3, 0, time.UTC)
+	record := &UsageRecord{
+		Timestamp:              now,
+		Provider:               "openai",
+		CachedTokens:           10,
+		CacheReadTokensPresent: true,
+		PayloadJSON:            JSONB(`{}`),
+		CreatedAt:              now,
+	}
+	if errCreate := db.Create(record).Error; errCreate != nil {
+		t.Fatalf("Create(usage) error = %v", errCreate)
+	}
+
+	result, errBackfill := repo.RunUsageCacheReadBackfillBatch(ctx)
+	if errBackfill != nil {
+		t.Fatalf("RunUsageCacheReadBackfillBatch() error = %v", errBackfill)
+	}
+	if result.Updated != 0 || !result.Done {
+		t.Fatalf("backfill result = %+v, want no update and done", result)
+	}
+	var stored UsageRecord
+	if errFind := db.First(&stored, record.ID).Error; errFind != nil {
+		t.Fatalf("First(usage) error = %v", errFind)
+	}
+	if stored.CacheReadTokens != 0 || !stored.CacheReadTokensPresent {
+		t.Fatalf("stored cache read = %d present=%t, want 0/true", stored.CacheReadTokens, stored.CacheReadTokensPresent)
+	}
+}
+
+func TestAutoMigrateDoesNotRunUsageCacheReadBackfill(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	now := time.Date(2026, time.July, 12, 1, 2, 3, 0, time.UTC)
+	record := &UsageRecord{Timestamp: now, Provider: "openai", CachedTokens: 100, PayloadJSON: JSONB(`{}`), CreatedAt: now}
+	if errCreate := db.Create(record).Error; errCreate != nil {
+		t.Fatalf("Create(usage) error = %v", errCreate)
+	}
+	if errMigrate := AutoMigrate(db); errMigrate != nil {
+		t.Fatalf("AutoMigrate() error = %v", errMigrate)
+	}
+	var stored UsageRecord
+	if errFind := db.First(&stored, record.ID).Error; errFind != nil {
+		t.Fatalf("First(usage) error = %v", errFind)
+	}
+	if stored.CacheReadTokens != 0 {
+		t.Fatalf("AutoMigrate cache read tokens = %d, want deferred backfill", stored.CacheReadTokens)
+	}
+	if errState := db.First(&KVRecord{}, "key = ?", usageCacheReadBackfillStateKey).Error; errState == nil {
+		t.Fatal("AutoMigrate unexpectedly created usage cache-read backfill state")
+	}
+}
+
 func TestUsageObservabilityOverviewTopCredentialUsesModelStateNextRetry(t *testing.T) {
 	t.Parallel()
 
@@ -277,6 +509,83 @@ func TestUsageObservabilityAggregateCacheRateUsesExplicitBuckets(t *testing.T) {
 	accumulator.Item.CacheRate = 0
 	if result := accumulator.result(); result.CacheRate != 0.3 {
 		t.Fatalf("accumulator cache rate = %v, want 0.3", result.CacheRate)
+	}
+}
+
+func TestUsageObservabilityAggregateNormalizesMixedLegacyCacheHistory(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	now := time.Date(2026, time.July, 12, 1, 2, 3, 0, time.UTC)
+	legacy := &UsageRecord{
+		Timestamp:    now,
+		Provider:     "openai",
+		Model:        "gpt-5",
+		CachedTokens: 100,
+		TotalTokens:  1000,
+		PayloadJSON:  JSONB(`{}`),
+		CreatedAt:    now,
+	}
+	current := &UsageRecord{
+		Timestamp:           now.Add(time.Second),
+		Provider:            "openai",
+		Model:               "gpt-5",
+		CachedTokens:        100,
+		CacheReadTokens:     100,
+		CacheCreationTokens: 50,
+		TotalTokens:         1000,
+		PayloadJSON:         JSONB(`{}`),
+		CreatedAt:           now,
+	}
+	for _, record := range []*UsageRecord{legacy, current} {
+		if errCreate := db.Create(record).Error; errCreate != nil {
+			t.Fatalf("Create(usage) error = %v", errCreate)
+		}
+	}
+
+	result, errAggregates := repo.ListUsageObservabilityAggregates(ctx, UsageObservabilityAggregateQuery{
+		GroupBy:   "provider",
+		Metric:    "total_tokens",
+		Direction: "desc",
+		Limit:     10,
+	})
+	if errAggregates != nil {
+		t.Fatalf("ListUsageObservabilityAggregates() error = %v", errAggregates)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("aggregate item count = %d, want 1", len(result.Items))
+	}
+	item := result.Items[0]
+	if item.CachedTokens != 200 || item.CacheReadTokens != 200 || item.CacheCreationTokens != 50 {
+		t.Fatalf("aggregate cache tokens = cached:%d read:%d creation:%d, want 200/200/50", item.CachedTokens, item.CacheReadTokens, item.CacheCreationTokens)
+	}
+	if item.CacheRate != 0.125 {
+		t.Fatalf("cache rate = %v, want 0.125", item.CacheRate)
+	}
+
+	from := now.Add(-time.Second)
+	to := now.Add(2 * time.Second)
+	overview, errOverview := repo.UsageObservabilityOverview(ctx, UsageObservabilityOverviewQuery{
+		From:     &from,
+		To:       &to,
+		Interval: "hour",
+		Timezone: "UTC",
+	})
+	if errOverview != nil {
+		t.Fatalf("UsageObservabilityOverview() error = %v", errOverview)
+	}
+	if overview.Totals.CacheReadTokens != 200 {
+		t.Fatalf("overview cache read tokens = %d, want 200", overview.Totals.CacheReadTokens)
+	}
+	if len(overview.Trend) != 1 || overview.Trend[0].CacheReadTokens != 200 {
+		t.Fatalf("overview trend = %+v, want one point with 200 cache read tokens", overview.Trend)
 	}
 }
 

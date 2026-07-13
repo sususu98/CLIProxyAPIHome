@@ -68,6 +68,30 @@ func TestPostBillingModelPriceCreatesRule(t *testing.T) {
 	}
 }
 
+func TestPostBillingModelPriceNormalizesAutoTierToStandard(t *testing.T) {
+	t.Parallel()
+
+	handler, closeRepo := newBillingManagementTestHandler(t)
+	defer closeRepo()
+
+	resp := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(resp)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/billing/model-prices", bytes.NewBufferString(`{"provider":"openai","model":"gpt-4.1-mini","service_tier":"auto","input_price_per_million":2,"enabled":true}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	handler.CreateBillingModelPrice(ctx)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want 200", resp.Code, resp.Body.String())
+	}
+	var payload map[string]any
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &payload); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	modelPrice, ok := payload["model_price"].(map[string]any)
+	if !ok || modelPrice["service_tier"] != "standard" {
+		t.Fatalf("model_price = %#v, want standard tier", payload["model_price"])
+	}
+}
+
 func TestBillingModelPriceRejectsInvalidServiceTierAsBadRequest(t *testing.T) {
 	t.Parallel()
 
@@ -219,7 +243,7 @@ func TestPreviewBillingModelPriceImportRejectsMalformedContextBand(t *testing.T)
 	preview, errPreview := handler.repo.CreateBillingModelPriceImportPreview(context.Background(), cluster.BillingModelPriceImportPreviewInput{
 		Source:  cluster.BillingModelPriceImportSourceModelsDev,
 		Targets: []cluster.BillingModelPriceImportTarget{{Provider: "openai", Model: "gpt-malformed-tier"}},
-		Policy:  cluster.BillingModelPriceImportPolicy{OverwriteMode: "missing", DefaultMultiplier: 1, IncludeCachePrices: true},
+		Policy:  cluster.BillingModelPriceImportPolicy{OverwriteMode: "missing", DefaultMultiplier: 1},
 	}, catalog)
 	if errPreview != nil {
 		t.Fatalf("CreateBillingModelPriceImportPreview() error = %v", errPreview)

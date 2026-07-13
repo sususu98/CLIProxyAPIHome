@@ -383,6 +383,7 @@ func run() int {
 			go respSrv.HandleConn(runCtx, conn)
 		}, nil, clusterTLSConfig)
 	}()
+	go runUsageCacheReadBackfillMaintenance(runCtx, repo)
 
 	go func() {
 		<-ctx.Done()
@@ -584,6 +585,31 @@ func listenPortFromAddress(addr string) (int, error) {
 		return 0, errPort
 	}
 	return port, nil
+}
+
+func runUsageCacheReadBackfillMaintenance(ctx context.Context, repo *cluster.Repository) {
+	if repo == nil {
+		return
+	}
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		batchCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		result, errBackfill := repo.RunUsageCacheReadBackfillBatch(batchCtx)
+		cancel()
+		if errBackfill != nil {
+			if ctx.Err() == nil {
+				log.WithError(errBackfill).Warn("usage cache-read backfill batch failed")
+			}
+		} else if result.Done {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // collectServeError handles a collect serve error.
