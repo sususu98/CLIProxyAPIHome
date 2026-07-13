@@ -19,12 +19,20 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 )
 
-const modelsDevCatalogURL = "https://models.dev/api.json"
+const (
+	modelsDevCatalogURL             = "https://models.dev/api.json"
+	billingImportMaxRequestBodySize = 4 << 20
+)
 
 func (h *Handler) PreviewBillingModelPriceImport(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, billingImportMaxRequestBodySize)
 	var body cluster.BillingModelPriceImportPreviewInput
 	if errBind := c.ShouldBindJSON(&body); errBind != nil {
 		respondError(c, http.StatusBadRequest, "invalid_body", errBind)
+		return
+	}
+	if errValidate := cluster.ValidateBillingModelPriceImportPreviewInput(body); errValidate != nil {
+		respondError(c, http.StatusUnprocessableEntity, "invalid_import_preview", errValidate)
 		return
 	}
 	ctx, cancel := h.requestContext(c)
@@ -43,6 +51,7 @@ func (h *Handler) PreviewBillingModelPriceImport(c *gin.Context) {
 }
 
 func (h *Handler) ApplyBillingModelPriceImport(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, billingImportMaxRequestBodySize)
 	var body cluster.BillingModelPriceImportApplyInput
 	if errBind := c.ShouldBindJSON(&body); errBind != nil {
 		respondError(c, http.StatusBadRequest, "invalid_body", errBind)
@@ -384,6 +393,10 @@ func billingImportNumberValue(record map[string]any, keys ...string) (float64, b
 		switch value := value.(type) {
 		case float64:
 			return value, true
+		case int:
+			return float64(value), true
+		case int64:
+			return float64(value), true
 		case json.Number:
 			parsed, err := value.Float64()
 			if err == nil {

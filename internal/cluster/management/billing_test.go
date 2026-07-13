@@ -288,6 +288,31 @@ func TestPreviewBillingModelPriceImportFetchesModelsDevServerSide(t *testing.T) 
 	}
 }
 
+func TestPreviewBillingModelPriceImportValidatesBeforeFetchingCatalog(t *testing.T) {
+	t.Parallel()
+
+	handler, closeRepo := newBillingManagementTestHandler(t)
+	defer closeRepo()
+	fetched := false
+	handler.SetModelsDevHTTPClient(&http.Client{Transport: billingImportRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		fetched = true
+		return nil, fmt.Errorf("catalog should not be fetched")
+	})})
+	response := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(response)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/billing/model-prices/import/preview", strings.NewReader(`{"source":"models.dev","targets":[{"provider":"openai","model":"gpt-import"}],"policy":{"overwrite_mode":"missing","default_multiplier":1,"multiplier_rules":[{"pattern":"gpt","multiplier":2}]}}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	handler.PreviewBillingModelPriceImport(ctx)
+
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d body=%s, want 422", response.Code, response.Body.String())
+	}
+	if fetched {
+		t.Fatal("invalid preview fetched the models.dev catalog")
+	}
+}
+
 func TestPatchBillingModelPricePartialUpdatePreservesUnspecifiedFields(t *testing.T) {
 	t.Parallel()
 

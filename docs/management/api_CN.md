@@ -1564,6 +1564,7 @@ Query 参数：
 | `output_price_per_million` | number | 否 | 非负 output-token 价格。 |
 | `cache_read_price_per_million` | number | 否 | 非负 cache-read token 价格。 |
 | `cache_write_price_per_million` | number | 否 | 非负 cache-write token 价格。 |
+| `cache_write_price_configured` | boolean | 否 | 是否显式配置 cache-write 价格，显式零价也包括在内。与 `cache_write_price_per_million: 0` 一起设置，可区分免费 cache-write bucket 与未配置价格。 |
 | `request_price` | number | 否 | 非负每请求价格。 |
 | `source` | string | 否 | 价格来源，例如 `manual`。 |
 | `enabled` | boolean | 否 | 规则是否启用；默认 `true`。 |
@@ -1619,7 +1620,7 @@ Query 参数：
 
 创建服务端的不可变 `models.dev` 导入预览。服务端拉取并固定来源快照；客户端提供目标、匹配策略、别名、行倍率和可选的来源匹配覆盖。响应包含 `preview_id`、`preview_revision`、来源信息、`generated_at`、`expires_at`、明确的 `atomic: true`、行和精确汇总。
 
-当前 preview target 只描述通配符 base 规则（`service_tier: "*"`、`min_input_tokens: 0`）；其他 target scope 会被拒绝，不会被静默改写。已匹配行会包含官方价格、倍率后的最终价格、`cache_write_price_configured`、精确的 `write_rule`，以及带 `revision` 的完整 `existing_rule` 快照。models.dev 上下文分段会生成不同包含式下界的通配符行；`row_multipliers` 按返回的精确 row key 生效，包含 context-band 行。出现不支持的价格维度、格式错误或无效的价格/分段、重复分段，或 tier 缺少 base 已配置价格维度时，整个 target 都不可应用，服务端不会导入可能低估计费的子集。
+当前 preview target 只描述通配符 base 规则（`service_tier: "*"`、`min_input_tokens: 0`）；其他 target scope 会被拒绝，不会被静默改写。已匹配行会包含官方价格、倍率后的最终价格、`cache_write_price_configured`、精确的 `write_rule`、带 `revision` 的完整可选 `existing_rule` 快照，以及机器可读的原因。models.dev 上下文分段会生成不同包含式下界的通配符行；`row_multipliers` 按返回的精确 row key 生效，包含 context-band 行。排除 cache 价格时，更新会保留已有 cache 价格，不会将其清空。出现不支持的价格维度、格式错误或无效的价格/分段、重复分段，或 tier 缺少 base 已配置价格维度时，整个 target 都不可应用，服务端不会导入可能低估计费的子集。
 
 `policy.overwrite_mode` 可为 `missing`、`sync` 或 `all`。`missing` 只创建缺失规则，`sync` 可更新已有 `source=sync` 规则，`all` 还可覆盖 manual/default 规则。`overwrite` 行在 apply 时必须确认。
 

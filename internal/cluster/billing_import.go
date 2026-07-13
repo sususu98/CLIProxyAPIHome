@@ -23,6 +23,9 @@ const (
 	billingImportPreviewRetention          = 24 * time.Hour
 	billingImportOperationRetention        = 30 * 24 * time.Hour
 	billingTierDiagnosticsWindow           = 30 * 24 * time.Hour
+	billingImportMaxTargets                = 10000
+	billingImportMaxPolicyEntries          = 10000
+	billingImportMaxSelectedKeys           = 10000
 )
 
 var (
@@ -319,6 +322,12 @@ func (r *Repository) CreateBillingModelPriceImportPreview(ctx context.Context, i
 	return &preview, nil
 }
 
+// ValidateBillingModelPriceImportPreviewInput validates request-controlled import data
+// before the models.dev catalog is fetched.
+func ValidateBillingModelPriceImportPreviewInput(input BillingModelPriceImportPreviewInput) error {
+	return validateBillingModelPriceImportInput(normalizeBillingModelPriceImportPreviewInput(input))
+}
+
 func normalizeBillingModelPriceImportPreviewInput(input BillingModelPriceImportPreviewInput) BillingModelPriceImportPreviewInput {
 	input.Source = strings.ToLower(strings.TrimSpace(input.Source))
 	if input.Source == "" {
@@ -354,7 +363,7 @@ func (r *Repository) ApplyBillingModelPriceImport(ctx context.Context, input Bil
 	input.PreviewID = strings.TrimSpace(input.PreviewID)
 	input.PreviewRevision = strings.TrimSpace(input.PreviewRevision)
 	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
-	if input.PreviewID == "" || input.PreviewRevision == "" || input.IdempotencyKey == "" || len(input.SelectedKeys) == 0 {
+	if input.PreviewID == "" || input.PreviewRevision == "" || input.IdempotencyKey == "" || len(input.SelectedKeys) == 0 || len(input.SelectedKeys) > billingImportMaxSelectedKeys {
 		return nil, ErrBillingImportInvalidSelection
 	}
 	selected := normalizedBillingImportSelectedKeys(input.SelectedKeys)
@@ -451,9 +460,30 @@ func (r *Repository) ApplyBillingModelPriceImport(ctx context.Context, input Bil
 		return nil
 	})
 	if errTransaction != nil {
+		if replay, errReplay := r.replayBillingModelPriceImport(ctx, db, input.IdempotencyKey, requestHash); replay != nil || errReplay != nil {
+			return replay, errReplay
+		}
 		return nil, errTransaction
 	}
 	return &operation, nil
+}
+
+func (r *Repository) replayBillingModelPriceImport(ctx context.Context, db *gorm.DB, idempotencyKey, requestHash string) (*BillingModelPriceImportOperation, error) {
+	var record BillingModelPriceImportOperationRecord
+	if errFind := db.WithContext(ctx).Where("idempotency_key = ?", idempotencyKey).First(&record).Error; errFind != nil {
+		if errors.Is(errFind, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, errFind
+	}
+	if record.RequestHash != requestHash {
+		return nil, ErrBillingImportIdempotencyConflict
+	}
+	operation := &BillingModelPriceImportOperation{}
+	if errDecode := unmarshalBillingImportOperation(record.Result, operation); errDecode != nil {
+		return nil, errDecode
+	}
+	return operation, nil
 }
 
 func (r *Repository) GetBillingModelPriceImportOperation(ctx context.Context, id string) (*BillingModelPriceImportOperation, error) {
@@ -490,8 +520,8 @@ func (r *Repository) GetBillingTierDiagnostics(ctx context.Context) (BillingTier
 	windowStart := windowEnd.Add(-billingTierDiagnosticsWindow)
 	errQuery := db.WithContext(ctx).Model(&UsageRecord{}).Where("timestamp >= ? AND request_service_tier IS NOT NULL AND request_service_tier <> ''", windowStart).Select(`
 		COUNT(*) AS eligible,
-		SUM(CASE WHEN response_service_tier IS NOT NULL AND response_service_tier <> '' THEN 1 ELSE 0 END) AS present,
-		SUM(CASE WHEN response_service_tier IS NULL OR response_service_tier = '' THEN 1 ELSE 0 END) AS fallback`).Scan(&result).Error
+		COALESCE(SUM(CASE WHEN response_service_tier IS NOT NULL AND response_service_tier <> '' THEN 1 ELSE 0 END), 0) AS present,
+		COALESCE(SUM(CASE WHEN response_service_tier IS NULL OR response_service_tier = '' THEN 1 ELSE 0 END), 0) AS fallback`).Scan(&result).Error
 	if errQuery != nil {
 		return BillingTierDiagnostics{}, errQuery
 	}
@@ -510,6 +540,7 @@ func (r *Repository) GetBillingTierDiagnostics(ctx context.Context) (BillingTier
 
 func buildBillingModelPriceImportPreview(input BillingModelPriceImportPreviewInput, catalog BillingModelPriceImportCatalog, existing []BillingModelPriceRecord, now time.Time) BillingModelPriceImportPreview {
 	preview := BillingModelPriceImportPreview{PreviewID: billingID("preview"), PreviewRevision: billingID("previewrev"), Source: BillingModelPriceImportSourceModelsDev, SourceURL: catalog.SourceURL, SourceVersion: catalog.Version, SourceFetchedAt: catalog.FetchedAt.UTC(), SourceModelCount: len(catalog.Models), GeneratedAt: now, ExpiresAt: now.Add(billingImportPreviewTTL), Atomic: true}
+	compiledMultiplierRules := billingImportCompileMultiplierRules(input.Policy.MultiplierRules)
 	existingByIdentity := make(map[string][]BillingModelPriceRecord)
 	for _, rule := range existing {
 		key := billingImportRuleIdentity(rule.Provider, rule.Model, rule.ServiceTier, rule.MinInputTokens)
@@ -517,7 +548,7 @@ func buildBillingModelPriceImportPreview(input BillingModelPriceImportPreviewInp
 	}
 	for _, target := range input.Targets {
 		baseKey := billingImportTargetKey(target.Provider, target.Model)
-		multiplier := billingImportMultiplier(input.Policy, target.Model, baseKey)
+		multiplier := billingImportMultiplier(input.Policy, compiledMultiplierRules, target.Model, baseKey)
 		matches := billingImportCatalogMatches(catalog.Models, target, input.Policy.Aliases, input.MatchOverrides)
 		if len(matches) == 0 {
 			preview.Rows = append(preview.Rows, billingImportReviewRow(baseKey, target, multiplier, "unmatched", "no_models_dev_match", nil))
@@ -559,7 +590,7 @@ func buildBillingModelPriceImportPreview(input BillingModelPriceImportPreviewInp
 			if index > 0 {
 				rowKey = fmt.Sprintf("%s::*::%d", baseKey, band.MinInputTokens)
 			}
-			rowMultiplier := billingImportMultiplier(input.Policy, target.Model, rowKey)
+			rowMultiplier := billingImportMultiplier(input.Policy, compiledMultiplierRules, target.Model, rowKey)
 			identity := billingImportRuleIdentity(target.Provider, target.Model, BillingServiceTierWildcard, band.MinInputTokens)
 			rules := existingByIdentity[identity]
 			if len(rules) > 1 {
@@ -573,6 +604,7 @@ func buildBillingModelPriceImportPreview(input BillingModelPriceImportPreviewInp
 			preview.Rows = append(preview.Rows, billingImportMatchedRow(rowKey, target, match, band, rowMultiplier, input.Policy, existingRule, catalog.FetchedAt))
 		}
 	}
+	billingImportRejectDuplicateRowKeys(preview.Rows)
 	preview.Summary = billingImportPreviewSummary(preview.Rows)
 	return preview
 }
@@ -605,6 +637,11 @@ func billingImportMatchedRow(rowKey string, target BillingModelPriceImportTarget
 	status := "matched"
 	if billingImportZeroCost(final) {
 		status = "zero_cost"
+	}
+	if !policy.IncludeCachePrices && existing != nil {
+		final.CacheRead = existing.CacheReadPricePerMillion
+		final.CacheWrite = existing.CacheWritePricePerMillion
+		final.CacheWriteConfigured = existing.CacheWritePriceConfigured
 	}
 	row := BillingModelPriceImportPreviewRow{RowKey: rowKey, Provider: strings.ToLower(strings.TrimSpace(target.Provider)), Model: strings.TrimSpace(target.Model), ServiceTier: BillingServiceTierWildcard, MinInputTokens: band.MinInputTokens, Label: strings.TrimSpace(target.Label), Status: status, MatchedProvider: match.Provider, MatchedModel: match.Model, MatchedName: match.Name, Official: &band.Cost, Multiplier: multiplier, Reasons: []BillingModelPriceImportReason{{Code: "matched", Message: "Exact models.dev match."}}}
 	if row.Label == "" {
@@ -795,6 +832,25 @@ func billingImportUniqueCatalogMatches(models []BillingModelPriceImportCatalogMo
 	return result
 }
 
+func billingImportRejectDuplicateRowKeys(rows []BillingModelPriceImportPreviewRow) {
+	counts := make(map[string]int, len(rows))
+	for _, row := range rows {
+		counts[row.RowKey]++
+	}
+	for index := range rows {
+		if counts[rows[index].RowKey] < 2 {
+			continue
+		}
+		rows[index].Status = "conflict"
+		rows[index].Action = "review"
+		rows[index].Applicable = false
+		rows[index].SelectedDefault = false
+		rows[index].Final = nil
+		rows[index].WriteRule = nil
+		rows[index].Reasons = []BillingModelPriceImportReason{{Code: "duplicate_row_key", Message: "duplicate row key"}}
+	}
+}
+
 func applyBillingModelPriceImportRow(ctx context.Context, tx *gorm.DB, row BillingModelPriceImportPreviewRow) (string, error) {
 	if row.Final == nil || row.WriteRule == nil {
 		return "", ErrBillingImportInvalidSelection
@@ -822,11 +878,24 @@ func applyBillingModelPriceImportRow(ctx context.Context, tx *gorm.DB, row Billi
 }
 
 func validateBillingModelPriceImportPreviewInput(input BillingModelPriceImportPreviewInput, catalog BillingModelPriceImportCatalog) error {
+	if errInput := validateBillingModelPriceImportInput(input); errInput != nil {
+		return errInput
+	}
+	if strings.TrimSpace(catalog.SourceURL) == "" || catalog.FetchedAt.IsZero() {
+		return fmt.Errorf("a catalog snapshot is required")
+	}
+	return nil
+}
+
+func validateBillingModelPriceImportInput(input BillingModelPriceImportPreviewInput) error {
 	if strings.TrimSpace(input.Source) != "" && !strings.EqualFold(strings.TrimSpace(input.Source), BillingModelPriceImportSourceModelsDev) {
 		return fmt.Errorf("unsupported import source")
 	}
-	if len(input.Targets) == 0 || strings.TrimSpace(catalog.SourceURL) == "" || catalog.FetchedAt.IsZero() {
-		return fmt.Errorf("import targets and a catalog snapshot are required")
+	if len(input.Targets) == 0 || len(input.Targets) > billingImportMaxTargets {
+		return fmt.Errorf("import targets are required and must not exceed %d", billingImportMaxTargets)
+	}
+	if len(input.Policy.MultiplierRules) > billingImportMaxPolicyEntries || len(input.Policy.Aliases) > billingImportMaxPolicyEntries || len(input.Policy.RowMultipliers) > billingImportMaxPolicyEntries || len(input.MatchOverrides) > billingImportMaxPolicyEntries {
+		return fmt.Errorf("import policy entries must not exceed %d", billingImportMaxPolicyEntries)
 	}
 	if input.Policy.OverwriteMode != "missing" && input.Policy.OverwriteMode != "sync" && input.Policy.OverwriteMode != "all" {
 		return fmt.Errorf("invalid overwrite_mode")
@@ -875,7 +944,7 @@ func validateBillingModelPriceImportPreviewInput(input BillingModelPriceImportPr
 		}
 	}
 	for _, rule := range input.Policy.MultiplierRules {
-		if !billingImportValidNumber(rule.Multiplier) || rule.Multiplier <= 0 || strings.TrimSpace(rule.Pattern) == "" || (rule.MatchMode != "" && !strings.EqualFold(rule.MatchMode, "prefix") && !strings.EqualFold(rule.MatchMode, "regex")) {
+		if !billingImportValidNumber(rule.Multiplier) || rule.Multiplier <= 0 || strings.TrimSpace(rule.Pattern) == "" || (!strings.EqualFold(rule.MatchMode, "prefix") && !strings.EqualFold(rule.MatchMode, "regex")) {
 			return fmt.Errorf("invalid multiplier rule")
 		}
 		if strings.EqualFold(rule.MatchMode, "regex") {
@@ -892,17 +961,30 @@ func validateBillingModelPriceImportPreviewInput(input BillingModelPriceImportPr
 	return nil
 }
 
-func billingImportMultiplier(policy BillingModelPriceImportPolicy, model, rowKey string) float64 {
+func billingImportCompileMultiplierRules(rules []BillingModelPriceImportMultiplierRule) map[int]*regexp.Regexp {
+	compiled := make(map[int]*regexp.Regexp)
+	for index, rule := range rules {
+		if !strings.EqualFold(strings.TrimSpace(rule.MatchMode), "regex") {
+			continue
+		}
+		if matcher, errCompile := regexp.Compile("(?i)" + rule.Pattern); errCompile == nil {
+			compiled[index] = matcher
+		}
+	}
+	return compiled
+}
+
+func billingImportMultiplier(policy BillingModelPriceImportPolicy, compiledRules map[int]*regexp.Regexp, model, rowKey string) float64 {
 	if value, ok := policy.RowMultipliers[rowKey]; ok {
 		return value
 	}
-	for _, rule := range policy.MultiplierRules {
+	for index, rule := range policy.MultiplierRules {
 		if strings.EqualFold(strings.TrimSpace(rule.MatchMode), "prefix") && strings.HasPrefix(strings.ToLower(model), strings.ToLower(strings.TrimSpace(rule.Pattern))) {
 			return rule.Multiplier
 		}
 		if strings.EqualFold(strings.TrimSpace(rule.MatchMode), "regex") {
-			matcher, errMatcher := regexp.Compile("(?i)" + rule.Pattern)
-			if errMatcher == nil && matcher.MatchString(model) {
+			matcher := compiledRules[index]
+			if matcher != nil && matcher.MatchString(model) {
 				return rule.Multiplier
 			}
 		}
@@ -933,10 +1015,11 @@ func billingImportTargetKey(provider, model string) string {
 	return strings.ToLower(strings.TrimSpace(provider)) + "::" + strings.TrimSpace(model)
 }
 func billingImportBareModel(model string) string {
-	if index := strings.LastIndex(strings.TrimSpace(model), "/"); index >= 0 {
-		return strings.TrimSpace(model)[index+1:]
+	trimmed := strings.TrimSpace(model)
+	if index := strings.LastIndex(trimmed, "/"); index >= 0 {
+		return trimmed[index+1:]
 	}
-	return strings.TrimSpace(model)
+	return trimmed
 }
 func billingImportRuleSnapshot(rule BillingModelPriceRecord) BillingModelPriceImportRuleSnapshot {
 	return BillingModelPriceImportRuleSnapshot{ID: rule.ID, Provider: rule.Provider, Model: rule.Model, ServiceTier: rule.ServiceTier, MinInputTokens: rule.MinInputTokens, InputPricePerMillion: rule.InputPricePerMillion, OutputPricePerMillion: rule.OutputPricePerMillion, CacheReadPricePerMillion: rule.CacheReadPricePerMillion, CacheWritePricePerMillion: rule.CacheWritePricePerMillion, CacheWritePriceConfigured: rule.CacheWritePriceConfigured, RequestPrice: rule.RequestPrice, Source: rule.Source, Enabled: rule.Enabled, Note: rule.Note, Revision: strconv.FormatInt(rule.Revision, 10)}
@@ -1012,13 +1095,32 @@ func migrateBillingImportIndexes(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("database connection is nil")
 	}
-	for _, index := range []string{
-		"idx_billing_model_price_import_operation_selection_hash",
-		"idx_billing_model_price_import_operation_records_selection_hash",
-	} {
-		if errDrop := db.Exec("DROP INDEX IF EXISTS " + index).Error; errDrop != nil {
-			return errDrop
+	const currentIndex = "idx_billing_model_price_import_operation_selection_hash"
+	const legacyIndex = "idx_billing_model_price_import_operation_records_selection_hash"
+	indexes, errIndexes := db.Migrator().GetIndexes(&BillingModelPriceImportOperationRecord{})
+	if errIndexes != nil {
+		return errIndexes
+	}
+	createCurrent := true
+	for _, index := range indexes {
+		switch index.Name() {
+		case currentIndex:
+			unique, known := index.Unique()
+			if known && !unique {
+				createCurrent = false
+				continue
+			}
+			if errDrop := db.Migrator().DropIndex(&BillingModelPriceImportOperationRecord{}, currentIndex); errDrop != nil {
+				return errDrop
+			}
+		case legacyIndex:
+			if errDrop := db.Migrator().DropIndex(&BillingModelPriceImportOperationRecord{}, legacyIndex); errDrop != nil {
+				return errDrop
+			}
 		}
 	}
-	return db.Exec(`CREATE INDEX IF NOT EXISTS idx_billing_model_price_import_operation_selection_hash ON billing_model_price_import_operation (selection_hash)`).Error
+	if !createCurrent {
+		return nil
+	}
+	return db.Migrator().CreateIndex(&BillingModelPriceImportOperationRecord{}, currentIndex)
 }

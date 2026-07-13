@@ -76,6 +76,88 @@ func TestBillingModelPriceImportUsesContextBandRowMultiplier(t *testing.T) {
 	}
 }
 
+func TestBillingModelPriceImportPreservesExistingCachePricesWhenExcluded(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	rule, errCreate := repo.CreateBillingModelPrice(ctx, BillingModelPriceUpdate{
+		Provider:                  "openai",
+		Model:                     "gpt-import",
+		InputPricePerMillion:      1,
+		OutputPricePerMillion:     2,
+		CacheReadPricePerMillion:  7,
+		CacheWritePricePerMillion: 9,
+		CacheWritePriceConfigured: true,
+		Source:                    BillingPriceSourceSync,
+		Enabled:                   true,
+	})
+	if errCreate != nil {
+		t.Fatalf("CreateBillingModelPrice() error = %v", errCreate)
+	}
+	input := billingImportTestInput("sync")
+	input.Policy.IncludeCachePrices = false
+	preview, errPreview := repo.CreateBillingModelPriceImportPreview(ctx, input, billingImportTestCatalog())
+	if errPreview != nil {
+		t.Fatalf("CreateBillingModelPriceImportPreview() error = %v", errPreview)
+	}
+	if len(preview.Rows) != 1 || preview.Rows[0].Final == nil || preview.Rows[0].Final.CacheRead != 7 || preview.Rows[0].Final.CacheWrite != 9 || !preview.Rows[0].Final.CacheWriteConfigured {
+		t.Fatalf("preview row = %#v, want existing cache prices preserved", preview.Rows)
+	}
+	_, errApply := repo.ApplyBillingModelPriceImport(ctx, BillingModelPriceImportApplyInput{
+		PreviewID:       preview.PreviewID,
+		PreviewRevision: preview.PreviewRevision,
+		SelectedKeys:    []string{preview.Rows[0].RowKey},
+		IdempotencyKey:  "preserve-cache-prices",
+	})
+	if errApply != nil {
+		t.Fatalf("ApplyBillingModelPriceImport() error = %v", errApply)
+	}
+	stored, errStored := repo.GetBillingModelPrice(ctx, rule.ID)
+	if errStored != nil {
+		t.Fatalf("GetBillingModelPrice() error = %v", errStored)
+	}
+	if stored.InputPricePerMillion != 2 || stored.OutputPricePerMillion != 8 || stored.CacheReadPricePerMillion != 7 || stored.CacheWritePricePerMillion != 9 || !stored.CacheWritePriceConfigured {
+		t.Fatalf("stored rule = %#v, want imported token prices and preserved cache prices", stored)
+	}
+}
+
+func TestBillingModelPriceImportRejectsDuplicateRowKeys(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	catalog := BillingModelPriceImportCatalog{
+		SourceURL: "https://models.dev/api.json",
+		Version:   "fixture-v1",
+		FetchedAt: time.Now().UTC(),
+		Models: []BillingModelPriceImportCatalogModel{
+			{Provider: "openai", Model: "foo", Cost: &BillingModelPriceImportCost{Input: 1, Output: 2}, ContextBands: []BillingModelPriceImportContextBand{{MinInputTokens: 100, Cost: BillingModelPriceImportCost{Input: 3, Output: 4}}}},
+			{Provider: "openai", Model: "foo::*::100", Cost: &BillingModelPriceImportCost{Input: 5, Output: 6}},
+		},
+	}
+	input := billingImportTestInput("missing")
+	input.Targets = []BillingModelPriceImportTarget{{Provider: "openai", Model: "foo"}, {Provider: "openai", Model: "foo::*::100"}}
+	preview, errPreview := repo.CreateBillingModelPriceImportPreview(ctx, input, catalog)
+	if errPreview != nil {
+		t.Fatalf("CreateBillingModelPriceImportPreview() error = %v", errPreview)
+	}
+	conflicts := 0
+	for _, row := range preview.Rows {
+		if row.RowKey == "openai::foo::*::100" {
+			conflicts++
+			if row.Status != "conflict" || row.Action != "review" || row.Applicable || row.Final != nil || row.WriteRule != nil {
+				t.Fatalf("duplicate row = %#v, want non-applicable conflict", row)
+			}
+		}
+	}
+	if conflicts != 2 {
+		t.Fatalf("duplicate row-key conflicts = %d, want 2; rows=%#v", conflicts, preview.Rows)
+	}
+}
+
 func TestBillingModelPriceImportPreservesContextBandScopeForReviewRows(t *testing.T) {
 	t.Parallel()
 
@@ -227,6 +309,62 @@ func TestBillingModelPriceImportConvertsConcurrentCreateToConflict(t *testing.T)
 	}
 }
 
+func TestBillingModelPriceImportRollsBackEarlierRowsOnLaterConflict(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	catalog := BillingModelPriceImportCatalog{
+		SourceURL: "https://models.dev/api.json",
+		Version:   "fixture-v1",
+		FetchedAt: time.Now().UTC(),
+		Models: []BillingModelPriceImportCatalogModel{
+			{Provider: "openai", Model: "a-model", Cost: &BillingModelPriceImportCost{Input: 1, Output: 2}},
+			{Provider: "openai", Model: "z-model", Cost: &BillingModelPriceImportCost{Input: 3, Output: 4}},
+		},
+	}
+	input := billingImportTestInput("missing")
+	input.Targets = []BillingModelPriceImportTarget{{Provider: "openai", Model: "a-model"}, {Provider: "openai", Model: "z-model"}}
+	preview, errPreview := repo.CreateBillingModelPriceImportPreview(ctx, input, catalog)
+	if errPreview != nil {
+		t.Fatalf("CreateBillingModelPriceImportPreview() error = %v", errPreview)
+	}
+	if len(preview.Rows) != 2 || preview.Rows[0].RowKey >= preview.Rows[1].RowKey {
+		t.Fatalf("preview rows = %#v, want two ordered create rows", preview.Rows)
+	}
+	if _, errCreate := repo.CreateBillingModelPrice(ctx, BillingModelPriceUpdate{Provider: "openai", Model: "z-model", Enabled: true}); errCreate != nil {
+		t.Fatalf("CreateBillingModelPrice(concurrent) error = %v", errCreate)
+	}
+	_, errApply := repo.ApplyBillingModelPriceImport(ctx, BillingModelPriceImportApplyInput{
+		PreviewID:       preview.PreviewID,
+		PreviewRevision: preview.PreviewRevision,
+		SelectedKeys:    []string{preview.Rows[0].RowKey, preview.Rows[1].RowKey},
+		IdempotencyKey:  "atomic-late-conflict",
+	})
+	if !errors.Is(errApply, ErrBillingImportRuleConflict) {
+		t.Fatalf("ApplyBillingModelPriceImport() error = %v, want rule conflict", errApply)
+	}
+	rolledBack, errList := repo.ListBillingModelPrices(ctx, BillingModelPriceQuery{Provider: "openai", Model: "a-model"})
+	if errList != nil {
+		t.Fatalf("ListBillingModelPrices() error = %v", errList)
+	}
+	if len(rolledBack) != 0 {
+		t.Fatalf("earlier imported rows were not rolled back: %#v", rolledBack)
+	}
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	var operationCount int64
+	if errCount := db.WithContext(ctx).Model(&BillingModelPriceImportOperationRecord{}).Where("idempotency_key = ?", "atomic-late-conflict").Count(&operationCount).Error; errCount != nil {
+		t.Fatalf("count import operations: %v", errCount)
+	}
+	if operationCount != 0 {
+		t.Fatalf("operation count = %d, want 0 after rollback", operationCount)
+	}
+}
+
 func TestBillingModelPriceImportRejectsNonBaseTargetAndUnsafeContextBand(t *testing.T) {
 	t.Parallel()
 
@@ -323,6 +461,34 @@ func TestBillingTierDiagnosticsUsesOnlyEligibleRecentRequests(t *testing.T) {
 	}
 	if !diagnostics.Supported || diagnostics.EligibleRequests != 2 || diagnostics.ResponseTierRequests != 1 || diagnostics.FallbackRequests != 1 || diagnostics.LastResponseTierAt == nil {
 		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+}
+
+func TestBillingTierDiagnosticsReturnsZeroCountsWithoutEligibleRequests(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	diagnostics, errDiagnostics := repo.GetBillingTierDiagnostics(ctx)
+	if errDiagnostics != nil {
+		t.Fatalf("GetBillingTierDiagnostics() error = %v", errDiagnostics)
+	}
+	if !diagnostics.Supported || diagnostics.EligibleRequests != 0 || diagnostics.ResponseTierRequests != 0 || diagnostics.FallbackRequests != 0 || diagnostics.LastResponseTierAt != nil {
+		t.Fatalf("diagnostics = %#v, want supported zero-count result", diagnostics)
+	}
+}
+
+func TestBillingModelPriceImportRejectsEmptyMultiplierMatchMode(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	input := billingImportTestInput("missing")
+	input.Policy.MultiplierRules = []BillingModelPriceImportMultiplierRule{{Pattern: "gpt", Multiplier: 2}}
+	if _, errPreview := repo.CreateBillingModelPriceImportPreview(ctx, input, billingImportTestCatalog()); errPreview == nil {
+		t.Fatal("CreateBillingModelPriceImportPreview() succeeded with an empty multiplier match_mode")
 	}
 }
 

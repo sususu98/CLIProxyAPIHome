@@ -1564,6 +1564,7 @@ Request body fields:
 | `output_price_per_million` | number | no | Non-negative output-token price. |
 | `cache_read_price_per_million` | number | no | Non-negative cache-read token price. |
 | `cache_write_price_per_million` | number | no | Non-negative cache-write token price. |
+| `cache_write_price_configured` | boolean | no | Whether cache-write pricing is explicitly configured, including an explicit zero. Set this with `cache_write_price_per_million: 0` to distinguish a free cache-write bucket from an omitted price. |
 | `request_price` | number | no | Non-negative per-request price. |
 | `source` | string | no | Price source such as `manual`. |
 | `enabled` | boolean | no | Whether the rule is active. Defaults to `true`. |
@@ -1619,7 +1620,7 @@ Charge `price_snapshot` audit data includes `requested_service_tier`, optional `
 
 Creates a server-side, immutable `models.dev` import preview. The server fetches and pins the source snapshot; clients provide targets, matching policy, aliases, row multipliers, and optional source-match overrides. The response contains `preview_id`, `preview_revision`, source provenance, `generated_at`, `expires_at`, explicit `atomic: true`, rows, and an exact summary.
 
-Preview targets currently describe only the wildcard base rule (`service_tier: "*"`, `min_input_tokens: 0`); other target scopes are rejected rather than silently rewritten. A matched row includes official prices, final multiplied prices, `cache_write_price_configured`, the exact `write_rule`, optional complete `existing_rule` snapshot with `revision`, and a machine-readable reason. Models.dev context bands create distinct wildcard rows at their inclusive lower bounds. `row_multipliers` apply to the exact returned row key, including a context-band key. Unsupported dimensions, malformed or invalid prices/bands, duplicate bands, or a tier that omits a price dimension configured by its base rule make the whole target non-applicable; the server never imports a potentially undercharged subset.
+Preview targets currently describe only the wildcard base rule (`service_tier: "*"`, `min_input_tokens: 0`); other target scopes are rejected rather than silently rewritten. A matched row includes official prices, final multiplied prices, `cache_write_price_configured`, the exact `write_rule`, optional complete `existing_rule` snapshot with `revision`, and a machine-readable reason. Models.dev context bands create distinct wildcard rows at their inclusive lower bounds. `row_multipliers` apply to the exact returned row key, including a context-band key. When cache prices are excluded, updates preserve the existing cache prices instead of clearing them. Unsupported dimensions, malformed or invalid prices/bands, duplicate bands, or a tier that omits a price dimension configured by its base rule make the whole target non-applicable; the server never imports a potentially undercharged subset.
 
 `policy.overwrite_mode` is `missing`, `sync`, or `all`. `missing` creates only absent rules, `sync` may update prior `source=sync` rules, and `all` may overwrite manual/default rules. Preview rows requiring an overwrite use action `overwrite` and require confirmation on apply.
 
