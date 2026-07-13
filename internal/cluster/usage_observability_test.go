@@ -512,6 +512,26 @@ func TestUsageObservabilityAggregateCacheRateUsesExplicitBuckets(t *testing.T) {
 	}
 }
 
+func TestUsageObservabilityAggregateCacheRatePreservesCanonicalZeroRead(t *testing.T) {
+	t.Parallel()
+
+	row := &usageObservabilityAggregateRow{
+		CachedTokens:    20,
+		CacheReadTokens: 0,
+		TotalTokens:     100,
+	}
+	item := usageObservabilityAggregateItemFromRow(row, "provider")
+	if item.CacheRate != 0 {
+		t.Fatalf("cache rate = %v, want 0", item.CacheRate)
+	}
+
+	accumulator := usageObservabilityAggregateAccumulator{Item: item}
+	accumulator.Item.CacheRate = 1
+	if result := accumulator.result(); result.CacheRate != 0 {
+		t.Fatalf("accumulator cache rate = %v, want 0", result.CacheRate)
+	}
+}
+
 func TestUsageObservabilityAggregateNormalizesMixedLegacyCacheHistory(t *testing.T) {
 	t.Parallel()
 
