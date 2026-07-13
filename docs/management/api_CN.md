@@ -1539,7 +1539,6 @@ Query 参数：
 | `output_price_per_million` | number | Output-token 价格。 |
 | `cache_read_price_per_million` | number | Cache-read token 价格。 |
 | `cache_write_price_per_million` | number | Cache-write token 价格。 |
-| `cache_write_price_configured` | boolean | 是否显式配置了 cache-write 价格；显式的零价格也为 `true`。 |
 | `request_price` | number | 每请求价格。 |
 | `source` | string | 价格来源。 |
 | `enabled` | boolean | 规则是否启用。 |
@@ -1564,7 +1563,6 @@ Query 参数：
 | `output_price_per_million` | number | 否 | 非负 output-token 价格。 |
 | `cache_read_price_per_million` | number | 否 | 非负 cache-read token 价格。 |
 | `cache_write_price_per_million` | number | 否 | 非负 cache-write token 价格。 |
-| `cache_write_price_configured` | boolean | 否 | 是否显式配置 cache-write 价格，显式零价也包括在内。与 `cache_write_price_per_million: 0` 一起设置，可区分免费 cache-write bucket 与未配置价格。 |
 | `request_price` | number | 否 | 非负每请求价格。 |
 | `source` | string | 否 | 价格来源，例如 `manual`。 |
 | `enabled` | boolean | 否 | 规则是否启用；默认 `true`。 |
@@ -1614,13 +1612,13 @@ Query 参数：
 { "service_tier_source": "response" }
 ```
 
-扣费 `price_snapshot` 审计数据包含 `requested_service_tier`、可选的 `response_service_tier`、`service_tier_source`、`effective_service_tier`、`response_tier_fallback`、`matched_service_tier` 和 `min_input_tokens`。上下文分段使用原始 input-token 总数。OpenAI 风格的独立 cache-read 与显式配置的 cache-write 会从普通 input 中扣除；未配置的 cache-write 仍按普通 input 计费，而显式配置为零的 bucket 仍可审计。Claude 风格的独立缓存桶保持现有行为。
+扣费 `price_snapshot` 审计数据包含 `requested_service_tier`、可选的 `response_service_tier`、`service_tier_source`、`effective_service_tier`、`response_tier_fallback`、`matched_service_tier` 和 `min_input_tokens`。上下文分段使用原始 input-token 总数。在 OpenAI Responses 协议中，`input_tokens` 已包含 cache-read 和 cache-write token。Home 会先从普通 input 中扣除 cache-read token，再应用 cache-read 价格；当 `cache_write_price_per_million` 大于零时，也会先从普通 input 中扣除 cache-write token，再应用独立的 cache-write 价格；价格为零或未提供时，这些 cache-write token 仍按普通 input 计费。在 Anthropic Messages 协议中，`input_tokens`、`cache_read_input_tokens` 和 `cache_creation_input_tokens` 是相互独立的 bucket，因此 Home 会分别计费，不会从 input 中扣除任何 cache bucket。
 
 ### POST `/billing/model-prices/import/preview`
 
-创建服务端的不可变 `models.dev` 导入预览。服务端拉取并固定来源快照；客户端提供目标、匹配策略、别名、行倍率和可选的来源匹配覆盖。响应包含 `preview_id`、`preview_revision`、来源信息、`generated_at`、`expires_at`、明确的 `atomic: true`、行和精确汇总。
+创建服务端的不可变 `models.dev` 导入预览。服务端拉取并固定来源快照；客户端提供目标、匹配策略、别名、行倍率和可选的来源匹配覆盖。客户端可控的输入无效时返回 `422 invalid_import_preview`，目录拉取失败时返回 `502 models_dev_fetch_failed`，内部 preview 持久化失败时返回 `500 billing_import_preview_failed`。成功响应包含 `preview_id`、`preview_revision`、来源信息、`generated_at`、`expires_at`、明确的 `atomic: true`、行和精确汇总。
 
-当前 preview target 只描述通配符 base 规则（`service_tier: "*"`、`min_input_tokens: 0`）；其他 target scope 会被拒绝，不会被静默改写。已匹配行会包含官方价格、倍率后的最终价格、`cache_write_price_configured`、精确的 `write_rule`、带 `revision` 的完整可选 `existing_rule` 快照，以及机器可读的原因。models.dev 上下文分段会生成不同包含式下界的通配符行；`row_multipliers` 按返回的精确 row key 生效，包含 context-band 行。排除 cache 价格时，更新会保留已有 cache 价格，不会将其清空。出现不支持的价格维度、格式错误或无效的价格/分段、重复分段，或 tier 缺少 base 已配置价格维度时，整个 target 都不可应用，服务端不会导入可能低估计费的子集。
+当前 preview target 只描述通配符 base 规则（`service_tier: "*"`、`min_input_tokens: 0`）；其他 target scope 会被拒绝，不会被静默改写。已匹配行会包含官方价格、倍率后的最终价格、精确的 `write_rule`、带 `revision` 的完整可选 `existing_rule` 快照，以及机器可读的原因。models.dev 上下文分段会生成不同包含式下界的通配符行；`row_multipliers` 按返回的精确 row key 生效，包含 context-band 行。排除 cache 价格时，更新会保留已有 cache 价格，不会将其清空。出现不支持的价格维度、格式错误或无效的价格/分段、重复分段，或 tier 缺少 base 已配置价格维度时，整个 target 都不可应用；服务端不会导入可能低估计费的子集。
 
 `policy.overwrite_mode` 可为 `missing`、`sync` 或 `all`。`missing` 只创建缺失规则，`sync` 可更新已有 `source=sync` 规则，`all` 还可覆盖 manual/default 规则。`overwrite` 行在 apply 时必须确认。
 

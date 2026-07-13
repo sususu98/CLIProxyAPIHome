@@ -49,7 +49,6 @@ type BillingModelPriceRecord struct {
 	OutputPricePerMillion     float64        `gorm:"column:output_price_per_million;not null;default:0"`
 	CacheReadPricePerMillion  float64        `gorm:"column:cache_read_price_per_million;not null;default:0"`
 	CacheWritePricePerMillion float64        `gorm:"column:cache_write_price_per_million;not null;default:0"`
-	CacheWritePriceConfigured bool           `gorm:"column:cache_write_price_configured;not null;default:false"`
 	RequestPrice              float64        `gorm:"column:request_price;not null;default:0"`
 	Source                    string         `gorm:"column:source;not null;default:manual"`
 	Enabled                   bool           `gorm:"column:enabled;not null;index:idx_billing_model_price_enabled"`
@@ -113,7 +112,6 @@ type BillingModelPriceUpdate struct {
 	OutputPricePerMillion     float64
 	CacheReadPricePerMillion  float64
 	CacheWritePricePerMillion float64
-	CacheWritePriceConfigured bool
 	RequestPrice              float64
 	Source                    string
 	Enabled                   bool
@@ -129,7 +127,6 @@ type BillingModelPricePatch struct {
 	OutputPricePerMillion     *float64
 	CacheReadPricePerMillion  *float64
 	CacheWritePricePerMillion *float64
-	CacheWritePriceConfigured *bool
 	RequestPrice              *float64
 	Source                    *string
 	Enabled                   *bool
@@ -231,7 +228,6 @@ type BillingPriceSnapshot struct {
 	OutputPricePerMillion     float64 `json:"output_price_per_million"`
 	CacheReadPricePerMillion  float64 `json:"cache_read_price_per_million"`
 	CacheWritePricePerMillion float64 `json:"cache_write_price_per_million"`
-	CacheWritePriceConfigured bool    `json:"cache_write_price_configured"`
 	RequestPrice              float64 `json:"request_price"`
 	MatchedServiceTier        string  `json:"matched_service_tier"`
 	MinInputTokens            int64   `json:"min_input_tokens"`
@@ -298,7 +294,6 @@ func (r *Repository) CreateBillingModelPrice(ctx context.Context, update Billing
 		OutputPricePerMillion:     update.OutputPricePerMillion,
 		CacheReadPricePerMillion:  update.CacheReadPricePerMillion,
 		CacheWritePricePerMillion: update.CacheWritePricePerMillion,
-		CacheWritePriceConfigured: update.CacheWritePriceConfigured || update.CacheWritePricePerMillion > 0,
 		RequestPrice:              update.RequestPrice,
 		Source:                    billingPriceSource(update.Source),
 		Enabled:                   update.Enabled,
@@ -754,11 +749,6 @@ func billingModelPricePatchUpdates(patch BillingModelPricePatch) map[string]any 
 	if patch.CacheWritePricePerMillion != nil {
 		updates["cache_write_price_per_million"] = *patch.CacheWritePricePerMillion
 	}
-	if patch.CacheWritePriceConfigured != nil {
-		updates["cache_write_price_configured"] = *patch.CacheWritePriceConfigured
-	} else if patch.CacheWritePricePerMillion != nil && *patch.CacheWritePricePerMillion > 0 {
-		updates["cache_write_price_configured"] = true
-	}
 	if patch.RequestPrice != nil {
 		updates["request_price"] = *patch.RequestPrice
 	}
@@ -1168,7 +1158,6 @@ func billingPriceSnapshotForUsage(ctx context.Context, tx *gorm.DB, usage *Usage
 		OutputPricePerMillion:     price.OutputPricePerMillion,
 		CacheReadPricePerMillion:  price.CacheReadPricePerMillion,
 		CacheWritePricePerMillion: price.CacheWritePricePerMillion,
-		CacheWritePriceConfigured: price.CacheWritePriceConfigured,
 		RequestPrice:              price.RequestPrice,
 		MatchedServiceTier:        price.ServiceTier,
 		MinInputTokens:            price.MinInputTokens,
@@ -1186,7 +1175,6 @@ func billingChargeAmount(usage *UsageRecord, snapshot BillingPriceSnapshot) floa
 	}
 	inputTokens := usage.InputTokens
 	cacheReadTokens := usage.CacheReadTokens
-	cacheWritePriceConfigured := snapshot.CacheWritePriceConfigured || snapshot.CacheWritePricePerMillion > 0
 	if cacheReadTokens == 0 && usage.CachedTokens > 0 {
 		cacheReadTokens = usage.CachedTokens
 	}
@@ -1204,7 +1192,7 @@ func billingChargeAmount(usage *UsageRecord, snapshot BillingPriceSnapshot) floa
 			inputTokens = 0
 		}
 	}
-	if !cacheWritePriceConfigured {
+	if snapshot.CacheWritePricePerMillion <= 0 {
 		cacheWriteTokens = 0
 	}
 	return snapshot.RequestPrice +
@@ -1430,9 +1418,6 @@ func migrateBillingIndexes(db *gorm.DB) error {
 		return errDefaults
 	}
 	if errDefaults := db.Model(&BillingModelPriceRecord{}).Where("revision IS NULL OR revision < ?", 1).Update("revision", 1).Error; errDefaults != nil {
-		return errDefaults
-	}
-	if errDefaults := db.Model(&BillingModelPriceRecord{}).Where("cache_write_price_per_million > ?", 0).Update("cache_write_price_configured", true).Error; errDefaults != nil {
 		return errDefaults
 	}
 	return db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_model_price_active_unique ON billing_model_price (provider, model, service_tier, min_input_tokens) WHERE deleted_at IS NULL AND enabled = TRUE`).Error

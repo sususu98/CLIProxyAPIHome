@@ -1539,7 +1539,6 @@ Model price fields:
 | `output_price_per_million` | number | Output-token price. |
 | `cache_read_price_per_million` | number | Cache-read token price. |
 | `cache_write_price_per_million` | number | Cache-write token price. |
-| `cache_write_price_configured` | boolean | Whether cache-write pricing is explicitly configured, including an explicit zero. |
 | `request_price` | number | Per-request price. |
 | `source` | string | Price source. |
 | `enabled` | boolean | Whether the rule is active. |
@@ -1564,7 +1563,6 @@ Request body fields:
 | `output_price_per_million` | number | no | Non-negative output-token price. |
 | `cache_read_price_per_million` | number | no | Non-negative cache-read token price. |
 | `cache_write_price_per_million` | number | no | Non-negative cache-write token price. |
-| `cache_write_price_configured` | boolean | no | Whether cache-write pricing is explicitly configured, including an explicit zero. Set this with `cache_write_price_per_million: 0` to distinguish a free cache-write bucket from an omitted price. |
 | `request_price` | number | no | Non-negative per-request price. |
 | `source` | string | no | Price source such as `manual`. |
 | `enabled` | boolean | no | Whether the rule is active. Defaults to `true`. |
@@ -1614,13 +1612,13 @@ Partially updates billing settings. In `response` mode, a missing response tier 
 { "service_tier_source": "response" }
 ```
 
-Charge `price_snapshot` audit data includes `requested_service_tier`, optional `response_service_tier`, `service_tier_source`, `effective_service_tier`, `response_tier_fallback`, `matched_service_tier`, and `min_input_tokens`. Context-band selection uses the original total input count. Separately priced OpenAI cached reads and explicitly configured cache writes are removed from ordinary input; an omitted cache-write price remains ordinary input, while an explicitly configured zero-price bucket remains auditable. Claude-style separate cache buckets retain their existing behavior.
+Charge `price_snapshot` audit data includes `requested_service_tier`, optional `response_service_tier`, `service_tier_source`, `effective_service_tier`, `response_tier_fallback`, `matched_service_tier`, and `min_input_tokens`. Context-band selection uses the original total input count. In the OpenAI Responses protocol, `input_tokens` includes both cache-read and cache-write tokens. Home removes cache-read tokens from ordinary input before applying the cache-read price. When `cache_write_price_per_million` is positive, Home also removes cache-write tokens from ordinary input before applying that separate price; when the price is zero or omitted, those cache-write tokens remain billed as ordinary input. In the Anthropic Messages protocol, `input_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens` are independent buckets, so Home prices them independently without subtracting either cache bucket from input.
 
 ### POST `/billing/model-prices/import/preview`
 
-Creates a server-side, immutable `models.dev` import preview. The server fetches and pins the source snapshot; clients provide targets, matching policy, aliases, row multipliers, and optional source-match overrides. The response contains `preview_id`, `preview_revision`, source provenance, `generated_at`, `expires_at`, explicit `atomic: true`, rows, and an exact summary.
+Creates a server-side, immutable `models.dev` import preview. The server fetches and pins the source snapshot; clients provide targets, matching policy, aliases, row multipliers, and optional source-match overrides. Invalid request-controlled input returns `422 invalid_import_preview`, a catalog fetch failure returns `502 models_dev_fetch_failed`, and an internal preview persistence failure returns `500 billing_import_preview_failed`. A successful response contains `preview_id`, `preview_revision`, source provenance, `generated_at`, `expires_at`, explicit `atomic: true`, rows, and an exact summary.
 
-Preview targets currently describe only the wildcard base rule (`service_tier: "*"`, `min_input_tokens: 0`); other target scopes are rejected rather than silently rewritten. A matched row includes official prices, final multiplied prices, `cache_write_price_configured`, the exact `write_rule`, optional complete `existing_rule` snapshot with `revision`, and a machine-readable reason. Models.dev context bands create distinct wildcard rows at their inclusive lower bounds. `row_multipliers` apply to the exact returned row key, including a context-band key. When cache prices are excluded, updates preserve the existing cache prices instead of clearing them. Unsupported dimensions, malformed or invalid prices/bands, duplicate bands, or a tier that omits a price dimension configured by its base rule make the whole target non-applicable; the server never imports a potentially undercharged subset.
+Preview targets currently describe only the wildcard base rule (`service_tier: "*"`, `min_input_tokens: 0`); other target scopes are rejected rather than silently rewritten. A matched row includes official prices, final multiplied prices, the exact `write_rule`, optional complete `existing_rule` snapshot with `revision`, and a machine-readable reason. Models.dev context bands create distinct wildcard rows at their inclusive lower bounds. `row_multipliers` apply to the exact returned row key, including a context-band key. When cache prices are excluded, updates preserve the existing cache prices instead of clearing them. Unsupported dimensions, malformed or invalid prices/bands, duplicate bands, or a tier that omits a price dimension configured by its base rule make the whole target non-applicable; the server never imports a potentially undercharged subset.
 
 `policy.overwrite_mode` is `missing`, `sync`, or `all`. `missing` creates only absent rules, `sync` may update prior `source=sync` rules, and `all` may overwrite manual/default rules. Preview rows requiring an overwrite use action `overwrite` and require confirmation on apply.
 
