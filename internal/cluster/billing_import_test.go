@@ -20,8 +20,8 @@ func TestBillingModelPriceImportAppliesAtomicallyAndReplaysIdempotently(t *testi
 	if len(preview.Rows) != 1 || preview.Rows[0].Action != "create" || !preview.Rows[0].Applicable {
 		t.Fatalf("preview rows = %#v", preview.Rows)
 	}
-	if preview.Rows[0].Final == nil || !preview.Rows[0].Final.CacheWriteConfigured {
-		t.Fatalf("preview did not preserve configured zero cache write: %#v", preview.Rows[0])
+	if preview.Rows[0].Final == nil || preview.Rows[0].Final.CacheWrite != 0 {
+		t.Fatalf("preview cache-write price = %#v, want zero", preview.Rows[0].Final)
 	}
 	input := BillingModelPriceImportApplyInput{PreviewID: preview.PreviewID, PreviewRevision: preview.PreviewRevision, SelectedKeys: []string{preview.Rows[0].RowKey}, IdempotencyKey: "replay-key"}
 	first, errApply := repo.ApplyBillingModelPriceImport(ctx, input)
@@ -39,7 +39,7 @@ func TestBillingModelPriceImportAppliesAtomicallyAndReplaysIdempotently(t *testi
 	if errRules != nil {
 		t.Fatalf("ListBillingModelPrices() error = %v", errRules)
 	}
-	if len(rules) != 1 || !rules[0].CacheWritePriceConfigured || rules[0].Revision != 1 || first.Rows[0].ResourceID != rules[0].ID {
+	if len(rules) != 1 || rules[0].Revision != 1 || first.Rows[0].ResourceID != rules[0].ID {
 		t.Fatalf("stored rules = %#v", rules)
 	}
 	operation, errOperation := repo.GetBillingModelPriceImportOperation(ctx, first.OperationID)
@@ -57,7 +57,7 @@ func TestBillingModelPriceImportUsesContextBandRowMultiplier(t *testing.T) {
 	catalog := billingImportTestCatalog()
 	catalog.Models[0].ContextBands = []BillingModelPriceImportContextBand{{
 		MinInputTokens: 272001,
-		Cost:           BillingModelPriceImportCost{Input: 4, Output: 16, CacheWriteConfigured: true},
+		Cost:           BillingModelPriceImportCost{Input: 4, Output: 16},
 	}}
 	input := billingImportTestInput("missing")
 	input.Policy.RowMultipliers = map[string]float64{
@@ -89,7 +89,6 @@ func TestBillingModelPriceImportPreservesExistingCachePricesWhenExcluded(t *test
 		OutputPricePerMillion:     2,
 		CacheReadPricePerMillion:  7,
 		CacheWritePricePerMillion: 9,
-		CacheWritePriceConfigured: true,
 		Source:                    BillingPriceSourceSync,
 		Enabled:                   true,
 	})
@@ -102,7 +101,7 @@ func TestBillingModelPriceImportPreservesExistingCachePricesWhenExcluded(t *test
 	if errPreview != nil {
 		t.Fatalf("CreateBillingModelPriceImportPreview() error = %v", errPreview)
 	}
-	if len(preview.Rows) != 1 || preview.Rows[0].Final == nil || preview.Rows[0].Final.CacheRead != 7 || preview.Rows[0].Final.CacheWrite != 9 || !preview.Rows[0].Final.CacheWriteConfigured {
+	if len(preview.Rows) != 1 || preview.Rows[0].Final == nil || preview.Rows[0].Final.CacheRead != 7 || preview.Rows[0].Final.CacheWrite != 9 {
 		t.Fatalf("preview row = %#v, want existing cache prices preserved", preview.Rows)
 	}
 	_, errApply := repo.ApplyBillingModelPriceImport(ctx, BillingModelPriceImportApplyInput{
@@ -118,7 +117,7 @@ func TestBillingModelPriceImportPreservesExistingCachePricesWhenExcluded(t *test
 	if errStored != nil {
 		t.Fatalf("GetBillingModelPrice() error = %v", errStored)
 	}
-	if stored.InputPricePerMillion != 2 || stored.OutputPricePerMillion != 8 || stored.CacheReadPricePerMillion != 7 || stored.CacheWritePricePerMillion != 9 || !stored.CacheWritePriceConfigured {
+	if stored.InputPricePerMillion != 2 || stored.OutputPricePerMillion != 8 || stored.CacheReadPricePerMillion != 7 || stored.CacheWritePricePerMillion != 9 {
 		t.Fatalf("stored rule = %#v, want imported token prices and preserved cache prices", stored)
 	}
 }
@@ -179,7 +178,7 @@ func TestBillingModelPriceImportPreservesContextBandScopeForReviewRows(t *testin
 	catalog := billingImportTestCatalog()
 	catalog.Models[0].ContextBands = []BillingModelPriceImportContextBand{{
 		MinInputTokens: 272001,
-		Cost:           BillingModelPriceImportCost{Input: 4, Output: 16, CacheWriteConfigured: true},
+		Cost:           BillingModelPriceImportCost{Input: 4, Output: 16},
 	}}
 
 	preview, errPreview := repo.CreateBillingModelPriceImportPreview(ctx, billingImportTestInput("missing"), catalog)
@@ -387,8 +386,8 @@ func TestBillingModelPriceImportRejectsNonBaseTargetAndUnsafeContextBand(t *test
 	}
 	duplicateCatalog := billingImportTestCatalog()
 	duplicateCatalog.Models[0].ContextBands = []BillingModelPriceImportContextBand{
-		{MinInputTokens: 272001, Cost: BillingModelPriceImportCost{Input: 4, Output: 16, CacheWriteConfigured: true}},
-		{MinInputTokens: 272001, Cost: BillingModelPriceImportCost{Input: 5, Output: 20, CacheWriteConfigured: true}},
+		{MinInputTokens: 272001, Cost: BillingModelPriceImportCost{Input: 4, Output: 16}},
+		{MinInputTokens: 272001, Cost: BillingModelPriceImportCost{Input: 5, Output: 20}},
 	}
 	duplicatePreview, errDuplicatePreview := repo.CreateBillingModelPriceImportPreview(ctx, billingImportTestInput("missing"), duplicateCatalog)
 	if errDuplicatePreview != nil {
@@ -423,14 +422,12 @@ func TestBillingModelPriceImportRejectsChangedRuleRevision(t *testing.T) {
 	}
 }
 
-func TestBillingChargeAmountKeepsConfiguredZeroCacheWritePriceFree(t *testing.T) {
+func TestBillingChargeAmountKeepsZeroPricedOpenAICacheWritesInInput(t *testing.T) {
 	t.Parallel()
 
 	usage := &UsageRecord{Provider: "openai", ExecutorType: "OpenAICompatExecutor", InputTokens: 1000, CacheCreationTokens: 100}
-	configured := billingChargeAmount(usage, BillingPriceSnapshot{InputPricePerMillion: 1000, CacheWritePricePerMillion: 0, CacheWritePriceConfigured: true})
-	omitted := billingChargeAmount(usage, BillingPriceSnapshot{InputPricePerMillion: 1000, CacheWritePricePerMillion: 0})
-	if configured != 1 || omitted != 1 {
-		t.Fatalf("configured/omitted cache-write charge = %g/%g, want 1/1", configured, omitted)
+	if amount := billingChargeAmount(usage, BillingPriceSnapshot{InputPricePerMillion: 1000}); amount != 1 {
+		t.Fatalf("zero-price cache-write charge = %g, want 1", amount)
 	}
 }
 
@@ -519,5 +516,5 @@ func billingImportTestInput(overwriteMode string) BillingModelPriceImportPreview
 }
 
 func billingImportTestCatalog() BillingModelPriceImportCatalog {
-	return BillingModelPriceImportCatalog{SourceURL: "https://models.dev/api.json", Version: "fixture-v1", FetchedAt: time.Date(2026, time.July, 11, 0, 0, 0, 0, time.UTC), Models: []BillingModelPriceImportCatalogModel{{Provider: "openai", Model: "gpt-import", Name: "GPT Import", Cost: &BillingModelPriceImportCost{Input: 2, Output: 8, CacheWrite: 0, CacheWriteConfigured: true}}}}
+	return BillingModelPriceImportCatalog{SourceURL: "https://models.dev/api.json", Version: "fixture-v1", FetchedAt: time.Date(2026, time.July, 11, 0, 0, 0, 0, time.UTC), Models: []BillingModelPriceImportCatalogModel{{Provider: "openai", Model: "gpt-import", Name: "GPT Import", Cost: &BillingModelPriceImportCost{Input: 2, Output: 8, CacheWrite: 0}}}}
 }

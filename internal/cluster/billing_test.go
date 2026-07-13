@@ -451,13 +451,13 @@ func TestBillingChargeAmountNormalizesOpenAICacheBuckets(t *testing.T) {
 		CacheReadPricePerMillion:  0.5,
 		CacheWritePricePerMillion: 3,
 	}
-	if amount := billingChargeAmount(usage, snapshot); amount != 1.925 {
-		t.Fatalf("billingChargeAmount() = %v, want 1.925", amount)
+	if amount := billingChargeAmount(usage, snapshot); amount != 1.725 {
+		t.Fatalf("billingChargeAmount() = %v, want 1.725", amount)
 	}
 
 	usage.CachedTokens = 0
-	if amount := billingChargeAmount(usage, snapshot); amount != 1.925 {
-		t.Fatalf("billingChargeAmount() with explicit cache read = %v, want 1.925", amount)
+	if amount := billingChargeAmount(usage, snapshot); amount != 1.725 {
+		t.Fatalf("billingChargeAmount() with explicit cache read = %v, want 1.725", amount)
 	}
 }
 

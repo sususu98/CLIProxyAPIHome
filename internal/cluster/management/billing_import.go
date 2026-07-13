@@ -44,7 +44,7 @@ func (h *Handler) PreviewBillingModelPriceImport(c *gin.Context) {
 	}
 	preview, errPreview := h.repo.CreateBillingModelPriceImportPreview(ctx, body, catalog)
 	if errPreview != nil {
-		respondError(c, http.StatusUnprocessableEntity, "invalid_import_preview", errPreview)
+		respondError(c, http.StatusInternalServerError, "billing_import_preview_failed", errPreview)
 		return
 	}
 	c.JSON(http.StatusOK, preview)
@@ -214,7 +214,7 @@ func parseBillingModelPriceImportCost(value any) (*cluster.BillingModelPriceImpo
 	if !hasInput && !hasOutput && !hasCacheRead && !hasCacheWrite && !hasRequest {
 		return nil, billingModelPriceImportCostPresence{}, false
 	}
-	return &cluster.BillingModelPriceImportCost{Input: input, Output: output, CacheRead: cacheRead, CacheWrite: cacheWrite, CacheWriteConfigured: hasCacheWrite, Request: request}, billingModelPriceImportCostPresence{Input: hasInput, Output: hasOutput, CacheRead: hasCacheRead, CacheWrite: hasCacheWrite, Request: hasRequest}, true
+	return &cluster.BillingModelPriceImportCost{Input: input, Output: output, CacheRead: cacheRead, CacheWrite: cacheWrite, Request: request}, billingModelPriceImportCostPresence{Input: hasInput, Output: hasOutput, CacheRead: hasCacheRead, CacheWrite: hasCacheWrite, Request: hasRequest}, true
 }
 
 func parseBillingModelPriceImportContextBands(value any, base billingModelPriceImportCostPresence) ([]cluster.BillingModelPriceImportContextBand, []string) {

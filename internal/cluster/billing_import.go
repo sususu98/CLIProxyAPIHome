@@ -125,12 +125,11 @@ type BillingModelPriceImportPreviewInput struct {
 }
 
 type BillingModelPriceImportCost struct {
-	Input                float64 `json:"input"`
-	Output               float64 `json:"output"`
-	CacheRead            float64 `json:"cache_read"`
-	CacheWrite           float64 `json:"cache_write"`
-	CacheWriteConfigured bool    `json:"cache_write_configured"`
-	Request              float64 `json:"request"`
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cache_read"`
+	CacheWrite float64 `json:"cache_write"`
+	Request    float64 `json:"request"`
 }
 
 type BillingModelPriceImportContextBand struct {
@@ -169,7 +168,6 @@ type BillingModelPriceImportRuleSnapshot struct {
 	OutputPricePerMillion     float64 `json:"output_price_per_million"`
 	CacheReadPricePerMillion  float64 `json:"cache_read_price_per_million"`
 	CacheWritePricePerMillion float64 `json:"cache_write_price_per_million"`
-	CacheWritePriceConfigured bool    `json:"cache_write_price_configured"`
 	RequestPrice              float64 `json:"request_price"`
 	Source                    string  `json:"source"`
 	Enabled                   bool    `json:"enabled"`
@@ -178,12 +176,11 @@ type BillingModelPriceImportRuleSnapshot struct {
 }
 
 type BillingModelPriceImportWriteRule struct {
-	Source                    string `json:"source"`
-	Enabled                   bool   `json:"enabled"`
-	Note                      string `json:"note"`
-	ServiceTier               string `json:"service_tier"`
-	MinInputTokens            int64  `json:"min_input_tokens"`
-	CacheWritePriceConfigured bool   `json:"cache_write_price_configured"`
+	Source         string `json:"source"`
+	Enabled        bool   `json:"enabled"`
+	Note           string `json:"note"`
+	ServiceTier    string `json:"service_tier"`
+	MinInputTokens int64  `json:"min_input_tokens"`
 }
 
 type BillingModelPriceImportReason struct {
@@ -641,7 +638,6 @@ func billingImportMatchedRow(rowKey string, target BillingModelPriceImportTarget
 	if !policy.IncludeCachePrices && existing != nil {
 		final.CacheRead = existing.CacheReadPricePerMillion
 		final.CacheWrite = existing.CacheWritePricePerMillion
-		final.CacheWriteConfigured = existing.CacheWritePriceConfigured
 	}
 	row := BillingModelPriceImportPreviewRow{RowKey: rowKey, Provider: strings.ToLower(strings.TrimSpace(target.Provider)), Model: strings.TrimSpace(target.Model), ServiceTier: BillingServiceTierWildcard, MinInputTokens: band.MinInputTokens, Label: strings.TrimSpace(target.Label), Status: status, MatchedProvider: match.Provider, MatchedModel: match.Model, MatchedName: match.Name, Official: &band.Cost, Multiplier: multiplier, Reasons: []BillingModelPriceImportReason{{Code: "matched", Message: "Exact models.dev match."}}}
 	if row.Label == "" {
@@ -676,7 +672,7 @@ func billingImportMatchedRow(rowKey string, target BillingModelPriceImportTarget
 	if existing != nil {
 		enabled = existing.Enabled
 	}
-	row.WriteRule = &BillingModelPriceImportWriteRule{Source: BillingPriceSourceSync, Enabled: enabled, Note: fmt.Sprintf("synced from models.dev (%s/%s) x%g @ %s", match.Provider, match.Model, multiplier, fetchedAt.UTC().Format("2006-01-02")), ServiceTier: row.ServiceTier, MinInputTokens: row.MinInputTokens, CacheWritePriceConfigured: final.CacheWriteConfigured}
+	row.WriteRule = &BillingModelPriceImportWriteRule{Source: BillingPriceSourceSync, Enabled: enabled, Note: fmt.Sprintf("synced from models.dev (%s/%s) x%g @ %s", match.Provider, match.Model, multiplier, fetchedAt.UTC().Format("2006-01-02")), ServiceTier: row.ServiceTier, MinInputTokens: row.MinInputTokens}
 	return row
 }
 
@@ -856,7 +852,7 @@ func applyBillingModelPriceImportRow(ctx context.Context, tx *gorm.DB, row Billi
 		return "", ErrBillingImportInvalidSelection
 	}
 	if row.ExistingRule == nil {
-		record := BillingModelPriceRecord{ID: billingID("price"), Provider: strings.ToLower(strings.TrimSpace(row.Provider)), Model: strings.TrimSpace(row.Model), ServiceTier: row.ServiceTier, MinInputTokens: row.MinInputTokens, InputPricePerMillion: row.Final.Input, OutputPricePerMillion: row.Final.Output, CacheReadPricePerMillion: row.Final.CacheRead, CacheWritePricePerMillion: row.Final.CacheWrite, CacheWritePriceConfigured: row.Final.CacheWriteConfigured, RequestPrice: row.Final.Request, Source: BillingPriceSourceSync, Enabled: row.WriteRule.Enabled, Note: row.WriteRule.Note, Revision: 1}
+		record := BillingModelPriceRecord{ID: billingID("price"), Provider: strings.ToLower(strings.TrimSpace(row.Provider)), Model: strings.TrimSpace(row.Model), ServiceTier: row.ServiceTier, MinInputTokens: row.MinInputTokens, InputPricePerMillion: row.Final.Input, OutputPricePerMillion: row.Final.Output, CacheReadPricePerMillion: row.Final.CacheRead, CacheWritePricePerMillion: row.Final.CacheWrite, RequestPrice: row.Final.Request, Source: BillingPriceSourceSync, Enabled: row.WriteRule.Enabled, Note: row.WriteRule.Note, Revision: 1}
 		if errCreate := tx.WithContext(ctx).Create(&record).Error; errCreate != nil {
 			return "", errCreate
 		}
@@ -866,7 +862,7 @@ func applyBillingModelPriceImportRow(ctx context.Context, tx *gorm.DB, row Billi
 	if errRevision != nil {
 		return "", ErrBillingImportRuleConflict
 	}
-	updates := map[string]any{"input_price_per_million": row.Final.Input, "output_price_per_million": row.Final.Output, "cache_read_price_per_million": row.Final.CacheRead, "cache_write_price_per_million": row.Final.CacheWrite, "cache_write_price_configured": row.Final.CacheWriteConfigured, "request_price": row.Final.Request, "source": BillingPriceSourceSync, "enabled": row.WriteRule.Enabled, "note": row.WriteRule.Note, "revision": gorm.Expr("revision + ?", 1)}
+	updates := map[string]any{"input_price_per_million": row.Final.Input, "output_price_per_million": row.Final.Output, "cache_read_price_per_million": row.Final.CacheRead, "cache_write_price_per_million": row.Final.CacheWrite, "request_price": row.Final.Request, "source": BillingPriceSourceSync, "enabled": row.WriteRule.Enabled, "note": row.WriteRule.Note, "revision": gorm.Expr("revision + ?", 1)}
 	result := tx.WithContext(ctx).Model(&BillingModelPriceRecord{}).Where("id = ? AND revision = ?", row.ExistingRule.ID, expectedRevision).Updates(updates)
 	if result.Error != nil {
 		return "", result.Error
@@ -1000,7 +996,6 @@ func billingImportMultiplyCost(cost BillingModelPriceImportCost, multiplier floa
 	if includeCache {
 		result.CacheRead = cost.CacheRead * multiplier
 		result.CacheWrite = cost.CacheWrite * multiplier
-		result.CacheWriteConfigured = cost.CacheWriteConfigured
 	}
 	return result
 }
@@ -1022,7 +1017,7 @@ func billingImportBareModel(model string) string {
 	return trimmed
 }
 func billingImportRuleSnapshot(rule BillingModelPriceRecord) BillingModelPriceImportRuleSnapshot {
-	return BillingModelPriceImportRuleSnapshot{ID: rule.ID, Provider: rule.Provider, Model: rule.Model, ServiceTier: rule.ServiceTier, MinInputTokens: rule.MinInputTokens, InputPricePerMillion: rule.InputPricePerMillion, OutputPricePerMillion: rule.OutputPricePerMillion, CacheReadPricePerMillion: rule.CacheReadPricePerMillion, CacheWritePricePerMillion: rule.CacheWritePricePerMillion, CacheWritePriceConfigured: rule.CacheWritePriceConfigured, RequestPrice: rule.RequestPrice, Source: rule.Source, Enabled: rule.Enabled, Note: rule.Note, Revision: strconv.FormatInt(rule.Revision, 10)}
+	return BillingModelPriceImportRuleSnapshot{ID: rule.ID, Provider: rule.Provider, Model: rule.Model, ServiceTier: rule.ServiceTier, MinInputTokens: rule.MinInputTokens, InputPricePerMillion: rule.InputPricePerMillion, OutputPricePerMillion: rule.OutputPricePerMillion, CacheReadPricePerMillion: rule.CacheReadPricePerMillion, CacheWritePricePerMillion: rule.CacheWritePricePerMillion, RequestPrice: rule.RequestPrice, Source: rule.Source, Enabled: rule.Enabled, Note: rule.Note, Revision: strconv.FormatInt(rule.Revision, 10)}
 }
 func billingImportPreviewSummary(rows []BillingModelPriceImportPreviewRow) BillingModelPriceImportSummary {
 	var summary BillingModelPriceImportSummary

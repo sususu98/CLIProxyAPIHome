@@ -141,7 +141,7 @@ func TestBillingSettingsGetAndPatch(t *testing.T) {
 	}
 }
 
-func TestParseBillingModelPriceImportCatalogPreservesContextBandAndConfiguredZero(t *testing.T) {
+func TestParseBillingModelPriceImportCatalogPreservesZeroPricedContextBand(t *testing.T) {
 	t.Parallel()
 
 	catalog, errCatalog := parseBillingModelPriceImportCatalog([]byte(`{
@@ -154,10 +154,10 @@ func TestParseBillingModelPriceImportCatalogPreservesContextBandAndConfiguredZer
 	if errCatalog != nil {
 		t.Fatalf("parseBillingModelPriceImportCatalog() error = %v", errCatalog)
 	}
-	if len(catalog.Models) != 1 || catalog.Models[0].Cost == nil || !catalog.Models[0].Cost.CacheWriteConfigured {
+	if len(catalog.Models) != 1 || catalog.Models[0].Cost == nil || catalog.Models[0].Cost.CacheWrite != 0 {
 		t.Fatalf("catalog models = %#v", catalog.Models)
 	}
-	if len(catalog.Models[0].ContextBands) != 1 || catalog.Models[0].ContextBands[0].MinInputTokens != 272001 || !catalog.Models[0].ContextBands[0].Cost.CacheWriteConfigured {
+	if len(catalog.Models[0].ContextBands) != 1 || catalog.Models[0].ContextBands[0].MinInputTokens != 272001 || catalog.Models[0].ContextBands[0].Cost.CacheWrite != 0 || len(catalog.Models[0].ContextBands[0].MissingPriceFields) != 0 {
 		t.Fatalf("context bands = %#v", catalog.Models[0].ContextBands)
 	}
 }
@@ -310,6 +310,26 @@ func TestPreviewBillingModelPriceImportValidatesBeforeFetchingCatalog(t *testing
 	}
 	if fetched {
 		t.Fatal("invalid preview fetched the models.dev catalog")
+	}
+}
+
+func TestPreviewBillingModelPriceImportReturnsInternalErrorForDatabaseFailure(t *testing.T) {
+	t.Parallel()
+
+	handler, closeRepo := newBillingManagementTestHandler(t)
+	closeRepo()
+	handler.SetModelsDevHTTPClient(&http.Client{Transport: billingImportRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"openai":{"models":{"gpt-import":{"cost":{"input":2,"output":8}}}}}`))}, nil
+	})})
+	response := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(response)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/billing/model-prices/import/preview", strings.NewReader(`{"source":"models.dev","targets":[{"provider":"openai","model":"gpt-import"}],"policy":{"overwrite_mode":"missing","default_multiplier":1}}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	handler.PreviewBillingModelPriceImport(ctx)
+
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "billing_import_preview_failed") {
+		t.Fatalf("status = %d body=%s, want 500 billing_import_preview_failed", response.Code, response.Body.String())
 	}
 }
 

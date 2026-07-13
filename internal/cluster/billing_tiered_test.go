@@ -37,7 +37,7 @@ func TestBillingMigrationPreservesLegacyPriceAsWildcardBaseBand(t *testing.T) {
 	if errFirst := db.First(&record, "id = ?", "legacy").Error; errFirst != nil {
 		t.Fatalf("load migrated row: %v", errFirst)
 	}
-	if record.ServiceTier != BillingServiceTierWildcard || record.MinInputTokens != 0 || record.InputPricePerMillion != 2 || record.Revision != 1 || record.CacheWritePriceConfigured {
+	if record.ServiceTier != BillingServiceTierWildcard || record.MinInputTokens != 0 || record.InputPricePerMillion != 2 || record.Revision != 1 {
 		t.Fatalf("migrated record = %+v", record)
 	}
 }
@@ -154,7 +154,7 @@ func TestBillingChargeAmountSeparatesOpenAICacheReadAndWrite(t *testing.T) {
 
 	snapshot := BillingPriceSnapshot{InputPricePerMillion: 10, CacheReadPricePerMillion: 2, CacheWritePricePerMillion: 12.5}
 	usage := &UsageRecord{InputTokens: 100, CachedTokens: 30, CacheCreationTokens: 20}
-	if got, want := billingChargeAmount(usage, snapshot), 0.00101; math.Abs(got-want) > 1e-12 {
+	if got, want := billingChargeAmount(usage, snapshot), 0.00081; math.Abs(got-want) > 1e-12 {
 		t.Fatalf("billingChargeAmount() = %.9f, want %.9f", got, want)
 	}
 
@@ -169,7 +169,7 @@ func TestBillingChargeAmountSeparatesOpenAICacheWriteWithoutCacheRead(t *testing
 
 	usage := &UsageRecord{Provider: "openai", InputTokens: 100, CacheCreationTokens: 20}
 	snapshot := BillingPriceSnapshot{InputPricePerMillion: 10, CacheWritePricePerMillion: 12.5}
-	if got, want := billingChargeAmount(usage, snapshot), 0.00125; math.Abs(got-want) > 1e-12 {
+	if got, want := billingChargeAmount(usage, snapshot), 0.00105; math.Abs(got-want) > 1e-12 {
 		t.Fatalf("billingChargeAmount() = %.9f, want %.9f", got, want)
 	}
 }
@@ -204,7 +204,7 @@ func TestBillingOpenAICompatibleProviderNameDoesNotSelectClaudeBuckets(t *testin
 		CacheCreationTokens: 20,
 	}
 	snapshot := BillingPriceSnapshot{InputPricePerMillion: 10, CacheReadPricePerMillion: 2, CacheWritePricePerMillion: 12.5}
-	if got, want := billingChargeAmount(usage, snapshot), 0.00101; math.Abs(got-want) > 1e-12 {
+	if got, want := billingChargeAmount(usage, snapshot), 0.00081; math.Abs(got-want) > 1e-12 {
 		t.Fatalf("billingChargeAmount() = %.9f, want %.9f", got, want)
 	}
 	if got, want := billingCacheTokens(usage), int64(50); got != want {
