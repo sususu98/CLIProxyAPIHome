@@ -1190,11 +1190,16 @@ func billingChargeAmount(usage *UsageRecord, snapshot BillingPriceSnapshot) floa
 	if cacheReadTokens == 0 && usage.CachedTokens > 0 {
 		cacheReadTokens = usage.CachedTokens
 	}
-	// OpenAI-style cached_tokens are included in input_tokens. Claude reports
-	// cache_read_tokens/cache_creation_tokens as separate billing buckets.
+	// OpenAI/Codex style: cache_read/cache_write live under input_tokens details and
+	// are subsets of input_tokens. Claude/Anthropic report mutually exclusive buckets.
 	cacheWriteTokens := usage.CacheCreationTokens
-	if billingCacheReadIncludedInInput(usage) {
+	// Only peel write out of input when a positive separate write rate is used.
+	// Configured write=0 means "no write premium" while tokens still bill as input.
+	if billingCacheTokensIncludedInInput(usage) {
 		inputTokens -= cacheReadTokens
+		if snapshot.CacheWritePricePerMillion > 0 {
+			inputTokens -= cacheWriteTokens
+		}
 		if inputTokens < 0 {
 			inputTokens = 0
 		}
@@ -1209,8 +1214,10 @@ func billingChargeAmount(usage *UsageRecord, snapshot BillingPriceSnapshot) floa
 		float64(cacheWriteTokens)*snapshot.CacheWritePricePerMillion/1000000
 }
 
-func billingCacheReadIncludedInInput(usage *UsageRecord) bool {
-	if usage == nil || (usage.CacheReadTokens <= 0 && usage.CachedTokens <= 0) {
+// billingCacheTokensIncludedInInput reports whether cache read/write counts are
+// already included inside usage.InputTokens (OpenAI/Codex/OpenAI-compatible).
+func billingCacheTokensIncludedInInput(usage *UsageRecord) bool {
+	if usage == nil {
 		return false
 	}
 	provider := strings.ToLower(strings.TrimSpace(usage.Provider))
