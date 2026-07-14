@@ -165,7 +165,7 @@ func TestBillingSettingsGetAndPatch(t *testing.T) {
 	}
 }
 
-func TestParseBillingModelPriceImportCatalogPreservesZeroPricedContextBand(t *testing.T) {
+func TestParseBillingModelPriceImportCatalogDefaultsMissingCachePricesFromInput(t *testing.T) {
 	t.Parallel()
 
 	catalog, errCatalog := parseBillingModelPriceImportCatalog([]byte(`{
@@ -178,15 +178,15 @@ func TestParseBillingModelPriceImportCatalogPreservesZeroPricedContextBand(t *te
 	if errCatalog != nil {
 		t.Fatalf("parseBillingModelPriceImportCatalog() error = %v", errCatalog)
 	}
-	if len(catalog.Models) != 1 || catalog.Models[0].Cost == nil || catalog.Models[0].Cost.CacheWrite != 0 {
+	if len(catalog.Models) != 1 || catalog.Models[0].Cost == nil || catalog.Models[0].Cost.CacheRead != 0.2 || catalog.Models[0].Cost.CacheWrite != 0 {
 		t.Fatalf("catalog models = %#v", catalog.Models)
 	}
-	if len(catalog.Models[0].ContextBands) != 1 || catalog.Models[0].ContextBands[0].MinInputTokens != 272001 || catalog.Models[0].ContextBands[0].Cost.CacheWrite != 0 || len(catalog.Models[0].ContextBands[0].MissingPriceFields) != 0 {
+	if len(catalog.Models[0].ContextBands) != 1 || catalog.Models[0].ContextBands[0].MinInputTokens != 272001 || catalog.Models[0].ContextBands[0].Cost.CacheRead != 0.4 || catalog.Models[0].ContextBands[0].Cost.CacheWrite != 0 || len(catalog.Models[0].ContextBands[0].MissingPriceFields) != 0 {
 		t.Fatalf("context bands = %#v", catalog.Models[0].ContextBands)
 	}
 }
 
-func TestParseBillingModelPriceImportCatalogMarksIncompleteTierUnsafe(t *testing.T) {
+func TestParseBillingModelPriceImportCatalogDefaultsMissingTierCacheWriteFromInput(t *testing.T) {
 	t.Parallel()
 
 	catalog, errCatalog := parseBillingModelPriceImportCatalog([]byte(`{
@@ -198,8 +198,31 @@ func TestParseBillingModelPriceImportCatalogMarksIncompleteTierUnsafe(t *testing
 	if errCatalog != nil {
 		t.Fatalf("parseBillingModelPriceImportCatalog() error = %v", errCatalog)
 	}
-	if len(catalog.Models) != 1 || len(catalog.Models[0].ContextBands) != 1 || len(catalog.Models[0].ContextBands[0].MissingPriceFields) != 1 || catalog.Models[0].ContextBands[0].MissingPriceFields[0] != "cache_write" {
+	if len(catalog.Models) != 1 || len(catalog.Models[0].ContextBands) != 1 || catalog.Models[0].ContextBands[0].Cost.CacheRead != 0.25 || catalog.Models[0].ContextBands[0].Cost.CacheWrite != 3.125 || len(catalog.Models[0].ContextBands[0].MissingPriceFields) != 0 {
 		t.Fatalf("catalog context bands = %#v", catalog.Models)
+	}
+}
+
+func TestParseBillingModelPriceImportCatalogDefaultsBothCachePricesAndPreservesExplicitValues(t *testing.T) {
+	t.Parallel()
+
+	catalog, errCatalog := parseBillingModelPriceImportCatalog([]byte(`{
+  "openai": {"models": {
+    "gpt-derived": {"cost": {"input": 2, "output": 8}},
+    "gpt-explicit": {"cost": {"input": 2, "output": 8, "cache_read": 0, "cache_write": 3}}
+  }}
+}`), modelsDevCatalogURL, time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC))
+	if errCatalog != nil {
+		t.Fatalf("parseBillingModelPriceImportCatalog() error = %v", errCatalog)
+	}
+	if len(catalog.Models) != 2 || catalog.Models[0].Cost == nil || catalog.Models[1].Cost == nil {
+		t.Fatalf("catalog models = %#v", catalog.Models)
+	}
+	if catalog.Models[0].Model != "gpt-derived" || catalog.Models[0].Cost.CacheRead != 0.2 || catalog.Models[0].Cost.CacheWrite != 2.5 {
+		t.Fatalf("derived cache prices = %#v", catalog.Models[0])
+	}
+	if catalog.Models[1].Model != "gpt-explicit" || catalog.Models[1].Cost.CacheRead != 0 || catalog.Models[1].Cost.CacheWrite != 3 {
+		t.Fatalf("explicit cache prices = %#v", catalog.Models[1])
 	}
 }
 
