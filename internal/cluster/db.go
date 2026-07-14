@@ -153,6 +153,9 @@ func autoMigrate(db *gorm.DB) error {
 	if errMigrate := migrateUsageProviderAPIKeySources(db); errMigrate != nil {
 		return errMigrate
 	}
+	if errMigrate := migrateUsageServiceTiers(db); errMigrate != nil {
+		return errMigrate
+	}
 	return migrateLegacyAPIKeys(db)
 }
 
@@ -254,6 +257,27 @@ func migrateUsageProviderAPIKeySources(db *gorm.DB) error {
 			}
 			return nil
 		}).Error
+}
+
+// migrateUsageServiceTiers collapses the redundant legacy request tier into
+// service_tier. The old column is intentionally retained in existing databases
+// so upgrades remain non-destructive, but new records only use service_tier and
+// response_service_tier.
+func migrateUsageServiceTiers(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	if db.Migrator().HasColumn(&UsageRecord{}, "request_service_tier") {
+		return db.Exec(`UPDATE "usage"
+			SET "service_tier" = CASE
+				WHEN TRIM(COALESCE("request_service_tier", '')) <> '' THEN "request_service_tier"
+				ELSE ?
+			END
+			WHERE "service_tier" IS NULL OR TRIM("service_tier") = ''`, defaultUsageServiceTier).Error
+	}
+	return db.Model(&UsageRecord{}).
+		Where("service_tier IS NULL OR TRIM(service_tier) = ''").
+		Update("service_tier", defaultUsageServiceTier).Error
 }
 
 type usageCacheReadBackfillState struct {

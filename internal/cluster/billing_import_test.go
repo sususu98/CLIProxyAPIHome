@@ -506,7 +506,7 @@ func TestBillingTierDiagnosticsUsesOnlyEligibleRecentRequests(t *testing.T) {
 	now := time.Now().UTC()
 	for _, record := range []UsageRecord{
 		{Timestamp: now, ServiceTier: "standard", ResponseServiceTier: "priority", PayloadJSON: JSONB(`{}`), CreatedAt: now},
-		{Timestamp: now, RequestServiceTier: "standard", PayloadJSON: JSONB(`{}`), CreatedAt: now},
+		{Timestamp: now, ServiceTier: "standard", PayloadJSON: JSONB(`{}`), CreatedAt: now},
 		{Timestamp: now, PayloadJSON: JSONB(`{}`), CreatedAt: now},
 		{Timestamp: now.Add(-31 * 24 * time.Hour), ServiceTier: "standard", PayloadJSON: JSONB(`{}`), CreatedAt: now},
 	} {

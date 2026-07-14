@@ -543,7 +543,7 @@ func (r *Repository) GetBillingTierDiagnostics(ctx context.Context) (BillingTier
 	}
 	windowEnd := time.Now().UTC()
 	windowStart := windowEnd.Add(-billingTierDiagnosticsWindow)
-	tierPresent := "COALESCE(NULLIF(service_tier, ''), NULLIF(request_service_tier, '')) IS NOT NULL"
+	tierPresent := "service_tier IS NOT NULL AND service_tier <> ''"
 	errQuery := db.WithContext(ctx).Model(&UsageRecord{}).Where("timestamp >= ? AND "+tierPresent, windowStart).Select(`
 		COUNT(*) AS eligible,
 		COALESCE(SUM(CASE WHEN response_service_tier IS NOT NULL AND response_service_tier <> '' THEN 1 ELSE 0 END), 0) AS present,

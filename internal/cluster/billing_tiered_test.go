@@ -6,6 +6,7 @@ import (
 	"math"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestBillingMigrationPreservesLegacyPriceAsWildcardBaseBand(t *testing.T) {
@@ -49,8 +50,48 @@ func TestUsageRecordFromPayloadAcceptsLegacyRequestTier(t *testing.T) {
 	if errRecord != nil {
 		t.Fatalf("UsageRecordFromPayload() error = %v", errRecord)
 	}
-	if record.ServiceTier != "priority" || record.RequestServiceTier != "priority" || record.ResponseServiceTier != "default" {
-		t.Fatalf("tiers = legacy:%q request:%q response:%q", record.ServiceTier, record.RequestServiceTier, record.ResponseServiceTier)
+	if record.ServiceTier != "priority" || record.ResponseServiceTier != "default" {
+		t.Fatalf("tiers = request:%q response:%q", record.ServiceTier, record.ResponseServiceTier)
+	}
+}
+
+func TestMigrateUsageServiceTiersPromotesLegacyRequestTier(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, errOpen := OpenSQLite(ctx, filepath.Join(t.TempDir(), "legacy-tier.db"))
+	if errOpen != nil {
+		t.Fatalf("OpenSQLite() error = %v", errOpen)
+	}
+	sqlDB, _ := db.DB()
+	defer func() { _ = sqlDB.Close() }()
+	if errMigrate := AutoMigrate(db); errMigrate != nil {
+		t.Fatalf("AutoMigrate() error = %v", errMigrate)
+	}
+	if errAlter := db.Exec(`ALTER TABLE "usage" ADD COLUMN request_service_tier TEXT`).Error; errAlter != nil {
+		t.Fatalf("add legacy request tier column: %v", errAlter)
+	}
+	now := time.Now().UTC()
+	legacy := &UsageRecord{Timestamp: now, PayloadJSON: JSONB(`{}`), CreatedAt: now}
+	canonical := &UsageRecord{Timestamp: now, ServiceTier: "default", PayloadJSON: JSONB(`{}`), CreatedAt: now}
+	if errCreate := db.Create(legacy).Error; errCreate != nil {
+		t.Fatalf("create legacy usage: %v", errCreate)
+	}
+	if errCreate := db.Create(canonical).Error; errCreate != nil {
+		t.Fatalf("create canonical usage: %v", errCreate)
+	}
+	if errUpdate := db.Exec(`UPDATE "usage" SET request_service_tier = ? WHERE id IN (?, ?)`, "priority", legacy.ID, canonical.ID).Error; errUpdate != nil {
+		t.Fatalf("set legacy request tiers: %v", errUpdate)
+	}
+	if errMigrate := migrateUsageServiceTiers(db); errMigrate != nil {
+		t.Fatalf("migrateUsageServiceTiers() error = %v", errMigrate)
+	}
+	var records []UsageRecord
+	if errFind := db.Order("id ASC").Find(&records).Error; errFind != nil {
+		t.Fatalf("load migrated usage: %v", errFind)
+	}
+	if len(records) != 2 || records[0].ServiceTier != "priority" || records[1].ServiceTier != "default" {
+		t.Fatalf("migrated records = %+v", records)
 	}
 }
 
@@ -61,8 +102,8 @@ func TestUsageRecordFromPayloadDefaultsMissingTierToAuto(t *testing.T) {
 	if errRecord != nil {
 		t.Fatalf("UsageRecordFromPayload() error = %v", errRecord)
 	}
-	if record.ServiceTier != "auto" || record.RequestServiceTier != "" {
-		t.Fatalf("tiers = service:%q legacy request:%q, want auto/empty", record.ServiceTier, record.RequestServiceTier)
+	if record.ServiceTier != "auto" {
+		t.Fatalf("service tier = %q, want auto", record.ServiceTier)
 	}
 }
 
@@ -73,12 +114,12 @@ func TestUsageRecordFromPayloadKeepsServiceTierPrimaryOverLegacyRequestTier(t *t
 	if errRecord != nil {
 		t.Fatalf("UsageRecordFromPayload() error = %v", errRecord)
 	}
-	if record.ServiceTier != "default" || record.RequestServiceTier != "priority" {
-		t.Fatalf("tiers = service:%q legacy request:%q, want default/priority", record.ServiceTier, record.RequestServiceTier)
+	if record.ServiceTier != "default" {
+		t.Fatalf("service tier = %q, want default", record.ServiceTier)
 	}
 }
 
-func TestBillingPriceMatchingPrefersServiceTierOverLegacyRequestTier(t *testing.T) {
+func TestBillingPriceMatchingDefaultsToServiceTier(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -96,17 +137,19 @@ func TestBillingPriceMatchingPrefersServiceTierOverLegacyRequestTier(t *testing.
 	if errDB != nil {
 		t.Fatalf("database() error = %v", errDB)
 	}
+	// Default service_tier_source is request/service_tier, even when upstream
+	// returns a different response_service_tier.
 	_, snapshot, errSnapshot := billingPriceSnapshotForUsage(ctx, db, &UsageRecord{
-		Provider:           "openai",
-		Model:              "gpt-5.5",
-		ServiceTier:        "default",
-		RequestServiceTier: "priority",
+		Provider:            "openai",
+		Model:               "gpt-5.5",
+		ServiceTier:         "priority",
+		ResponseServiceTier: "default",
 	})
 	if errSnapshot != nil {
 		t.Fatalf("billingPriceSnapshotForUsage() error = %v", errSnapshot)
 	}
-	if snapshot.RequestPrice != 1 || snapshot.EffectiveServiceTier != "standard" {
-		t.Fatalf("snapshot = %+v, want service_tier standard rule", snapshot)
+	if snapshot.RequestPrice != 2 || snapshot.EffectiveServiceTier != "priority" || snapshot.ServiceTierSource != BillingServiceTierSourceRequest {
+		t.Fatalf("snapshot = %+v, want request service_tier priority rule", snapshot)
 	}
 }
 

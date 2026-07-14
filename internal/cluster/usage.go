@@ -41,7 +41,6 @@ type UsageRecord struct {
 	Alias                  string    `gorm:"column:alias"`
 	Effort                 string    `gorm:"column:effort"`
 	ServiceTier            string    `gorm:"column:service_tier"`
-	RequestServiceTier     string    `gorm:"column:request_service_tier"`
 	ResponseServiceTier    string    `gorm:"column:response_service_tier"`
 	Endpoint               string    `gorm:"column:endpoint;index:idx_usage_endpoint;index:idx_usage_endpoint_time,priority:1"`
 	AuthType               string    `gorm:"column:auth_type;index:idx_usage_auth_type_time,priority:1"`
@@ -144,7 +143,6 @@ func UsageRecordFromPayloadWithRuntime(payload string, metadata UsageRuntimeMeta
 		Alias:                  strings.TrimSpace(gjson.Get(payload, "alias").String()),
 		Effort:                 strings.TrimSpace(gjson.Get(payload, "reasoning_effort").String()),
 		ServiceTier:            usageServiceTierFromPayload(payload),
-		RequestServiceTier:     usageRequestServiceTierFromPayload(payload),
 		ResponseServiceTier:    strings.TrimSpace(gjson.Get(payload, "response_service_tier").String()),
 		Endpoint:               strings.TrimSpace(gjson.Get(payload, "endpoint").String()),
 		AuthType:               strings.TrimSpace(gjson.Get(payload, "auth_type").String()),
@@ -244,10 +242,6 @@ func usageServiceTierFromPayload(payload string) string {
 		return defaultUsageServiceTier
 	}
 	return serviceTier
-}
-
-func usageRequestServiceTierFromPayload(payload string) string {
-	return strings.TrimSpace(gjson.Get(payload, "request_service_tier").String())
 }
 
 // AppendUsage appends an usage.

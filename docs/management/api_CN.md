@@ -1618,7 +1618,7 @@ Query 参数：
 { "service_tier_source": "response" }
 ```
 
-OpenAI 规定未传 `service_tier` 时为 `auto`；`auto` 使用 OpenAI Project 的配置，而显式 `default` 才使用 Standard 价格。参见 [OpenAI 定价页](https://developers.openai.com/api/docs/pricing) 和 [Responses Create 参考](https://developers.openai.com/api/reference/resources/responses/methods/create)。Home 的计费策略明确将 `auto`、`default` 和 `standard` 都映射到本地 Standard 规则；请求使用 `flex` 或 `priority` 时请配置相应规则。`service_tier_source` 为 `response` 且 response tier 存在时，该 tier 表示实际处理 tier，可能与请求不同；Home 随后再应用上述映射。
+OpenAI 规定未传 `service_tier` 时为 `auto`；`auto` 是 Home 的内部表示，不能作为字面量直接发给 Codex backend。参见 [OpenAI 定价页](https://developers.openai.com/api/docs/pricing) 和 [Responses Create 参考](https://developers.openai.com/api/reference/resources/responses/methods/create)。Home 保存请求 `service_tier` 和可选上游 `response_service_tier`，方便后续切换计费来源而无需重新灌入 usage。默认 `request` 来源按 `service_tier`（客户端请求 tier）计费。在 `response` 模式下优先使用 `response_service_tier`，上游未返回时回退请求 tier。`auto`、`default` 和 `standard` 都映射到本地 Standard 规则；使用 `flex` 或 `priority` 时请配置相应规则。
 
 扣费 `price_snapshot` 审计数据包含 `requested_service_tier`、可选的 `response_service_tier`、`service_tier_source`、`effective_service_tier`、`response_tier_fallback`、`matched_service_tier` 和 `min_input_tokens`。上下文分段使用原始 input-token 总数。在 OpenAI Responses 协议中，`input_tokens` 已包含 cache-read 和 cache-write token。Home 会先从普通 input 中扣除 cache-read token，再应用 cache-read 价格；当 `cache_write_price_per_million` 大于零时，也会先从普通 input 中扣除 cache-write token，再应用独立的 cache-write 价格；价格为零或未提供时，这些 cache-write token 仍按普通 input 计费。在 Anthropic Messages 协议中，`input_tokens`、`cache_read_input_tokens` 和 `cache_creation_input_tokens` 是相互独立的 bucket，因此 Home 会分别计费，不会从 input 中扣除任何 cache bucket。cache 字段兼容回填只更新 usage 计数；已有不可变 `billing_charge` 快照和余额不会自动重算，历史修正需要显式、可审计的余额调整。
 
