@@ -603,6 +603,9 @@ func runUsageCacheReadBackfillMaintenance(ctx context.Context, repo *cluster.Rep
 			}
 		} else if result.Done {
 			return
+		} else if !result.Skipped {
+			// Keep draining successful batches without waiting on the idle ticker.
+			continue
 		}
 		select {
 		case <-ctx.Done():

@@ -27,7 +27,6 @@ const (
 	billingImportMaxTargets                = 10000
 	billingImportMaxPolicyEntries          = 10000
 	billingImportMaxSelectedKeys           = 10000
-	billingImportRevisionCheckBatchSize    = 500
 	billingImportWriteBatchSize            = 50
 )
 
@@ -453,10 +452,6 @@ func (r *Repository) ApplyBillingModelPriceImport(ctx context.Context, input Bil
 			}
 			selectedRows = append(selectedRows, row)
 		}
-		if errValidate := billingImportValidateRuleRevisions(ctx, tx, expectedRevisions); errValidate != nil {
-			return errValidate
-		}
-
 		now := time.Now().UTC()
 		operation = BillingModelPriceImportOperation{OperationID: billingID("import"), PreviewID: preview.PreviewID, Status: "applied", Atomic: preview.Atomic, AppliedAt: now}
 		resourceIDs, errApply := applyBillingModelPriceImportRows(ctx, tx, selectedRows, expectedRevisions, now)
@@ -988,35 +983,6 @@ func billingImportRejectDuplicateRowKeys(rows []BillingModelPriceImportPreviewRo
 		rows[index].WriteRule = nil
 		rows[index].Reasons = []BillingModelPriceImportReason{{Code: "duplicate_row_key", Message: "duplicate row key"}}
 	}
-}
-
-func billingImportValidateRuleRevisions(ctx context.Context, tx *gorm.DB, expectedRevisions map[string]int64) error {
-	if len(expectedRevisions) == 0 {
-		return nil
-	}
-	ids := make([]string, 0, len(expectedRevisions))
-	for id := range expectedRevisions {
-		ids = append(ids, id)
-	}
-	found := make(map[string]struct{}, len(expectedRevisions))
-	for start := 0; start < len(ids); start += billingImportRevisionCheckBatchSize {
-		end := min(start+billingImportRevisionCheckBatchSize, len(ids))
-		var currentRules []BillingModelPriceRecord
-		if errFind := tx.WithContext(ctx).Where("id IN ?", ids[start:end]).Find(&currentRules).Error; errFind != nil {
-			return errFind
-		}
-		for _, rule := range currentRules {
-			expectedRevision, ok := expectedRevisions[rule.ID]
-			if !ok || rule.Revision != expectedRevision {
-				return ErrBillingImportRuleConflict
-			}
-			found[rule.ID] = struct{}{}
-		}
-	}
-	if len(found) != len(expectedRevisions) {
-		return ErrBillingImportRuleConflict
-	}
-	return nil
 }
 
 func applyBillingModelPriceImportRows(ctx context.Context, tx *gorm.DB, rows []BillingModelPriceImportPreviewRow, expectedRevisions map[string]int64, now time.Time) (map[string]string, error) {
