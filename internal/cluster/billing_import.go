@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"gorm.io/gorm"
 )
@@ -26,6 +27,7 @@ const (
 	billingImportMaxTargets                = 10000
 	billingImportMaxPolicyEntries          = 10000
 	billingImportMaxSelectedKeys           = 10000
+	billingImportWriteBatchSize            = 50
 )
 
 var (
@@ -101,13 +103,12 @@ type BillingModelPriceImportAlias struct {
 }
 
 type BillingModelPriceImportPolicy struct {
-	OverwriteMode      string                                  `json:"overwrite_mode"`
-	DefaultMultiplier  float64                                 `json:"default_multiplier"`
-	MultiplierRules    []BillingModelPriceImportMultiplierRule `json:"multiplier_rules"`
-	Aliases            []BillingModelPriceImportAlias          `json:"aliases"`
-	RowMultipliers     map[string]float64                      `json:"row_multipliers"`
-	IncludeCachePrices bool                                    `json:"include_cache_prices"`
-	IncludeZeroCost    bool                                    `json:"include_zero_cost"`
+	OverwriteMode     string                                  `json:"overwrite_mode"`
+	DefaultMultiplier float64                                 `json:"default_multiplier"`
+	MultiplierRules   []BillingModelPriceImportMultiplierRule `json:"multiplier_rules"`
+	Aliases           []BillingModelPriceImportAlias          `json:"aliases"`
+	RowMultipliers    map[string]float64                      `json:"row_multipliers"`
+	IncludeZeroCost   bool                                    `json:"include_zero_cost"`
 }
 
 type BillingModelPriceImportMatchOverride struct {
@@ -156,6 +157,25 @@ type BillingModelPriceImportCatalog struct {
 	Version   string                                `json:"version"`
 	FetchedAt time.Time                             `json:"fetched_at"`
 	Models    []BillingModelPriceImportCatalogModel `json:"models"`
+}
+
+// billingImportCatalogIndex keeps the catalog's original ordering while making
+// repeated preview matching independent of the catalog size.
+type billingImportCatalogIndex struct {
+	models       []BillingModelPriceImportCatalogModel
+	exact        map[string][]int
+	providerBare map[string][]int
+	bare         map[string][]int
+}
+
+// billingImportMatchPolicyIndex avoids rescanning aliases and overrides for
+// every preview target. Slices keep their request order because that order is
+// part of the matching policy.
+type billingImportMatchPolicyIndex struct {
+	aliases           []BillingModelPriceImportAlias
+	aliasesByTarget   map[string][]int
+	overrides         []BillingModelPriceImportMatchOverride
+	overridesByTarget map[string][]int
 }
 
 type BillingModelPriceImportRuleSnapshot struct {
@@ -411,6 +431,7 @@ func (r *Repository) ApplyBillingModelPriceImport(ctx context.Context, input Bil
 			rowsByKey[row.RowKey] = row
 		}
 		selectedRows := make([]BillingModelPriceImportPreviewRow, 0, len(selected))
+		expectedRevisions := make(map[string]int64, len(selected))
 		for _, key := range selected {
 			row, ok := rowsByKey[key]
 			if !ok || !row.Applicable || row.Final == nil || row.WriteRule == nil {
@@ -420,27 +441,29 @@ func (r *Repository) ApplyBillingModelPriceImport(ctx context.Context, input Bil
 				return ErrBillingImportOverwriteRequired
 			}
 			if row.ExistingRule != nil {
-				var current BillingModelPriceRecord
 				expectedRevision, errRevision := strconv.ParseInt(row.ExistingRule.Revision, 10, 64)
-				if errRevision != nil || tx.WithContext(ctx).First(&current, "id = ?", row.ExistingRule.ID).Error != nil || current.Revision != expectedRevision {
+				if errRevision != nil {
 					return ErrBillingImportRuleConflict
 				}
+				if _, exists := expectedRevisions[row.ExistingRule.ID]; exists {
+					return ErrBillingImportRuleConflict
+				}
+				expectedRevisions[row.ExistingRule.ID] = expectedRevision
 			}
 			selectedRows = append(selectedRows, row)
 		}
-
 		now := time.Now().UTC()
 		operation = BillingModelPriceImportOperation{OperationID: billingID("import"), PreviewID: preview.PreviewID, Status: "applied", Atomic: preview.Atomic, AppliedAt: now}
-		for _, row := range selectedRows {
-			resourceID, errApply := applyBillingModelPriceImportRow(ctx, tx, row)
-			if errApply != nil {
-				if isBillingModelPriceConflict(errApply) {
-					return ErrBillingImportRuleConflict
-				}
-				return errApply
+		resourceIDs, errApply := applyBillingModelPriceImportRows(ctx, tx, selectedRows, expectedRevisions, now)
+		if errApply != nil {
+			if isBillingModelPriceConflict(errApply) {
+				return ErrBillingImportRuleConflict
 			}
+			return errApply
+		}
+		for _, row := range selectedRows {
 			resultStatus := map[string]string{"create": "created", "update_sync": "updated", "overwrite": "overwritten"}[row.Action]
-			operation.Rows = append(operation.Rows, BillingModelPriceImportOperationRowResult{Key: row.RowKey, Provider: row.Provider, Model: row.Model, Action: row.Action, Status: resultStatus, ResourceID: resourceID})
+			operation.Rows = append(operation.Rows, BillingModelPriceImportOperationRowResult{Key: row.RowKey, Provider: row.Provider, Model: row.Model, Action: row.Action, Status: resultStatus, ResourceID: resourceIDs[row.RowKey]})
 			incrementBillingImportSummary(&operation.Summary, row.Action, row.Status)
 		}
 		result, errResult := billingJSONB(operation)
@@ -515,7 +538,8 @@ func (r *Repository) GetBillingTierDiagnostics(ctx context.Context) (BillingTier
 	}
 	windowEnd := time.Now().UTC()
 	windowStart := windowEnd.Add(-billingTierDiagnosticsWindow)
-	errQuery := db.WithContext(ctx).Model(&UsageRecord{}).Where("timestamp >= ? AND request_service_tier IS NOT NULL AND request_service_tier <> ''", windowStart).Select(`
+	tierPresent := "service_tier IS NOT NULL AND service_tier <> ''"
+	errQuery := db.WithContext(ctx).Model(&UsageRecord{}).Where("timestamp >= ? AND "+tierPresent, windowStart).Select(`
 		COUNT(*) AS eligible,
 		COALESCE(SUM(CASE WHEN response_service_tier IS NOT NULL AND response_service_tier <> '' THEN 1 ELSE 0 END), 0) AS present,
 		COALESCE(SUM(CASE WHEN response_service_tier IS NULL OR response_service_tier = '' THEN 1 ELSE 0 END), 0) AS fallback`).Scan(&result).Error
@@ -523,7 +547,7 @@ func (r *Repository) GetBillingTierDiagnostics(ctx context.Context) (BillingTier
 		return BillingTierDiagnostics{}, errQuery
 	}
 	var lastRecord UsageRecord
-	lastResult := db.WithContext(ctx).Where("timestamp >= ? AND request_service_tier IS NOT NULL AND request_service_tier <> '' AND response_service_tier IS NOT NULL AND response_service_tier <> ''", windowStart).Order("timestamp DESC, id DESC").Limit(1).Find(&lastRecord)
+	lastResult := db.WithContext(ctx).Where("timestamp >= ? AND "+tierPresent+" AND response_service_tier IS NOT NULL AND response_service_tier <> ''", windowStart).Order("timestamp DESC, id DESC").Limit(1).Find(&lastRecord)
 	if lastResult.Error != nil {
 		return BillingTierDiagnostics{}, lastResult.Error
 	}
@@ -538,6 +562,8 @@ func (r *Repository) GetBillingTierDiagnostics(ctx context.Context) (BillingTier
 func buildBillingModelPriceImportPreview(input BillingModelPriceImportPreviewInput, catalog BillingModelPriceImportCatalog, existing []BillingModelPriceRecord, now time.Time) BillingModelPriceImportPreview {
 	preview := BillingModelPriceImportPreview{PreviewID: billingID("preview"), PreviewRevision: billingID("previewrev"), Source: BillingModelPriceImportSourceModelsDev, SourceURL: catalog.SourceURL, SourceVersion: catalog.Version, SourceFetchedAt: catalog.FetchedAt.UTC(), SourceModelCount: len(catalog.Models), GeneratedAt: now, ExpiresAt: now.Add(billingImportPreviewTTL), Atomic: true}
 	compiledMultiplierRules := billingImportCompileMultiplierRules(input.Policy.MultiplierRules)
+	catalogIndex := newBillingImportCatalogIndex(catalog.Models)
+	policyIndex := newBillingImportMatchPolicyIndex(input.Policy.Aliases, input.MatchOverrides)
 	existingByIdentity := make(map[string][]BillingModelPriceRecord)
 	for _, rule := range existing {
 		key := billingImportRuleIdentity(rule.Provider, rule.Model, rule.ServiceTier, rule.MinInputTokens)
@@ -546,7 +572,7 @@ func buildBillingModelPriceImportPreview(input BillingModelPriceImportPreviewInp
 	for _, target := range input.Targets {
 		baseKey := billingImportTargetKey(target.Provider, target.Model)
 		multiplier := billingImportMultiplier(input.Policy, compiledMultiplierRules, target.Model, baseKey)
-		matches := billingImportCatalogMatches(catalog.Models, target, input.Policy.Aliases, input.MatchOverrides)
+		matches := catalogIndex.matches(target, policyIndex)
 		if len(matches) == 0 {
 			preview.Rows = append(preview.Rows, billingImportReviewRow(baseKey, target, multiplier, "unmatched", "no_models_dev_match", nil))
 			continue
@@ -630,14 +656,10 @@ func billingImportContextBandValidation(bands []BillingModelPriceImportContextBa
 }
 
 func billingImportMatchedRow(rowKey string, target BillingModelPriceImportTarget, match BillingModelPriceImportCatalogModel, band BillingModelPriceImportContextBand, multiplier float64, policy BillingModelPriceImportPolicy, existing *BillingModelPriceRecord, fetchedAt time.Time) BillingModelPriceImportPreviewRow {
-	final := billingImportMultiplyCost(band.Cost, multiplier, policy.IncludeCachePrices)
+	final := billingImportMultiplyCost(band.Cost, multiplier)
 	status := "matched"
 	if billingImportZeroCost(final) {
 		status = "zero_cost"
-	}
-	if !policy.IncludeCachePrices && existing != nil {
-		final.CacheRead = existing.CacheReadPricePerMillion
-		final.CacheWrite = existing.CacheWritePricePerMillion
 	}
 	row := BillingModelPriceImportPreviewRow{RowKey: rowKey, Provider: strings.ToLower(strings.TrimSpace(target.Provider)), Model: strings.TrimSpace(target.Model), ServiceTier: BillingServiceTierWildcard, MinInputTokens: band.MinInputTokens, Label: strings.TrimSpace(target.Label), Status: status, MatchedProvider: match.Provider, MatchedModel: match.Model, MatchedName: match.Name, Official: &band.Cost, Multiplier: multiplier, Reasons: []BillingModelPriceImportReason{{Code: "matched", Message: "Exact models.dev match."}}}
 	if row.Label == "" {
@@ -685,74 +707,136 @@ func billingImportScopedReviewRow(rowKey string, target BillingModelPriceImportT
 }
 
 func billingImportCatalogMatches(models []BillingModelPriceImportCatalogModel, target BillingModelPriceImportTarget, aliases []BillingModelPriceImportAlias, overrides []BillingModelPriceImportMatchOverride) []BillingModelPriceImportCatalogModel {
-	for _, override := range overrides {
-		if strings.EqualFold(strings.TrimSpace(override.TargetProvider), strings.TrimSpace(target.Provider)) && strings.EqualFold(strings.TrimSpace(override.TargetModel), strings.TrimSpace(target.Model)) {
-			for _, model := range models {
-				if strings.EqualFold(model.Provider, override.SourceProvider) && strings.EqualFold(model.Model, override.SourceModel) {
-					return []BillingModelPriceImportCatalogModel{model}
-				}
-			}
+	return newBillingImportCatalogIndex(models).matches(target, newBillingImportMatchPolicyIndex(aliases, overrides))
+}
+
+func newBillingImportCatalogIndex(models []BillingModelPriceImportCatalogModel) billingImportCatalogIndex {
+	index := billingImportCatalogIndex{
+		models:       models,
+		exact:        make(map[string][]int, len(models)),
+		providerBare: make(map[string][]int, len(models)),
+		bare:         make(map[string][]int, len(models)),
+	}
+	for position, model := range models {
+		exactKey := billingImportCatalogExactKey(model.Provider, model.Model)
+		bareKey := billingImportCatalogBareKey(model.Model)
+		index.exact[exactKey] = append(index.exact[exactKey], position)
+		providerBareKey := billingImportCatalogProviderBareKey(model.Provider, model.Model)
+		index.providerBare[providerBareKey] = append(index.providerBare[providerBareKey], position)
+		index.bare[bareKey] = append(index.bare[bareKey], position)
+	}
+	return index
+}
+
+func newBillingImportMatchPolicyIndex(aliases []BillingModelPriceImportAlias, overrides []BillingModelPriceImportMatchOverride) billingImportMatchPolicyIndex {
+	index := billingImportMatchPolicyIndex{
+		aliases:           aliases,
+		aliasesByTarget:   make(map[string][]int, len(aliases)),
+		overrides:         overrides,
+		overridesByTarget: make(map[string][]int, len(overrides)),
+	}
+	for position, alias := range aliases {
+		key := billingImportCatalogFoldedValue(strings.TrimSpace(alias.TargetModel))
+		index.aliasesByTarget[key] = append(index.aliasesByTarget[key], position)
+	}
+	for position, override := range overrides {
+		key := billingImportOverrideTargetKey(override.TargetProvider, override.TargetModel)
+		index.overridesByTarget[key] = append(index.overridesByTarget[key], position)
+	}
+	return index
+}
+
+func (index billingImportCatalogIndex) matches(target BillingModelPriceImportTarget, policy billingImportMatchPolicyIndex) []BillingModelPriceImportCatalogModel {
+	if override, ok := policy.firstOverride(target); ok {
+		matches := index.exact[billingImportCatalogExactKey(override.SourceProvider, override.SourceModel)]
+		if len(matches) == 0 {
 			return nil
 		}
+		return []BillingModelPriceImportCatalogModel{index.models[matches[0]]}
 	}
-	candidates := billingImportModelCandidates(target.Model, aliases)
+	candidates := policy.modelCandidates(target.Model)
 	preferredProviders := billingImportPreferredProviders(target.Provider, target.Model)
 	for _, candidate := range candidates {
 		for _, provider := range preferredProviders {
-			matches := billingImportModelsForProviderCandidate(models, provider, candidate)
+			matches := index.uniqueModels(index.providerBare[billingImportCatalogProviderBareKey(provider, candidate)])
 			if len(matches) > 0 {
 				return matches
 			}
 		}
 	}
 	for _, candidate := range candidates {
-		var firstParty []BillingModelPriceImportCatalogModel
-		for _, model := range models {
-			if !strings.EqualFold(billingImportBareModel(model.Model), billingImportBareModel(candidate)) || !billingImportFirstPartyProvider(model.Provider) {
-				continue
-			}
-			firstParty = append(firstParty, model)
-		}
+		firstParty := index.firstPartyBareModels(candidate)
 		if len(firstParty) == 1 {
 			return firstParty
 		}
 	}
 
-	var exact, bare []BillingModelPriceImportCatalogModel
-	for _, model := range models {
-		for _, candidate := range candidates {
-			if strings.EqualFold(model.Provider, target.Provider) && strings.EqualFold(model.Model, candidate) {
-				exact = append(exact, model)
-			}
-			if strings.EqualFold(billingImportBareModel(model.Model), billingImportBareModel(candidate)) {
-				bare = append(bare, model)
-			}
-		}
-	}
+	exact := index.sortedIndexesForExact(target.Provider, candidates)
 	if len(exact) > 0 {
-		return billingImportUniqueCatalogMatches(exact)
+		return index.uniqueModels(exact)
 	}
-	return billingImportUniqueCatalogMatches(bare)
+	return index.uniqueModels(index.sortedIndexesForBare(candidates))
 }
 
-func billingImportModelsForProviderCandidate(models []BillingModelPriceImportCatalogModel, provider, candidate string) []BillingModelPriceImportCatalogModel {
-	var matches []BillingModelPriceImportCatalogModel
-	for _, model := range models {
-		if strings.EqualFold(model.Provider, provider) && (strings.EqualFold(model.Model, candidate) || strings.EqualFold(billingImportBareModel(model.Model), billingImportBareModel(candidate))) {
-			matches = append(matches, model)
+func (index billingImportCatalogIndex) uniqueModels(positions []int) []BillingModelPriceImportCatalogModel {
+	if len(positions) == 0 {
+		return nil
+	}
+	if len(positions) == 1 {
+		return []BillingModelPriceImportCatalogModel{index.models[positions[0]]}
+	}
+	models := make([]BillingModelPriceImportCatalogModel, 0, len(positions))
+	for _, position := range positions {
+		models = append(models, index.models[position])
+	}
+	return billingImportUniqueCatalogMatches(models)
+}
+
+func (index billingImportCatalogIndex) firstPartyBareModels(candidate string) []BillingModelPriceImportCatalogModel {
+	positions := index.bare[billingImportCatalogBareKey(candidate)]
+	models := make([]BillingModelPriceImportCatalogModel, 0, len(positions))
+	for _, position := range positions {
+		model := index.models[position]
+		if billingImportFirstPartyProvider(model.Provider) {
+			models = append(models, model)
 		}
 	}
-	return billingImportUniqueCatalogMatches(matches)
+	return models
 }
 
-func billingImportModelCandidates(model string, aliases []BillingModelPriceImportAlias) []string {
+func (index billingImportCatalogIndex) sortedIndexesForExact(provider string, candidates []string) []int {
+	positions := make([]int, 0, len(candidates))
+	for _, candidate := range candidates {
+		positions = append(positions, index.exact[billingImportCatalogExactKey(provider, candidate)]...)
+	}
+	sort.Ints(positions)
+	return positions
+}
+
+func (index billingImportCatalogIndex) sortedIndexesForBare(candidates []string) []int {
+	positions := make([]int, 0, len(candidates))
+	for _, candidate := range candidates {
+		positions = append(positions, index.bare[billingImportCatalogBareKey(candidate)]...)
+	}
+	sort.Ints(positions)
+	return positions
+}
+
+func (index billingImportMatchPolicyIndex) firstOverride(target BillingModelPriceImportTarget) (BillingModelPriceImportMatchOverride, bool) {
+	positions := index.overridesByTarget[billingImportOverrideTargetKey(target.Provider, target.Model)]
+	if len(positions) == 0 {
+		return BillingModelPriceImportMatchOverride{}, false
+	}
+	return index.overrides[positions[0]], true
+}
+
+func (index billingImportMatchPolicyIndex) modelCandidates(model string) []string {
 	model = strings.TrimSpace(model)
 	bare := billingImportBareModel(model)
 	values := []string{bare, model}
-	for _, alias := range aliases {
-		if strings.EqualFold(strings.TrimSpace(alias.TargetModel), bare) || strings.EqualFold(strings.TrimSpace(alias.TargetModel), model) {
-			values = append(values, alias.SourceModels...)
-		}
+	aliasPositions := index.aliasPositionsForModel(bare, model)
+	for _, position := range aliasPositions {
+		values = append(values, index.aliases[position].SourceModels...)
 	}
 	for _, suffix := range []string{"-thinking", "-preview", "-latest"} {
 		if strings.HasSuffix(strings.ToLower(bare), suffix) {
@@ -774,6 +858,60 @@ func billingImportModelCandidates(model string, aliases []BillingModelPriceImpor
 		result = append(result, value)
 	}
 	return result
+}
+
+func (index billingImportMatchPolicyIndex) aliasPositionsForModel(bare string, model string) []int {
+	if len(index.aliases) == 0 {
+		return nil
+	}
+	keys := []string{billingImportCatalogFoldedValue(bare)}
+	if fullKey := billingImportCatalogFoldedValue(model); fullKey != keys[0] {
+		keys = append(keys, fullKey)
+	}
+	positions := make([]int, 0)
+	seen := make(map[int]struct{})
+	for _, key := range keys {
+		for _, position := range index.aliasesByTarget[key] {
+			if _, exists := seen[position]; exists {
+				continue
+			}
+			seen[position] = struct{}{}
+			positions = append(positions, position)
+		}
+	}
+	sort.Ints(positions)
+	return positions
+}
+
+func billingImportCatalogExactKey(provider string, model string) string {
+	return billingImportCatalogFoldedValue(provider) + "\x00" + billingImportCatalogFoldedValue(model)
+}
+
+func billingImportCatalogProviderBareKey(provider string, model string) string {
+	return billingImportCatalogFoldedValue(provider) + "\x00" + billingImportCatalogBareKey(model)
+}
+
+func billingImportCatalogBareKey(model string) string {
+	return billingImportCatalogFoldedValue(billingImportBareModel(model))
+}
+
+func billingImportOverrideTargetKey(provider string, model string) string {
+	return billingImportCatalogFoldedValue(strings.TrimSpace(provider)) + "\x00" + billingImportCatalogFoldedValue(strings.TrimSpace(model))
+}
+
+func billingImportCatalogFoldedValue(value string) string {
+	var builder strings.Builder
+	builder.Grow(len(value))
+	for _, valueRune := range value {
+		foldedRune := valueRune
+		for nextRune := unicode.SimpleFold(valueRune); nextRune != valueRune; nextRune = unicode.SimpleFold(nextRune) {
+			if nextRune < foldedRune {
+				foldedRune = nextRune
+			}
+		}
+		builder.WriteRune(foldedRune)
+	}
+	return builder.String()
 }
 
 func billingImportPreferredProviders(provider, model string) []string {
@@ -847,30 +985,97 @@ func billingImportRejectDuplicateRowKeys(rows []BillingModelPriceImportPreviewRo
 	}
 }
 
-func applyBillingModelPriceImportRow(ctx context.Context, tx *gorm.DB, row BillingModelPriceImportPreviewRow) (string, error) {
-	if row.Final == nil || row.WriteRule == nil {
-		return "", ErrBillingImportInvalidSelection
-	}
-	if row.ExistingRule == nil {
-		record := BillingModelPriceRecord{ID: billingID("price"), Provider: strings.ToLower(strings.TrimSpace(row.Provider)), Model: strings.TrimSpace(row.Model), ServiceTier: row.ServiceTier, MinInputTokens: row.MinInputTokens, InputPricePerMillion: row.Final.Input, OutputPricePerMillion: row.Final.Output, CacheReadPricePerMillion: row.Final.CacheRead, CacheWritePricePerMillion: row.Final.CacheWrite, RequestPrice: row.Final.Request, Source: BillingPriceSourceSync, Enabled: row.WriteRule.Enabled, Note: row.WriteRule.Note, Revision: 1}
-		if errCreate := tx.WithContext(ctx).Create(&record).Error; errCreate != nil {
-			return "", errCreate
+func applyBillingModelPriceImportRows(ctx context.Context, tx *gorm.DB, rows []BillingModelPriceImportPreviewRow, expectedRevisions map[string]int64, now time.Time) (map[string]string, error) {
+	resourceIDs := make(map[string]string, len(rows))
+	creates := make([]BillingModelPriceRecord, 0, len(rows))
+	updates := make([]BillingModelPriceImportPreviewRow, 0, len(rows))
+	for _, row := range rows {
+		if row.Final == nil || row.WriteRule == nil {
+			return nil, ErrBillingImportInvalidSelection
 		}
-		return record.ID, nil
+		if row.ExistingRule == nil {
+			record := BillingModelPriceRecord{ID: billingID("price"), Provider: strings.ToLower(strings.TrimSpace(row.Provider)), Model: strings.TrimSpace(row.Model), ServiceTier: row.ServiceTier, MinInputTokens: row.MinInputTokens, InputPricePerMillion: row.Final.Input, OutputPricePerMillion: row.Final.Output, CacheReadPricePerMillion: row.Final.CacheRead, CacheWritePricePerMillion: row.Final.CacheWrite, RequestPrice: row.Final.Request, Source: BillingPriceSourceSync, Enabled: row.WriteRule.Enabled, Note: row.WriteRule.Note, Revision: 1, CreatedAt: now, UpdatedAt: now}
+			creates = append(creates, record)
+			resourceIDs[row.RowKey] = record.ID
+			continue
+		}
+		if _, ok := expectedRevisions[row.ExistingRule.ID]; !ok {
+			return nil, ErrBillingImportRuleConflict
+		}
+		updates = append(updates, row)
+		resourceIDs[row.RowKey] = row.ExistingRule.ID
 	}
-	expectedRevision, errRevision := strconv.ParseInt(row.ExistingRule.Revision, 10, 64)
-	if errRevision != nil {
-		return "", ErrBillingImportRuleConflict
+	for start := 0; start < len(creates); start += billingImportWriteBatchSize {
+		end := min(start+billingImportWriteBatchSize, len(creates))
+		if errCreate := tx.WithContext(ctx).CreateInBatches(creates[start:end], billingImportWriteBatchSize).Error; errCreate != nil {
+			return nil, errCreate
+		}
 	}
-	updates := map[string]any{"input_price_per_million": row.Final.Input, "output_price_per_million": row.Final.Output, "cache_read_price_per_million": row.Final.CacheRead, "cache_write_price_per_million": row.Final.CacheWrite, "request_price": row.Final.Request, "source": BillingPriceSourceSync, "enabled": row.WriteRule.Enabled, "note": row.WriteRule.Note, "revision": gorm.Expr("revision + ?", 1)}
-	result := tx.WithContext(ctx).Model(&BillingModelPriceRecord{}).Where("id = ? AND revision = ?", row.ExistingRule.ID, expectedRevision).Updates(updates)
+	for start := 0; start < len(updates); start += billingImportWriteBatchSize {
+		end := min(start+billingImportWriteBatchSize, len(updates))
+		if errUpdate := applyBillingModelPriceImportUpdateBatch(ctx, tx, updates[start:end], expectedRevisions, now); errUpdate != nil {
+			return nil, errUpdate
+		}
+	}
+	return resourceIDs, nil
+}
+
+func applyBillingModelPriceImportUpdateBatch(ctx context.Context, tx *gorm.DB, rows []BillingModelPriceImportPreviewRow, expectedRevisions map[string]int64, now time.Time) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	columns := []struct {
+		name  string
+		value func(BillingModelPriceImportPreviewRow) any
+	}{
+		{name: "input_price_per_million", value: func(row BillingModelPriceImportPreviewRow) any { return row.Final.Input }},
+		{name: "output_price_per_million", value: func(row BillingModelPriceImportPreviewRow) any { return row.Final.Output }},
+		{name: "cache_read_price_per_million", value: func(row BillingModelPriceImportPreviewRow) any { return row.Final.CacheRead }},
+		{name: "cache_write_price_per_million", value: func(row BillingModelPriceImportPreviewRow) any { return row.Final.CacheWrite }},
+		{name: "request_price", value: func(row BillingModelPriceImportPreviewRow) any { return row.Final.Request }},
+		{name: "source", value: func(BillingModelPriceImportPreviewRow) any { return BillingPriceSourceSync }},
+		{name: "enabled", value: func(row BillingModelPriceImportPreviewRow) any { return row.WriteRule.Enabled }},
+		{name: "note", value: func(row BillingModelPriceImportPreviewRow) any { return row.WriteRule.Note }},
+	}
+	var statement strings.Builder
+	arguments := make([]any, 0, len(rows)*(len(columns)*2+2)+1)
+	statement.WriteString("UPDATE billing_model_price SET ")
+	for columnIndex, column := range columns {
+		if columnIndex > 0 {
+			statement.WriteString(", ")
+		}
+		statement.WriteString(column.name)
+		statement.WriteString(" = CASE id")
+		for _, row := range rows {
+			statement.WriteString(" WHEN ? THEN ?")
+			arguments = append(arguments, row.ExistingRule.ID, column.value(row))
+		}
+		statement.WriteString(" ELSE ")
+		statement.WriteString(column.name)
+		statement.WriteString(" END")
+	}
+	statement.WriteString(", revision = revision + 1, updated_at = ? WHERE deleted_at IS NULL AND (")
+	arguments = append(arguments, now)
+	for index, row := range rows {
+		if index > 0 {
+			statement.WriteString(" OR ")
+		}
+		expectedRevision, ok := expectedRevisions[row.ExistingRule.ID]
+		if !ok {
+			return ErrBillingImportRuleConflict
+		}
+		statement.WriteString("(id = ? AND revision = ?)")
+		arguments = append(arguments, row.ExistingRule.ID, expectedRevision)
+	}
+	statement.WriteString(")")
+	result := tx.WithContext(ctx).Exec(statement.String(), arguments...)
 	if result.Error != nil {
-		return "", result.Error
+		return result.Error
 	}
-	if result.RowsAffected != 1 {
-		return "", ErrBillingImportRuleConflict
+	if result.RowsAffected != int64(len(rows)) {
+		return ErrBillingImportRuleConflict
 	}
-	return row.ExistingRule.ID, nil
+	return nil
 }
 
 func validateBillingModelPriceImportPreviewInput(input BillingModelPriceImportPreviewInput, catalog BillingModelPriceImportCatalog) error {
@@ -991,13 +1196,8 @@ func billingImportMultiplier(policy BillingModelPriceImportPolicy, compiledRules
 	return policy.DefaultMultiplier
 }
 
-func billingImportMultiplyCost(cost BillingModelPriceImportCost, multiplier float64, includeCache bool) BillingModelPriceImportCost {
-	result := BillingModelPriceImportCost{Input: cost.Input * multiplier, Output: cost.Output * multiplier, Request: cost.Request * multiplier}
-	if includeCache {
-		result.CacheRead = cost.CacheRead * multiplier
-		result.CacheWrite = cost.CacheWrite * multiplier
-	}
-	return result
+func billingImportMultiplyCost(cost BillingModelPriceImportCost, multiplier float64) BillingModelPriceImportCost {
+	return BillingModelPriceImportCost{Input: cost.Input * multiplier, Output: cost.Output * multiplier, CacheRead: cost.CacheRead * multiplier, CacheWrite: cost.CacheWrite * multiplier, Request: cost.Request * multiplier}
 }
 
 func billingImportZeroCost(cost BillingModelPriceImportCost) bool {

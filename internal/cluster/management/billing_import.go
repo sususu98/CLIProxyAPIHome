@@ -20,8 +20,10 @@ import (
 )
 
 const (
-	modelsDevCatalogURL             = "https://models.dev/api.json"
-	billingImportMaxRequestBodySize = 4 << 20
+	modelsDevCatalogURL                  = "https://models.dev/api.json"
+	modelsDevDefaultCacheReadInputRatio  = 0.1
+	modelsDevDefaultCacheWriteInputRatio = 1.25
+	billingImportMaxRequestBodySize      = 4 << 20
 )
 
 func (h *Handler) PreviewBillingModelPriceImport(c *gin.Context) {
@@ -213,6 +215,16 @@ func parseBillingModelPriceImportCost(value any) (*cluster.BillingModelPriceImpo
 	request, hasRequest := billingImportNumberValue(record, "request", "request_price", "requestPrice")
 	if !hasInput && !hasOutput && !hasCacheRead && !hasCacheWrite && !hasRequest {
 		return nil, billingModelPriceImportCostPresence{}, false
+	}
+	if hasInput {
+		if !hasCacheRead {
+			cacheRead = input * modelsDevDefaultCacheReadInputRatio
+			hasCacheRead = true
+		}
+		if !hasCacheWrite {
+			cacheWrite = input * modelsDevDefaultCacheWriteInputRatio
+			hasCacheWrite = true
+		}
 	}
 	return &cluster.BillingModelPriceImportCost{Input: input, Output: output, CacheRead: cacheRead, CacheWrite: cacheWrite, Request: request}, billingModelPriceImportCostPresence{Input: hasInput, Output: hasOutput, CacheRead: hasCacheRead, CacheWrite: hasCacheWrite, Request: hasRequest}, true
 }

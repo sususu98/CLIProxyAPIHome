@@ -68,6 +68,30 @@ func TestPostBillingModelPriceCreatesRule(t *testing.T) {
 	}
 }
 
+func TestPostBillingModelPriceNormalizesAutoTierToStandard(t *testing.T) {
+	t.Parallel()
+
+	handler, closeRepo := newBillingManagementTestHandler(t)
+	defer closeRepo()
+
+	resp := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(resp)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/billing/model-prices", bytes.NewBufferString(`{"provider":"openai","model":"gpt-4.1-mini","service_tier":"auto","input_price_per_million":2,"enabled":true}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	handler.CreateBillingModelPrice(ctx)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want 200", resp.Code, resp.Body.String())
+	}
+	var payload map[string]any
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &payload); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	modelPrice, ok := payload["model_price"].(map[string]any)
+	if !ok || modelPrice["service_tier"] != "standard" {
+		t.Fatalf("model_price = %#v, want standard tier", payload["model_price"])
+	}
+}
+
 func TestBillingModelPriceRejectsInvalidServiceTierAsBadRequest(t *testing.T) {
 	t.Parallel()
 
@@ -141,7 +165,7 @@ func TestBillingSettingsGetAndPatch(t *testing.T) {
 	}
 }
 
-func TestParseBillingModelPriceImportCatalogPreservesZeroPricedContextBand(t *testing.T) {
+func TestParseBillingModelPriceImportCatalogDefaultsMissingCachePricesFromInput(t *testing.T) {
 	t.Parallel()
 
 	catalog, errCatalog := parseBillingModelPriceImportCatalog([]byte(`{
@@ -154,15 +178,15 @@ func TestParseBillingModelPriceImportCatalogPreservesZeroPricedContextBand(t *te
 	if errCatalog != nil {
 		t.Fatalf("parseBillingModelPriceImportCatalog() error = %v", errCatalog)
 	}
-	if len(catalog.Models) != 1 || catalog.Models[0].Cost == nil || catalog.Models[0].Cost.CacheWrite != 0 {
+	if len(catalog.Models) != 1 || catalog.Models[0].Cost == nil || catalog.Models[0].Cost.CacheRead != 0.2 || catalog.Models[0].Cost.CacheWrite != 0 {
 		t.Fatalf("catalog models = %#v", catalog.Models)
 	}
-	if len(catalog.Models[0].ContextBands) != 1 || catalog.Models[0].ContextBands[0].MinInputTokens != 272001 || catalog.Models[0].ContextBands[0].Cost.CacheWrite != 0 || len(catalog.Models[0].ContextBands[0].MissingPriceFields) != 0 {
+	if len(catalog.Models[0].ContextBands) != 1 || catalog.Models[0].ContextBands[0].MinInputTokens != 272001 || catalog.Models[0].ContextBands[0].Cost.CacheRead != 0.4 || catalog.Models[0].ContextBands[0].Cost.CacheWrite != 0 || len(catalog.Models[0].ContextBands[0].MissingPriceFields) != 0 {
 		t.Fatalf("context bands = %#v", catalog.Models[0].ContextBands)
 	}
 }
 
-func TestParseBillingModelPriceImportCatalogMarksIncompleteTierUnsafe(t *testing.T) {
+func TestParseBillingModelPriceImportCatalogDefaultsMissingTierCacheWriteFromInput(t *testing.T) {
 	t.Parallel()
 
 	catalog, errCatalog := parseBillingModelPriceImportCatalog([]byte(`{
@@ -174,8 +198,31 @@ func TestParseBillingModelPriceImportCatalogMarksIncompleteTierUnsafe(t *testing
 	if errCatalog != nil {
 		t.Fatalf("parseBillingModelPriceImportCatalog() error = %v", errCatalog)
 	}
-	if len(catalog.Models) != 1 || len(catalog.Models[0].ContextBands) != 1 || len(catalog.Models[0].ContextBands[0].MissingPriceFields) != 1 || catalog.Models[0].ContextBands[0].MissingPriceFields[0] != "cache_write" {
+	if len(catalog.Models) != 1 || len(catalog.Models[0].ContextBands) != 1 || catalog.Models[0].ContextBands[0].Cost.CacheRead != 0.25 || catalog.Models[0].ContextBands[0].Cost.CacheWrite != 3.125 || len(catalog.Models[0].ContextBands[0].MissingPriceFields) != 0 {
 		t.Fatalf("catalog context bands = %#v", catalog.Models)
+	}
+}
+
+func TestParseBillingModelPriceImportCatalogDefaultsBothCachePricesAndPreservesExplicitValues(t *testing.T) {
+	t.Parallel()
+
+	catalog, errCatalog := parseBillingModelPriceImportCatalog([]byte(`{
+  "openai": {"models": {
+    "gpt-derived": {"cost": {"input": 2, "output": 8}},
+    "gpt-explicit": {"cost": {"input": 2, "output": 8, "cache_read": 0, "cache_write": 3}}
+  }}
+}`), modelsDevCatalogURL, time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC))
+	if errCatalog != nil {
+		t.Fatalf("parseBillingModelPriceImportCatalog() error = %v", errCatalog)
+	}
+	if len(catalog.Models) != 2 || catalog.Models[0].Cost == nil || catalog.Models[1].Cost == nil {
+		t.Fatalf("catalog models = %#v", catalog.Models)
+	}
+	if catalog.Models[0].Model != "gpt-derived" || catalog.Models[0].Cost.CacheRead != 0.2 || catalog.Models[0].Cost.CacheWrite != 2.5 {
+		t.Fatalf("derived cache prices = %#v", catalog.Models[0])
+	}
+	if catalog.Models[1].Model != "gpt-explicit" || catalog.Models[1].Cost.CacheRead != 0 || catalog.Models[1].Cost.CacheWrite != 3 {
+		t.Fatalf("explicit cache prices = %#v", catalog.Models[1])
 	}
 }
 
@@ -219,7 +266,7 @@ func TestPreviewBillingModelPriceImportRejectsMalformedContextBand(t *testing.T)
 	preview, errPreview := handler.repo.CreateBillingModelPriceImportPreview(context.Background(), cluster.BillingModelPriceImportPreviewInput{
 		Source:  cluster.BillingModelPriceImportSourceModelsDev,
 		Targets: []cluster.BillingModelPriceImportTarget{{Provider: "openai", Model: "gpt-malformed-tier"}},
-		Policy:  cluster.BillingModelPriceImportPolicy{OverwriteMode: "missing", DefaultMultiplier: 1, IncludeCachePrices: true},
+		Policy:  cluster.BillingModelPriceImportPolicy{OverwriteMode: "missing", DefaultMultiplier: 1},
 	}, catalog)
 	if errPreview != nil {
 		t.Fatalf("CreateBillingModelPriceImportPreview() error = %v", errPreview)

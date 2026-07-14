@@ -11,9 +11,15 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-const migrationAdvisoryLockKey int64 = 749327842680272315
+const (
+	migrationAdvisoryLockKey              int64 = 749327842680272315
+	usageCacheReadBackfillAdvisoryLockKey int64 = 749327842680272316
+	usageCacheReadBackfillBatchSize             = 500
+	usageCacheReadBackfillStateKey              = "internal:migration:usage-cache-read:v1"
+)
 
 // Open opens the resource.
 func Open(ctx context.Context, cfg PGSQLConfig) (*gorm.DB, error) {
@@ -147,6 +153,9 @@ func autoMigrate(db *gorm.DB) error {
 	if errMigrate := migrateUsageProviderAPIKeySources(db); errMigrate != nil {
 		return errMigrate
 	}
+	if errMigrate := migrateUsageServiceTiers(db); errMigrate != nil {
+		return errMigrate
+	}
 	return migrateLegacyAPIKeys(db)
 }
 
@@ -248,6 +257,175 @@ func migrateUsageProviderAPIKeySources(db *gorm.DB) error {
 			}
 			return nil
 		}).Error
+}
+
+// migrateUsageServiceTiers collapses the redundant legacy request tier into
+// service_tier. The old column is intentionally retained in existing databases
+// so upgrades remain non-destructive, but new records only use service_tier and
+// response_service_tier.
+func migrateUsageServiceTiers(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	if db.Migrator().HasColumn(&UsageRecord{}, "request_service_tier") {
+		return db.Exec(`UPDATE "usage"
+			SET "service_tier" = CASE
+				WHEN TRIM(COALESCE("request_service_tier", '')) <> '' THEN "request_service_tier"
+				ELSE ?
+			END
+			WHERE "service_tier" IS NULL OR TRIM("service_tier") = ''`, defaultUsageServiceTier).Error
+	}
+	return db.Model(&UsageRecord{}).
+		Where("service_tier IS NULL OR TRIM(service_tier) = ''").
+		Update("service_tier", defaultUsageServiceTier).Error
+}
+
+type usageCacheReadBackfillState struct {
+	HighWaterID   uint `json:"high_water_id"`
+	LastScannedID uint `json:"last_scanned_id"`
+	Done          bool `json:"done"`
+}
+
+// UsageCacheReadBackfillResult describes one bounded historical usage backfill batch.
+type UsageCacheReadBackfillResult struct {
+	Scanned int
+	Updated int64
+	Done    bool
+	Skipped bool
+}
+
+// RunUsageCacheReadBackfillBatch advances the historical cache-read migration
+// without holding the schema migration transaction open. CPA versions before
+// v7.2.67 wrote cache reads to cached_tokens; new ingress and read paths remain
+// compatible while this resumable maintenance task catches up. It updates usage
+// dimensions only and never rewrites immutable billing charges or balances.
+func (r *Repository) RunUsageCacheReadBackfillBatch(ctx context.Context) (UsageCacheReadBackfillResult, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return UsageCacheReadBackfillResult{}, errDB
+	}
+	return runUsageCacheReadBackfillBatch(contextOrBackground(ctx), db, usageCacheReadBackfillBatchSize)
+}
+
+func runUsageCacheReadBackfillBatch(ctx context.Context, db *gorm.DB, batchSize int) (UsageCacheReadBackfillResult, error) {
+	if db == nil {
+		return UsageCacheReadBackfillResult{}, fmt.Errorf("database connection is nil")
+	}
+	if batchSize <= 0 {
+		return UsageCacheReadBackfillResult{}, fmt.Errorf("usage cache-read backfill batch size must be positive")
+	}
+	result := UsageCacheReadBackfillResult{}
+	errTransaction := db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		if tx.Dialector != nil && tx.Dialector.Name() == "postgres" {
+			var acquired bool
+			if errLock := tx.Raw("SELECT pg_try_advisory_xact_lock(?)", usageCacheReadBackfillAdvisoryLockKey).Scan(&acquired).Error; errLock != nil {
+				return errLock
+			}
+			if !acquired {
+				result.Skipped = true
+				return nil
+			}
+		}
+		return runUsageCacheReadBackfillBatchTx(ctx, tx, batchSize, &result)
+	})
+	if errTransaction != nil {
+		return UsageCacheReadBackfillResult{}, errTransaction
+	}
+	return result, nil
+}
+
+func runUsageCacheReadBackfillBatchTx(ctx context.Context, tx *gorm.DB, batchSize int, result *UsageCacheReadBackfillResult) error {
+	if tx == nil {
+		return fmt.Errorf("database transaction is nil")
+	}
+	if result == nil {
+		return fmt.Errorf("usage cache-read backfill result is nil")
+	}
+
+	state, stateRecord, exists, errState := loadUsageCacheReadBackfillState(ctx, tx)
+	if errState != nil {
+		return errState
+	}
+	if state.Done {
+		result.Done = true
+		return nil
+	}
+	if !exists {
+		var latest UsageRecord
+		latestResult := tx.WithContext(contextOrBackground(ctx)).Order("id DESC").Limit(1).Find(&latest)
+		if latestResult.Error != nil {
+			return latestResult.Error
+		}
+		state.HighWaterID = latest.ID
+		if state.HighWaterID == 0 {
+			state.Done = true
+		}
+	}
+	if state.LastScannedID >= state.HighWaterID {
+		state.Done = true
+	}
+	if state.Done {
+		result.Done = true
+		return saveUsageCacheReadBackfillState(ctx, tx, stateRecord, exists, state)
+	}
+
+	ids := make([]uint, 0, batchSize)
+	if errFind := tx.WithContext(contextOrBackground(ctx)).Model(&UsageRecord{}).
+		Where("id > ? AND id <= ?", state.LastScannedID, state.HighWaterID).
+		Order("id ASC").
+		Limit(batchSize).
+		Pluck("id", &ids).Error; errFind != nil {
+		return errFind
+	}
+	if len(ids) == 0 {
+		state.Done = true
+		result.Done = true
+		return saveUsageCacheReadBackfillState(ctx, tx, stateRecord, exists, state)
+	}
+	result.Scanned = len(ids)
+	update := tx.WithContext(contextOrBackground(ctx)).Model(&UsageRecord{}).
+		Where("id IN ? AND cache_read_tokens_present = ? AND cache_read_tokens = 0 AND cached_tokens > 0 AND "+usageCacheReadFallbackSQLCondition("provider", "executor_type"), ids, false).
+		UpdateColumn("cache_read_tokens", gorm.Expr("cached_tokens"))
+	if update.Error != nil {
+		return update.Error
+	}
+	result.Updated = update.RowsAffected
+	state.LastScannedID = ids[len(ids)-1]
+	state.Done = state.LastScannedID >= state.HighWaterID
+	result.Done = state.Done
+	return saveUsageCacheReadBackfillState(ctx, tx, stateRecord, exists, state)
+}
+
+func loadUsageCacheReadBackfillState(ctx context.Context, tx *gorm.DB) (usageCacheReadBackfillState, KVRecord, bool, error) {
+	record := KVRecord{}
+	errFind := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "UPDATE"}).Where("key = ?", usageCacheReadBackfillStateKey).First(&record).Error
+	if errors.Is(errFind, gorm.ErrRecordNotFound) {
+		return usageCacheReadBackfillState{}, KVRecord{}, false, nil
+	}
+	if errFind != nil {
+		return usageCacheReadBackfillState{}, KVRecord{}, false, errFind
+	}
+	state := usageCacheReadBackfillState{}
+	if errDecode := json.Unmarshal(record.Value, &state); errDecode != nil {
+		return usageCacheReadBackfillState{}, KVRecord{}, false, fmt.Errorf("decode usage cache-read backfill state: %w", errDecode)
+	}
+	return state, record, true, nil
+}
+
+func saveUsageCacheReadBackfillState(ctx context.Context, tx *gorm.DB, record KVRecord, exists bool, state usageCacheReadBackfillState) error {
+	value, errEncode := json.Marshal(state)
+	if errEncode != nil {
+		return fmt.Errorf("encode usage cache-read backfill state: %w", errEncode)
+	}
+	if !exists {
+		return tx.WithContext(contextOrBackground(ctx)).Create(&KVRecord{Key: usageCacheReadBackfillStateKey, Value: value, Version: 1}).Error
+	}
+	record.Value = value
+	record.Version++
+	if record.Version <= 1 {
+		record.Version = 1
+	}
+	return tx.WithContext(contextOrBackground(ctx)).Save(&record).Error
 }
 
 func usageDerivedColumnBackfillWhere() (string, []any) {

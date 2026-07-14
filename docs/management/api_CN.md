@@ -1430,8 +1430,8 @@ Query 参数：
       "balance_after": 18.75,
       "request_id": "req_xxx",
       "endpoint": "/v1/chat/completions",
-      "matched_price_rule": "openai:gpt-5.5:standard:272001",
-      "price_snapshot": { "request_price": 0, "input_price_per_million": 2.5, "matched_service_tier": "standard", "min_input_tokens": 272001, "requested_service_tier": "priority", "response_service_tier": "default", "service_tier_source": "response", "effective_service_tier": "standard", "response_tier_fallback": false }
+      "matched_price_rule": "openai:gpt-5.5:priority:272001",
+      "price_snapshot": { "request_price": 0, "input_price_per_million": 2.5, "matched_service_tier": "priority", "min_input_tokens": 272001, "requested_service_tier": "priority", "response_service_tier": "default", "service_tier_source": "request", "effective_service_tier": "priority", "response_tier_fallback": false }
     }
   ],
   "total": 1,
@@ -1563,7 +1563,7 @@ Query 参数：
 | --- | --- | --- | --- |
 | `provider` | string | 是 | Provider 名称。 |
 | `model` | string | 是 | Model 名称。 |
-| `service_tier` | string | 否 | 精确 tier 或 `*`，默认 `*`；空值、`auto`、`default`、`standard` 请求均按 Standard 匹配。 |
+| `service_tier` | string | 否 | 精确 tier 或 `*`，默认 `*`；`auto`、`default` 和 `standard` 都归一为本地 `standard` tier。 |
 | `min_input_tokens` | integer | 否 | 非负、包含式上下文分段下界，默认 `0`。 |
 | `input_price_per_million` | number | 否 | 非负 input-token 价格。 |
 | `output_price_per_million` | number | 否 | 非负 output-token 价格。 |
@@ -1604,7 +1604,7 @@ Query 参数：
 
 ### GET `/billing/settings`
 
-返回 DB-backed 计费匹配策略。`service_tier_source` 默认为 `request`，允许值为 `request` 或 `response`。
+返回 DB-backed 计费匹配策略。`service_tier_source` 默认为 `request`，允许值为 `request` 或 `response`。无论哪种模式，`auto`、`default` 和 `standard` 都按本地 Standard 价格 tier 匹配。
 
 ```json
 { "service_tier_source": "request" }
@@ -1618,13 +1618,15 @@ Query 参数：
 { "service_tier_source": "response" }
 ```
 
-扣费 `price_snapshot` 审计数据包含 `requested_service_tier`、可选的 `response_service_tier`、`service_tier_source`、`effective_service_tier`、`response_tier_fallback`、`matched_service_tier` 和 `min_input_tokens`。上下文分段使用原始 input-token 总数。在 OpenAI Responses 协议中，`input_tokens` 已包含 cache-read 和 cache-write token。Home 会先从普通 input 中扣除 cache-read token，再应用 cache-read 价格；当 `cache_write_price_per_million` 大于零时，也会先从普通 input 中扣除 cache-write token，再应用独立的 cache-write 价格；价格为零或未提供时，这些 cache-write token 仍按普通 input 计费。在 Anthropic Messages 协议中，`input_tokens`、`cache_read_input_tokens` 和 `cache_creation_input_tokens` 是相互独立的 bucket，因此 Home 会分别计费，不会从 input 中扣除任何 cache bucket。
+OpenAI 规定未传 `service_tier` 时为 `auto`；`auto` 是 Home 的内部表示，不能作为字面量直接发给 Codex backend。参见 [OpenAI 定价页](https://developers.openai.com/api/docs/pricing) 和 [Responses Create 参考](https://developers.openai.com/api/reference/resources/responses/methods/create)。Home 保存请求 `service_tier` 和可选上游 `response_service_tier`，方便后续切换计费来源而无需重新灌入 usage。默认 `request` 来源按 `service_tier`（客户端请求 tier）计费。在 `response` 模式下优先使用 `response_service_tier`，上游未返回时回退请求 tier。`auto`、`default` 和 `standard` 都映射到本地 Standard 规则；使用 `flex` 或 `priority` 时请配置相应规则。
+
+扣费 `price_snapshot` 审计数据包含 `requested_service_tier`、可选的 `response_service_tier`、`service_tier_source`、`effective_service_tier`、`response_tier_fallback`、`matched_service_tier` 和 `min_input_tokens`。上下文分段使用原始 input-token 总数。在 OpenAI Responses 协议中，`input_tokens` 已包含 cache-read 和 cache-write token。Home 会先从普通 input 中扣除 cache-read token，再应用 cache-read 价格；当 `cache_write_price_per_million` 大于零时，也会先从普通 input 中扣除 cache-write token，再应用独立的 cache-write 价格；价格为零或未提供时，这些 cache-write token 仍按普通 input 计费。在 Anthropic Messages 协议中，`input_tokens`、`cache_read_input_tokens` 和 `cache_creation_input_tokens` 是相互独立的 bucket，因此 Home 会分别计费，不会从 input 中扣除任何 cache bucket。cache 字段兼容回填只更新 usage 计数；已有不可变 `billing_charge` 快照和余额不会自动重算，历史修正需要显式、可审计的余额调整。
 
 ### POST `/billing/model-prices/import/preview`
 
 创建服务端的不可变 `models.dev` 导入预览。服务端拉取并固定来源快照；客户端提供目标、匹配策略、别名、行倍率和可选的来源匹配覆盖。客户端可控的输入无效时返回 `422 invalid_import_preview`，目录拉取失败时返回 `502 models_dev_fetch_failed`，内部 preview 持久化失败时返回 `500 billing_import_preview_failed`。成功响应包含 `preview_id`、`preview_revision`、来源信息、`generated_at`、`expires_at`、明确的 `atomic: true`、行和精确汇总。
 
-当前 preview target 只描述通配符 base 规则（`service_tier: "*"`、`min_input_tokens: 0`）；其他 target scope 会被拒绝，不会被静默改写。已匹配行会包含官方价格、倍率后的最终价格、精确的 `write_rule`、带 `revision` 的完整可选 `existing_rule` 快照，以及机器可读的原因。models.dev 上下文分段会生成不同包含式下界的通配符行；`row_multipliers` 按返回的精确 row key 生效，包含 context-band 行。排除 cache 价格时，更新会保留已有 cache 价格，不会将其清空。出现不支持的价格维度、格式错误或无效的价格/分段、重复分段，或 tier 缺少 base 已配置价格维度时，整个 target 都不可应用；服务端不会导入可能低估计费的子集。
+当前 preview target 只描述通配符 base 规则（`service_tier: "*"`、`min_input_tokens: 0`）；其他 target scope 会被拒绝，不会被静默改写。已匹配行会包含官方价格、倍率后的最终价格、精确的 `write_rule`、带 `revision` 的完整可选 `existing_rule` 快照，以及机器可读的原因。models.dev 上下文分段会生成不同包含式下界的通配符行；`row_multipliers` 按返回的精确 row key 生效，包含 context-band 行。cache-read 和 cache-write 价格从固定的 catalog snapshot 导入。当 cost 对象包含 input 价格但省略 `cache_read` 或 `cache_write` 时，Home 分别按 `input * 0.1` 或 `input * 1.25` 派生缺失价格；显式值（包括零）保持不变。出现不支持的价格维度、格式错误或无效的价格/分段、重复分段，或 tier 缺少 base 已配置价格维度时，整个 target 都不可应用；服务端不会导入可能低估计费的子集。
 
 `policy.overwrite_mode` 可为 `missing`、`sync` 或 `all`。`missing` 只创建缺失规则，`sync` 可更新已有 `source=sync` 规则，`all` 还可覆盖 manual/default 规则。`overwrite` 行在 apply 时必须确认。
 

@@ -128,6 +128,73 @@ func TestUsageRecordFromPayloadUsesCanonicalCacheCreationField(t *testing.T) {
 	}
 }
 
+func TestUsageRecordFromPayloadNormalizesLegacyCacheFields(t *testing.T) {
+	tests := []struct {
+		name                    string
+		payload                 string
+		wantCachedTokens        int64
+		wantCacheReadTokens     int64
+		wantCacheReadPresent    bool
+		wantCacheCreationTokens int64
+	}{
+		{
+			name:                    "legacy openai cache read",
+			payload:                 `{"timestamp":"2026-07-12T01:02:03Z","provider":"openai","executor_type":"OpenAICompatExecutor","tokens":{"cached_tokens":13,"cache_read_tokens":0,"cache_creation_tokens":7}}`,
+			wantCachedTokens:        13,
+			wantCacheReadTokens:     13,
+			wantCacheReadPresent:    false,
+			wantCacheCreationTokens: 7,
+		},
+		{
+			name:                    "current CPA preserves explicit zero read bucket",
+			payload:                 `{"timestamp":"2026-07-12T01:02:03Z","provider":"openai","executor_type":"OpenAICompatExecutor","tokens":{"cached_tokens":13,"cache_read_tokens":0,"cache_read_tokens_present":true,"cache_creation_tokens":7}}`,
+			wantCachedTokens:        13,
+			wantCacheReadTokens:     0,
+			wantCacheReadPresent:    true,
+			wantCacheCreationTokens: 7,
+		},
+		{
+			name:                    "claude keeps separate zero read bucket",
+			payload:                 `{"timestamp":"2026-07-12T01:02:03Z","provider":"claude","executor_type":"ClaudeExecutor","tokens":{"cached_tokens":13,"cache_read_tokens":0,"cache_creation_tokens":13}}`,
+			wantCachedTokens:        13,
+			wantCacheReadTokens:     0,
+			wantCacheReadPresent:    false,
+			wantCacheCreationTokens: 13,
+		},
+		{
+			name:                    "cache write fallback",
+			payload:                 `{"timestamp":"2026-07-12T01:02:03Z","provider":"openai","tokens":{"cache_write_tokens":22}}`,
+			wantCachedTokens:        0,
+			wantCacheReadTokens:     0,
+			wantCacheReadPresent:    false,
+			wantCacheCreationTokens: 22,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record, errRecord := UsageRecordFromPayload(test.payload, "192.0.2.10")
+			if errRecord != nil {
+				t.Fatalf("UsageRecordFromPayload() error = %v", errRecord)
+			}
+			if record.CachedTokens != test.wantCachedTokens ||
+				record.CacheReadTokens != test.wantCacheReadTokens ||
+				record.CacheReadTokensPresent != test.wantCacheReadPresent ||
+				record.CacheCreationTokens != test.wantCacheCreationTokens {
+				t.Fatalf("cache tokens = cached:%d read:%d present:%t creation:%d, want cached:%d read:%d present:%t creation:%d",
+					record.CachedTokens,
+					record.CacheReadTokens,
+					record.CacheReadTokensPresent,
+					record.CacheCreationTokens,
+					test.wantCachedTokens,
+					test.wantCacheReadTokens,
+					test.wantCacheReadPresent,
+					test.wantCacheCreationTokens)
+			}
+		})
+	}
+}
+
 func TestUsageRecordFromPayloadWithRuntimeStoresOwnershipColumns(t *testing.T) {
 	payload := `{"timestamp":"2026-07-09T01:02:03Z","request_id":"req-runtime-1","endpoint":"/v1/responses","upstream_status_code":"202","tokens":{"total_tokens":3}}`
 

@@ -3,6 +3,9 @@ package cluster
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -76,7 +79,7 @@ func TestBillingModelPriceImportUsesContextBandRowMultiplier(t *testing.T) {
 	}
 }
 
-func TestBillingModelPriceImportPreservesExistingCachePricesWhenExcluded(t *testing.T) {
+func TestBillingModelPriceImportUpdatesCachePrices(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -96,19 +99,21 @@ func TestBillingModelPriceImportPreservesExistingCachePricesWhenExcluded(t *test
 		t.Fatalf("CreateBillingModelPrice() error = %v", errCreate)
 	}
 	input := billingImportTestInput("sync")
-	input.Policy.IncludeCachePrices = false
-	preview, errPreview := repo.CreateBillingModelPriceImportPreview(ctx, input, billingImportTestCatalog())
+	catalog := billingImportTestCatalog()
+	catalog.Models[0].Cost.CacheRead = 3
+	catalog.Models[0].Cost.CacheWrite = 5
+	preview, errPreview := repo.CreateBillingModelPriceImportPreview(ctx, input, catalog)
 	if errPreview != nil {
 		t.Fatalf("CreateBillingModelPriceImportPreview() error = %v", errPreview)
 	}
-	if len(preview.Rows) != 1 || preview.Rows[0].Final == nil || preview.Rows[0].Final.CacheRead != 7 || preview.Rows[0].Final.CacheWrite != 9 {
-		t.Fatalf("preview row = %#v, want existing cache prices preserved", preview.Rows)
+	if len(preview.Rows) != 1 || preview.Rows[0].Final == nil || preview.Rows[0].Final.CacheRead != 3 || preview.Rows[0].Final.CacheWrite != 5 {
+		t.Fatalf("preview row = %#v, want imported cache prices", preview.Rows)
 	}
 	_, errApply := repo.ApplyBillingModelPriceImport(ctx, BillingModelPriceImportApplyInput{
 		PreviewID:       preview.PreviewID,
 		PreviewRevision: preview.PreviewRevision,
 		SelectedKeys:    []string{preview.Rows[0].RowKey},
-		IdempotencyKey:  "preserve-cache-prices",
+		IdempotencyKey:  "update-cache-prices",
 	})
 	if errApply != nil {
 		t.Fatalf("ApplyBillingModelPriceImport() error = %v", errApply)
@@ -117,8 +122,8 @@ func TestBillingModelPriceImportPreservesExistingCachePricesWhenExcluded(t *test
 	if errStored != nil {
 		t.Fatalf("GetBillingModelPrice() error = %v", errStored)
 	}
-	if stored.InputPricePerMillion != 2 || stored.OutputPricePerMillion != 8 || stored.CacheReadPricePerMillion != 7 || stored.CacheWritePricePerMillion != 9 {
-		t.Fatalf("stored rule = %#v, want imported token prices and preserved cache prices", stored)
+	if stored.InputPricePerMillion != 2 || stored.OutputPricePerMillion != 8 || stored.CacheReadPricePerMillion != 3 || stored.CacheWritePricePerMillion != 5 {
+		t.Fatalf("stored rule = %#v, want imported token and cache prices", stored)
 	}
 }
 
@@ -422,6 +427,63 @@ func TestBillingModelPriceImportRejectsChangedRuleRevision(t *testing.T) {
 	}
 }
 
+func TestBillingModelPriceImportAppliesLargeBatchCreatesAndUpdates(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	const count = billingImportWriteBatchSize*2 + 7
+	input := billingImportTestInput("missing")
+	input.Targets = make([]BillingModelPriceImportTarget, 0, count)
+	catalog := BillingModelPriceImportCatalog{SourceURL: "https://models.dev/api.json", Version: "fixture-v1", FetchedAt: time.Now().UTC(), Models: make([]BillingModelPriceImportCatalogModel, 0, count)}
+	for index := 0; index < count; index++ {
+		model := fmt.Sprintf("gpt-batch-%03d", index)
+		input.Targets = append(input.Targets, BillingModelPriceImportTarget{Provider: "openai", Model: model})
+		catalog.Models = append(catalog.Models, BillingModelPriceImportCatalogModel{Provider: "openai", Model: model, Cost: &BillingModelPriceImportCost{Input: 1, Output: 2, CacheRead: 0.25, CacheWrite: 1.5}})
+	}
+	preview, errPreview := repo.CreateBillingModelPriceImportPreview(ctx, input, catalog)
+	if errPreview != nil {
+		t.Fatalf("CreateBillingModelPriceImportPreview() error = %v", errPreview)
+	}
+	keys := billingImportPreviewRowKeys(preview.Rows)
+	if _, errApply := repo.ApplyBillingModelPriceImport(ctx, BillingModelPriceImportApplyInput{PreviewID: preview.PreviewID, PreviewRevision: preview.PreviewRevision, SelectedKeys: keys, IdempotencyKey: "large-batch-create"}); errApply != nil {
+		t.Fatalf("ApplyBillingModelPriceImport(create) error = %v", errApply)
+	}
+	rules, errRules := repo.ListBillingModelPrices(ctx, BillingModelPriceQuery{Provider: "openai"})
+	if errRules != nil {
+		t.Fatalf("ListBillingModelPrices() error = %v", errRules)
+	}
+	if len(rules) != count {
+		t.Fatalf("created rule count = %d, want %d", len(rules), count)
+	}
+
+	input.Policy.OverwriteMode = "sync"
+	for _, model := range catalog.Models {
+		model.Cost.Input = 3
+		model.Cost.Output = 6
+		model.Cost.CacheRead = 0.75
+		model.Cost.CacheWrite = 2.5
+	}
+	preview, errPreview = repo.CreateBillingModelPriceImportPreview(ctx, input, catalog)
+	if errPreview != nil {
+		t.Fatalf("CreateBillingModelPriceImportPreview(update) error = %v", errPreview)
+	}
+	keys = billingImportPreviewRowKeys(preview.Rows)
+	if _, errApply := repo.ApplyBillingModelPriceImport(ctx, BillingModelPriceImportApplyInput{PreviewID: preview.PreviewID, PreviewRevision: preview.PreviewRevision, SelectedKeys: keys, IdempotencyKey: "large-batch-update"}); errApply != nil {
+		t.Fatalf("ApplyBillingModelPriceImport(update) error = %v", errApply)
+	}
+	rules, errRules = repo.ListBillingModelPrices(ctx, BillingModelPriceQuery{Provider: "openai"})
+	if errRules != nil {
+		t.Fatalf("ListBillingModelPrices(after update) error = %v", errRules)
+	}
+	for _, rule := range rules {
+		if rule.Revision != 2 || rule.InputPricePerMillion != 3 || rule.OutputPricePerMillion != 6 || rule.CacheReadPricePerMillion != 0.75 || rule.CacheWritePricePerMillion != 2.5 {
+			t.Fatalf("updated rule = %#v, want batched prices and revision", rule)
+		}
+	}
+}
+
 func TestBillingChargeAmountKeepsZeroPricedOpenAICacheWritesInInput(t *testing.T) {
 	t.Parallel()
 
@@ -443,10 +505,10 @@ func TestBillingTierDiagnosticsUsesOnlyEligibleRecentRequests(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	for _, record := range []UsageRecord{
-		{Timestamp: now, RequestServiceTier: "standard", ResponseServiceTier: "priority", PayloadJSON: JSONB(`{}`), CreatedAt: now},
-		{Timestamp: now, RequestServiceTier: "standard", PayloadJSON: JSONB(`{}`), CreatedAt: now},
+		{Timestamp: now, ServiceTier: "standard", ResponseServiceTier: "priority", PayloadJSON: JSONB(`{}`), CreatedAt: now},
+		{Timestamp: now, ServiceTier: "standard", PayloadJSON: JSONB(`{}`), CreatedAt: now},
 		{Timestamp: now, PayloadJSON: JSONB(`{}`), CreatedAt: now},
-		{Timestamp: now.Add(-31 * 24 * time.Hour), RequestServiceTier: "standard", PayloadJSON: JSONB(`{}`), CreatedAt: now},
+		{Timestamp: now.Add(-31 * 24 * time.Hour), ServiceTier: "standard", PayloadJSON: JSONB(`{}`), CreatedAt: now},
 	} {
 		if errCreate := db.WithContext(ctx).Create(&record).Error; errCreate != nil {
 			t.Fatalf("create usage record: %v", errCreate)
@@ -511,8 +573,194 @@ func TestBillingModelPriceImportPrefersFirstPartyProviderForKnownModelFamilies(t
 	}
 }
 
+func TestBillingImportCatalogIndexMatchesReference(t *testing.T) {
+	t.Parallel()
+
+	models := []BillingModelPriceImportCatalogModel{
+		{Provider: "catalog", Model: "override-first"},
+		{Provider: "catalog", Model: "override-second"},
+		{Provider: "openai", Model: "alias-full"},
+		{Provider: "openai", Model: "alias-bare"},
+		{Provider: "anthropic", Model: "claude-match"},
+		{Provider: "other", Model: "claude-match"},
+		{Provider: "vendor", Model: "nested/foo"},
+		{Provider: " openai ", Model: "first-party-fallback"},
+		{Provider: "openrouter", Model: "bare-fallback"},
+		{Provider: "openai", Model: "duplicate"},
+		{Provider: "openai", Model: "duplicate"},
+		{Provider: "openai", Model: "ambiguous"},
+		{Provider: "openai", Model: "tenant/ambiguous"},
+		{Provider: "gateway", Model: "\u212a-model"},
+	}
+	aliases := []BillingModelPriceImportAlias{
+		{TargetModel: "my/alias-target", SourceModels: []string{"alias-full"}},
+		{TargetModel: "alias-target", SourceModels: []string{"alias-bare"}},
+	}
+	overrides := []BillingModelPriceImportMatchOverride{
+		{TargetProvider: "gateway", TargetModel: "override", SourceProvider: "catalog", SourceModel: "override-first"},
+		{TargetProvider: "GATEWAY", TargetModel: "OVERRIDE", SourceProvider: "catalog", SourceModel: "override-second"},
+	}
+	targets := []BillingModelPriceImportTarget{
+		{Provider: "gateway", Model: "override"},
+		{Provider: "gateway", Model: "my/alias-target"},
+		{Provider: "gateway", Model: "claude-match"},
+		{Provider: "vendor", Model: "nested/foo"},
+		{Provider: "gateway", Model: "first-party-fallback"},
+		{Provider: "gateway", Model: "bare-fallback"},
+		{Provider: "gateway", Model: "duplicate"},
+		{Provider: "gateway", Model: "ambiguous"},
+		{Provider: "gateway", Model: "k-model"},
+	}
+	index := newBillingImportCatalogIndex(models)
+	policy := newBillingImportMatchPolicyIndex(aliases, overrides)
+	for _, target := range targets {
+		t.Run(target.Provider+"/"+target.Model, func(t *testing.T) {
+			want := billingImportCatalogMatchesReference(models, target, aliases, overrides)
+			got := index.matches(target, policy)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("index.matches() = %#v, want %#v", got, want)
+			}
+			if gotWrapper := billingImportCatalogMatches(models, target, aliases, overrides); !reflect.DeepEqual(gotWrapper, want) {
+				t.Fatalf("billingImportCatalogMatches() = %#v, want %#v", gotWrapper, want)
+			}
+		})
+	}
+}
+
+func TestBuildBillingModelPriceImportPreviewHandlesMaximumIndexedCatalog(t *testing.T) {
+	t.Parallel()
+
+	const count = billingImportMaxTargets
+	input := BillingModelPriceImportPreviewInput{
+		Targets: make([]BillingModelPriceImportTarget, 0, count),
+		Policy:  BillingModelPriceImportPolicy{OverwriteMode: "missing", DefaultMultiplier: 1},
+	}
+	catalog := BillingModelPriceImportCatalog{
+		SourceURL: "https://models.dev/api.json",
+		Version:   "large-fixture",
+		FetchedAt: time.Date(2026, time.July, 13, 0, 0, 0, 0, time.UTC),
+		Models:    make([]BillingModelPriceImportCatalogModel, 0, count),
+	}
+	for index := 0; index < count; index++ {
+		model := fmt.Sprintf("model-%05d", index)
+		input.Targets = append(input.Targets, BillingModelPriceImportTarget{Provider: "local", Model: model})
+		catalog.Models = append(catalog.Models, BillingModelPriceImportCatalogModel{Provider: "local", Model: model, Cost: &BillingModelPriceImportCost{Input: 1, Output: 2}})
+	}
+	preview := buildBillingModelPriceImportPreview(input, catalog, nil, catalog.FetchedAt)
+	if len(preview.Rows) != count || preview.Summary.Total != count || preview.Summary.Creates != count {
+		t.Fatalf("preview summary = %#v rows=%d, want %d indexed creates", preview.Summary, len(preview.Rows), count)
+	}
+	for _, row := range []BillingModelPriceImportPreviewRow{preview.Rows[0], preview.Rows[len(preview.Rows)-1]} {
+		if !row.Applicable || row.Action != "create" || row.MatchedProvider != "local" || row.Final == nil || row.Final.Input != 1 || row.Final.Output != 2 {
+			t.Fatalf("preview row = %#v, want indexed catalog match", row)
+		}
+	}
+}
+
+func billingImportCatalogMatchesReference(models []BillingModelPriceImportCatalogModel, target BillingModelPriceImportTarget, aliases []BillingModelPriceImportAlias, overrides []BillingModelPriceImportMatchOverride) []BillingModelPriceImportCatalogModel {
+	for _, override := range overrides {
+		if strings.EqualFold(strings.TrimSpace(override.TargetProvider), strings.TrimSpace(target.Provider)) && strings.EqualFold(strings.TrimSpace(override.TargetModel), strings.TrimSpace(target.Model)) {
+			for _, model := range models {
+				if strings.EqualFold(model.Provider, override.SourceProvider) && strings.EqualFold(model.Model, override.SourceModel) {
+					return []BillingModelPriceImportCatalogModel{model}
+				}
+			}
+			return nil
+		}
+	}
+	candidates := billingImportModelCandidatesReference(target.Model, aliases)
+	preferredProviders := billingImportPreferredProviders(target.Provider, target.Model)
+	for _, candidate := range candidates {
+		for _, provider := range preferredProviders {
+			matches := billingImportModelsForProviderCandidateReference(models, provider, candidate)
+			if len(matches) > 0 {
+				return matches
+			}
+		}
+	}
+	for _, candidate := range candidates {
+		var firstParty []BillingModelPriceImportCatalogModel
+		for _, model := range models {
+			if !strings.EqualFold(billingImportBareModel(model.Model), billingImportBareModel(candidate)) || !billingImportFirstPartyProvider(model.Provider) {
+				continue
+			}
+			firstParty = append(firstParty, model)
+		}
+		if len(firstParty) == 1 {
+			return firstParty
+		}
+	}
+
+	var exact, bare []BillingModelPriceImportCatalogModel
+	for _, model := range models {
+		for _, candidate := range candidates {
+			if strings.EqualFold(model.Provider, target.Provider) && strings.EqualFold(model.Model, candidate) {
+				exact = append(exact, model)
+			}
+			if strings.EqualFold(billingImportBareModel(model.Model), billingImportBareModel(candidate)) {
+				bare = append(bare, model)
+			}
+		}
+	}
+	if len(exact) > 0 {
+		return billingImportUniqueCatalogMatches(exact)
+	}
+	return billingImportUniqueCatalogMatches(bare)
+}
+
+func billingImportModelsForProviderCandidateReference(models []BillingModelPriceImportCatalogModel, provider string, candidate string) []BillingModelPriceImportCatalogModel {
+	var matches []BillingModelPriceImportCatalogModel
+	for _, model := range models {
+		if strings.EqualFold(model.Provider, provider) && (strings.EqualFold(model.Model, candidate) || strings.EqualFold(billingImportBareModel(model.Model), billingImportBareModel(candidate))) {
+			matches = append(matches, model)
+		}
+	}
+	return billingImportUniqueCatalogMatches(matches)
+}
+
+func billingImportModelCandidatesReference(model string, aliases []BillingModelPriceImportAlias) []string {
+	model = strings.TrimSpace(model)
+	bare := billingImportBareModel(model)
+	values := []string{bare, model}
+	for _, alias := range aliases {
+		if strings.EqualFold(strings.TrimSpace(alias.TargetModel), bare) || strings.EqualFold(strings.TrimSpace(alias.TargetModel), model) {
+			values = append(values, alias.SourceModels...)
+		}
+	}
+	for _, suffix := range []string{"-thinking", "-preview", "-latest"} {
+		if strings.HasSuffix(strings.ToLower(bare), suffix) {
+			values = append(values, bare[:len(bare)-len(suffix)])
+		}
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		key := strings.ToLower(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
 func billingImportTestInput(overwriteMode string) BillingModelPriceImportPreviewInput {
-	return BillingModelPriceImportPreviewInput{Source: BillingModelPriceImportSourceModelsDev, Targets: []BillingModelPriceImportTarget{{Provider: "openai", Model: "gpt-import", Label: "GPT Import"}}, Policy: BillingModelPriceImportPolicy{OverwriteMode: overwriteMode, DefaultMultiplier: 1, IncludeCachePrices: true}}
+	return BillingModelPriceImportPreviewInput{Source: BillingModelPriceImportSourceModelsDev, Targets: []BillingModelPriceImportTarget{{Provider: "openai", Model: "gpt-import", Label: "GPT Import"}}, Policy: BillingModelPriceImportPolicy{OverwriteMode: overwriteMode, DefaultMultiplier: 1}}
+}
+
+func billingImportPreviewRowKeys(rows []BillingModelPriceImportPreviewRow) []string {
+	keys := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.Applicable {
+			keys = append(keys, row.RowKey)
+		}
+	}
+	return keys
 }
 
 func billingImportTestCatalog() BillingModelPriceImportCatalog {

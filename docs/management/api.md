@@ -1430,8 +1430,8 @@ Response shape:
       "balance_after": 18.75,
       "request_id": "req_xxx",
       "endpoint": "/v1/chat/completions",
-      "matched_price_rule": "openai:gpt-5.5:standard:272001",
-      "price_snapshot": { "request_price": 0, "input_price_per_million": 2.5, "matched_service_tier": "standard", "min_input_tokens": 272001, "requested_service_tier": "priority", "response_service_tier": "default", "service_tier_source": "response", "effective_service_tier": "standard", "response_tier_fallback": false }
+      "matched_price_rule": "openai:gpt-5.5:priority:272001",
+      "price_snapshot": { "request_price": 0, "input_price_per_million": 2.5, "matched_service_tier": "priority", "min_input_tokens": 272001, "requested_service_tier": "priority", "response_service_tier": "default", "service_tier_source": "request", "effective_service_tier": "priority", "response_tier_fallback": false }
     }
   ],
   "total": 1,
@@ -1563,7 +1563,7 @@ Request body fields:
 | --- | --- | --- | --- |
 | `provider` | string | yes | Provider name. |
 | `model` | string | yes | Model name. |
-| `service_tier` | string | no | Exact tier or `*`; defaults to `*`. Empty, `auto`, `default`, and `standard` requests normalize to Standard matching. |
+| `service_tier` | string | no | Exact tier or `*`; defaults to `*`. `auto`, `default`, and `standard` normalize to the local `standard` tier. |
 | `min_input_tokens` | integer | no | Non-negative inclusive context-band lower bound; defaults to `0`. |
 | `input_price_per_million` | number | no | Non-negative input-token price. |
 | `output_price_per_million` | number | no | Non-negative output-token price. |
@@ -1604,7 +1604,7 @@ Response:
 
 ### GET `/billing/settings`
 
-Returns the DB-backed billing matching policy. `service_tier_source` is `request` by default and may be `request` or `response`.
+Returns the DB-backed billing matching policy. `service_tier_source` is `request` by default and may be `request` or `response`. In either mode, `auto`, `default`, and `standard` match the local Standard price tier.
 
 ```json
 { "service_tier_source": "request" }
@@ -1618,13 +1618,15 @@ Partially updates billing settings. In `response` mode, a missing response tier 
 { "service_tier_source": "response" }
 ```
 
-Charge `price_snapshot` audit data includes `requested_service_tier`, optional `response_service_tier`, `service_tier_source`, `effective_service_tier`, `response_tier_fallback`, `matched_service_tier`, and `min_input_tokens`. Context-band selection uses the original total input count. In the OpenAI Responses protocol, `input_tokens` includes both cache-read and cache-write tokens. Home removes cache-read tokens from ordinary input before applying the cache-read price. When `cache_write_price_per_million` is positive, Home also removes cache-write tokens from ordinary input before applying that separate price; when the price is zero or omitted, those cache-write tokens remain billed as ordinary input. In the Anthropic Messages protocol, `input_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens` are independent buckets, so Home prices them independently without subtracting either cache bucket from input.
+OpenAI defines an omitted `service_tier` as `auto`; `auto` is represented internally by Home and is not a literal Codex backend request value. See the [OpenAI pricing page](https://developers.openai.com/api/docs/pricing) and [Responses Create reference](https://developers.openai.com/api/reference/resources/responses/methods/create). Home stores the request `service_tier` and optional upstream `response_service_tier` so later billing policy can switch sources without re-ingesting usage. The default `request` source bills from `service_tier` (client-requested tier). In `response` mode, Home uses `response_service_tier` when present and falls back to the request tier when the upstream omits it. `auto`, `default`, and `standard` map to the local Standard price tier; configure `flex` or `priority` rules when those tiers are used.
+
+Charge `price_snapshot` audit data includes `requested_service_tier`, optional `response_service_tier`, `service_tier_source`, `effective_service_tier`, `response_tier_fallback`, `matched_service_tier`, and `min_input_tokens`. Context-band selection uses the original total input count. In the OpenAI Responses protocol, `input_tokens` includes both cache-read and cache-write tokens. Home removes cache-read tokens from ordinary input before applying the cache-read price. When `cache_write_price_per_million` is positive, Home also removes cache-write tokens from ordinary input before applying that separate price; when the price is zero or omitted, those cache-write tokens remain billed as ordinary input. In the Anthropic Messages protocol, `input_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens` are independent buckets, so Home prices them independently without subtracting either cache bucket from input. Cache-field compatibility backfills update usage counters only; existing immutable `billing_charge` snapshots and balances are not repriced automatically, so historical corrections require an explicit audited balance adjustment.
 
 ### POST `/billing/model-prices/import/preview`
 
 Creates a server-side, immutable `models.dev` import preview. The server fetches and pins the source snapshot; clients provide targets, matching policy, aliases, row multipliers, and optional source-match overrides. Invalid request-controlled input returns `422 invalid_import_preview`, a catalog fetch failure returns `502 models_dev_fetch_failed`, and an internal preview persistence failure returns `500 billing_import_preview_failed`. A successful response contains `preview_id`, `preview_revision`, source provenance, `generated_at`, `expires_at`, explicit `atomic: true`, rows, and an exact summary.
 
-Preview targets currently describe only the wildcard base rule (`service_tier: "*"`, `min_input_tokens: 0`); other target scopes are rejected rather than silently rewritten. A matched row includes official prices, final multiplied prices, the exact `write_rule`, optional complete `existing_rule` snapshot with `revision`, and a machine-readable reason. Models.dev context bands create distinct wildcard rows at their inclusive lower bounds. `row_multipliers` apply to the exact returned row key, including a context-band key. When cache prices are excluded, updates preserve the existing cache prices instead of clearing them. Unsupported dimensions, malformed or invalid prices/bands, duplicate bands, or a tier that omits a price dimension configured by its base rule make the whole target non-applicable; the server never imports a potentially undercharged subset.
+Preview targets currently describe only the wildcard base rule (`service_tier: "*"`, `min_input_tokens: 0`); other target scopes are rejected rather than silently rewritten. A matched row includes official prices, final multiplied prices, the exact `write_rule`, optional complete `existing_rule` snapshot with `revision`, and a machine-readable reason. Models.dev context bands create distinct wildcard rows at their inclusive lower bounds. `row_multipliers` apply to the exact returned row key, including a context-band key. Cache-read and cache-write prices are imported from the pinned catalog snapshot. When a cost object has an input price but omits `cache_read` or `cache_write`, Home derives the missing price as `input * 0.1` or `input * 1.25`, respectively; explicit values, including zero, are preserved. Unsupported dimensions, malformed or invalid prices/bands, duplicate bands, or a tier that omits a price dimension configured by its base rule make the whole target non-applicable; the server never imports a potentially undercharged subset.
 
 `policy.overwrite_mode` is `missing`, `sync`, or `all`. `missing` creates only absent rules, `sync` may update prior `source=sync` rules, and `all` may overwrite manual/default rules. Preview rows requiring an overwrite use action `overwrite` and require confirmation on apply.
 

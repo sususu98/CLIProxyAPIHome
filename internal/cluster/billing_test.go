@@ -461,6 +461,45 @@ func TestBillingChargeAmountNormalizesOpenAICacheBuckets(t *testing.T) {
 	}
 }
 
+func TestBillingChargeAmountDoesNotDoubleChargeOpenAIResponsesCacheBuckets(t *testing.T) {
+	t.Parallel()
+
+	usage := &UsageRecord{
+		Provider:               "openai",
+		InputTokens:            1000000,
+		CachedTokens:           500000,
+		CacheReadTokens:        500000,
+		CacheReadTokensPresent: true,
+		CacheCreationTokens:    500000,
+	}
+	snapshot := BillingPriceSnapshot{
+		InputPricePerMillion:      5,
+		CacheReadPricePerMillion:  2,
+		CacheWritePricePerMillion: 4,
+	}
+	// Responses input_tokens is the total input: cache read and cache write are
+	// both subsets, so this request has no non-cache input to bill at 5/M.
+	if amount := billingChargeAmount(usage, snapshot); amount != 3 {
+		t.Fatalf("billingChargeAmount() = %v, want 3", amount)
+	}
+}
+
+func TestBillingChargeAmountPreservesCanonicalZeroCacheRead(t *testing.T) {
+	t.Parallel()
+
+	usage := &UsageRecord{
+		Provider:               "openai",
+		InputTokens:            100,
+		CachedTokens:           30,
+		CacheReadTokens:        0,
+		CacheReadTokensPresent: true,
+	}
+	snapshot := BillingPriceSnapshot{InputPricePerMillion: 10, CacheReadPricePerMillion: 2}
+	if amount := billingChargeAmount(usage, snapshot); amount != 0.001 {
+		t.Fatalf("billingChargeAmount() = %.9f, want %.9f", amount, 0.001)
+	}
+}
+
 func TestAppendUsageChargesCachedTokensWithCacheReadPrice(t *testing.T) {
 	t.Parallel()
 
