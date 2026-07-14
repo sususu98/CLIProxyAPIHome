@@ -1430,8 +1430,8 @@ Response shape:
       "balance_after": 18.75,
       "request_id": "req_xxx",
       "endpoint": "/v1/chat/completions",
-      "matched_price_rule": "openai:gpt-5.5:standard:272001",
-      "price_snapshot": { "request_price": 0, "input_price_per_million": 2.5, "matched_service_tier": "standard", "min_input_tokens": 272001, "requested_service_tier": "priority", "response_service_tier": "default", "service_tier_source": "response", "effective_service_tier": "standard", "response_tier_fallback": false }
+      "matched_price_rule": "openai:gpt-5.5:priority:272001",
+      "price_snapshot": { "request_price": 0, "input_price_per_million": 2.5, "matched_service_tier": "priority", "min_input_tokens": 272001, "requested_service_tier": "priority", "response_service_tier": "default", "service_tier_source": "request", "effective_service_tier": "priority", "response_tier_fallback": false }
     }
   ],
   "total": 1,
