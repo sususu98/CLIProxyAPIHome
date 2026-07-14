@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	userBillingDefaultLimit = 50
-	userBillingMaxLimit     = 200
+	userBillingDefaultLimit         = 50
+	userBillingMaxLimit             = 200
+	userBillingMinUnixSeconds int64 = 946684800    // 2000-01-01T00:00:00Z
+	userBillingMaxUnixSeconds int64 = 253402300799 // 9999-12-31T23:59:59Z
 )
 
 // CurrentUserBillingOverview returns the billing overview for the authenticated user.
@@ -138,6 +140,10 @@ func userBillingDateRangeFromRequest(c *gin.Context) (*time.Time, *time.Time, bo
 	if !ok {
 		return nil, nil, false
 	}
+	if from != nil && to != nil && from.After(*to) {
+		respondError(c, http.StatusBadRequest, "invalid_time_range", fmt.Errorf("from must not be after to"))
+		return nil, nil, false
+	}
 	return from, to, true
 }
 
@@ -146,16 +152,31 @@ func userBillingDateQuery(c *gin.Context, key string, endOfDay bool) (*time.Time
 	if raw == "" {
 		return nil, true
 	}
-	parsed, errParse := time.ParseInLocation("2006-01-02", raw, time.UTC)
+	parsed, dateOnly, errParse := parseUserBillingTime(raw)
 	if errParse != nil {
-		respondError(c, http.StatusBadRequest, "invalid_"+key, fmt.Errorf("%s must be YYYY-MM-DD", key))
+		respondError(c, http.StatusBadRequest, "invalid_"+key, fmt.Errorf("%s must be YYYY-MM-DD, RFC3339, or unix seconds", key))
 		return nil, false
 	}
 	parsed = parsed.UTC()
-	if endOfDay {
+	if endOfDay && dateOnly {
 		parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 23, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
 	}
 	return &parsed, true
+}
+
+func parseUserBillingTime(raw string) (time.Time, bool, error) {
+	if parsed, errDate := time.ParseInLocation(time.DateOnly, raw, time.UTC); errDate == nil {
+		return parsed, true, nil
+	}
+	if parsed, errRFC3339 := time.Parse(time.RFC3339Nano, raw); errRFC3339 == nil {
+		return parsed, false, nil
+	}
+	if unixSeconds, errUnix := strconv.ParseInt(raw, 10, 64); errUnix == nil {
+		if unixSeconds >= userBillingMinUnixSeconds && unixSeconds <= userBillingMaxUnixSeconds {
+			return time.Unix(unixSeconds, 0).UTC(), false, nil
+		}
+	}
+	return time.Time{}, false, fmt.Errorf("time must be YYYY-MM-DD, RFC3339, or unix seconds")
 }
 
 func userBillingPaginationFromRequest(c *gin.Context) (int, int, bool) {

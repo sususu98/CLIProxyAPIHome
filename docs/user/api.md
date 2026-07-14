@@ -457,7 +457,7 @@ User billing routes are under the `/user` base path, so the full paths are `/use
 
 User billing responses do not include admin notes, global totals, model price management data, proxy-pool data, raw API keys, masked API keys, price snapshots, matched price rules, endpoint, `balance_before`, or other users' data.
 
-User billing `from` and `to` query parameters only accept `YYYY-MM-DD`. A date-only `to` includes the whole ending UTC day.
+User billing `from` and `to` query parameters accept `YYYY-MM-DD`, RFC3339, or Unix seconds. Unix-second values must be between `2000-01-01T00:00:00Z` and `9999-12-31T23:59:59Z`; millisecond timestamps are rejected. A date-only `to` includes the whole ending UTC day. Explicit timestamp `to` values are inclusive exact instants and are not expanded. Clients that need a full natural day outside UTC should send RFC3339 boundaries with the intended timezone offset through the final nanosecond, for example `23:59:59.999999999+08:00`.
 
 ### GET `/billing/overview`
 
@@ -473,8 +473,8 @@ Query parameters:
 
 | Parameter | Type | Description |
 | --- | --- | --- |
-| `from` | string | Optional start date in `YYYY-MM-DD` format. |
-| `to` | string | Optional end date in `YYYY-MM-DD` format. Includes the full UTC day. |
+| `from` | string | Optional start time: `YYYY-MM-DD`, RFC3339, or Unix seconds. |
+| `to` | string | Optional inclusive end time. Date-only values include the full UTC day; explicit timestamps are preserved exactly. |
 
 Example response:
 
@@ -519,8 +519,8 @@ Query parameters:
 
 | Parameter | Type | Description |
 | --- | --- | --- |
-| `from` | string | Optional start date in `YYYY-MM-DD` format. |
-| `to` | string | Optional end date in `YYYY-MM-DD` format. Includes the full UTC day. |
+| `from` | string | Optional start time: `YYYY-MM-DD`, RFC3339, or Unix seconds. |
+| `to` | string | Optional inclusive end time. Date-only values include the full UTC day; explicit timestamps are preserved exactly. |
 | `limit` | integer | Optional page size. Default `50`, max `200`. Invalid non-positive or non-integer values return `400`. |
 | `offset` | integer | Optional page offset. Default `0`. Negative or non-integer values return `400`. |
 
@@ -566,8 +566,9 @@ Common errors:
 ```json
 { "error": "bearer_token_required", "message": "bearer token is required" }
 { "error": "invalid_token", "message": "invalid token" }
-{ "error": "invalid_from", "message": "from must be YYYY-MM-DD" }
-{ "error": "invalid_to", "message": "to must be YYYY-MM-DD" }
+{ "error": "invalid_from", "message": "from must be YYYY-MM-DD, RFC3339, or unix seconds" }
+{ "error": "invalid_to", "message": "to must be YYYY-MM-DD, RFC3339, or unix seconds" }
+{ "error": "invalid_time_range", "message": "from must not be after to" }
 { "error": "invalid_limit", "message": "limit must be a positive integer" }
 { "error": "invalid_offset", "message": "offset must be a non-negative integer" }
 ```
