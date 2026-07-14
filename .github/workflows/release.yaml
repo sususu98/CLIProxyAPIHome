@@ -2,9 +2,15 @@ name: release
 
 on:
   push:
-    # run only against tags
     tags:
-      - '*'
+      - 'v*'
+      - 'dev-*'
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Tag to publish when this workflow is called from the dev pre-release workflow.
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -13,6 +19,7 @@ env:
   GH_REPO: ${{ github.repository }}
   GO_VERSION: '1.26.4'
   PANEL_REPOSITORY: router-for-me/Home-Management-Center
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
 
 jobs:
   build-management-panel:
@@ -59,6 +66,7 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -88,24 +96,24 @@ jobs:
 
           git fetch --force --tags
           previous_tag=""
-          if previous_tag_value="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null)"; then
+          if previous_tag_value="$(git describe --tags --abbrev=0 "${RELEASE_TAG}^" 2>/dev/null)"; then
             previous_tag="$previous_tag_value"
-            changelog_range="${previous_tag}..${GITHUB_REF_NAME}"
+            changelog_range="${previous_tag}..${RELEASE_TAG}"
           else
-            changelog_range="$GITHUB_REF_NAME"
+            changelog_range="$RELEASE_TAG"
           fi
 
           git log --reverse --pretty=format:'- %s (%h)' "$changelog_range" |
             grep -Ev '^- (docs:|test:)' > "$changelog_entries_file" || true
 
           gh api "repos/${GH_REPO}/releases/generate-notes" \
-            -f tag_name="$GITHUB_REF_NAME" \
+            -f tag_name="$RELEASE_TAG" \
             --jq .body > "$generated_notes_file"
           if [[ ! -s "$generated_notes_file" ]]; then
             if [[ -n "$previous_tag" ]]; then
-              printf '**Full Changelog**: https://github.com/%s/compare/%s...%s\n' "$GH_REPO" "$previous_tag" "$GITHUB_REF_NAME" > "$generated_notes_file"
+              printf '**Full Changelog**: https://github.com/%s/compare/%s...%s\n' "$GH_REPO" "$previous_tag" "$RELEASE_TAG" > "$generated_notes_file"
             else
-              printf '**Full Changelog**: https://github.com/%s/commits/%s\n' "$GH_REPO" "$GITHUB_REF_NAME" > "$generated_notes_file"
+              printf '**Full Changelog**: https://github.com/%s/commits/%s\n' "$GH_REPO" "$RELEASE_TAG" > "$generated_notes_file"
             fi
           fi
 
@@ -124,10 +132,15 @@ jobs:
             cat "$changelog_notes_file"
           } > "$updated_notes_file"
 
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "$updated_notes_file"
+          prerelease_args=()
+          if [[ "$RELEASE_TAG" == dev-* ]]; then
+            prerelease_args+=(--prerelease)
+          fi
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file "$updated_notes_file" "${prerelease_args[@]}"
           else
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "$updated_notes_file"
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file "$updated_notes_file" "${prerelease_args[@]}"
           fi
 
   build-hosted:
@@ -166,6 +179,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Refresh models catalog
         shell: bash
         run: |
@@ -196,7 +210,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
           echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Build archive
@@ -247,7 +261,7 @@ jobs:
             printf '%s\n' "${assets[@]}" >&2
             exit 1
           fi
-          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
 
   build-linux-glibc:
     name: build linux-${{ matrix.goarch }} glibc
@@ -271,6 +285,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Refresh models catalog
         shell: bash
         run: |
@@ -288,7 +303,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
           echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Build archive
@@ -357,7 +372,7 @@ jobs:
             printf '%s\n' "${assets[@]}" >&2
             exit 1
           fi
-          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
 
   build-linux-no-plugin:
     name: build linux-${{ matrix.goarch }} no-plugin
@@ -377,6 +392,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Refresh models catalog
         shell: bash
         run: |
@@ -407,7 +423,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
           echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Build archive
@@ -454,7 +470,7 @@ jobs:
             printf '%s\n' "${assets[@]}" >&2
             exit 1
           fi
-          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
 
   build-freebsd:
     name: build ${{ matrix.target }}
@@ -483,6 +499,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Refresh models catalog
         run: |
           git fetch --depth 1 https://github.com/router-for-me/models.git main
@@ -510,7 +527,7 @@ jobs:
         id: metadata
         run: |
           set -euo pipefail
-          release_version="${GITHUB_REF_NAME#v}"
+          release_version="${RELEASE_TAG#v}"
           commit="$(git rev-parse --short HEAD)"
           build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "RELEASE_VERSION=$release_version" >> "$GITHUB_ENV"
@@ -585,7 +602,7 @@ jobs:
             printf '%s\n' "${assets[@]}" >&2
             exit 1
           fi
-          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
 
   publish-checksums:
     runs-on: ubuntu-latest
@@ -614,4 +631,4 @@ jobs:
             exit 0
           fi
           sha256sum "${archives[@]}" | sort -k2 > checksums.txt
-          gh release upload "$GITHUB_REF_NAME" checksums.txt --clobber
+          gh release upload "$RELEASE_TAG" checksums.txt --clobber
