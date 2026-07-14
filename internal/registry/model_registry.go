@@ -58,6 +58,12 @@ type ModelInfo struct {
 	// array (e.g., openai-compatibility.*.models[], *-api-key.models[]).
 	// UserDefined models have thinking configuration passed through without validation.
 	UserDefined bool `json:"-"`
+
+	// ConfigDisplayName preserves an explicitly configured display-name across DB round trips.
+	ConfigDisplayName string `json:"-"`
+
+	// ForceMapping preserves the configured response model rewrite flag across DB round trips.
+	ForceMapping bool `json:"-"`
 }
 
 // ThinkingSupport describes a model family's supported internal reasoning budget range.

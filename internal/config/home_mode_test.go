@@ -35,9 +35,9 @@ func TestForceDownstreamHomeModeConfigPreservesRemoteManagement(t *testing.T) {
 
 func TestApplyDownstreamHomeModeScalarsPreservesRemoteManagement(t *testing.T) {
 	root := map[string]any{
-		"api-keys":                   []any{"local-key"},
-		"usage-statistics-enabled":   false,
-		"disable-cooling":            false,
+		"api-keys":                 []any{"local-key"},
+		"usage-statistics-enabled": false,
+		"disable-cooling":          false,
 		"remote-management": map[string]any{
 			"allow-remote":          true,
 			"disable-control-panel": false,

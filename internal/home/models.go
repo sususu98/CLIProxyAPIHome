@@ -58,9 +58,23 @@ func modelInfosFromAuthMetadata(a *coreauth.Auth, key string) []*ModelInfo {
 			model.Created = time.Now().Unix()
 		}
 		model.UserDefined = boolFromMetadataValue(item["user_defined"])
+		model.ConfigDisplayName = strings.TrimSpace(stringFromMetadataValue(item["config_display_name"]))
+		model.ForceMapping = boolFromMetadataValue(item["force_mapping"])
 		out = append(out, &model)
 	}
 	return out
+}
+
+// stringFromMetadataValue derives a string from metadata values.
+func stringFromMetadataValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case []byte:
+		return string(typed)
+	default:
+		return ""
+	}
 }
 
 // boolFromMetadataValue derives bool from metadata value.
@@ -233,6 +247,16 @@ func (r *Runtime) registerModelsForAuth(a *coreauth.Auth) {
 		models = applyExcludedModels(models, excluded)
 	case "xai":
 		models = registry.GetXAIModels()
+		if len(configModels) > 0 {
+			models = configModels
+		} else if entry := r.resolveConfigXAIKey(cfg, a); entry != nil {
+			if len(entry.Models) > 0 {
+				models = buildXAIConfigModels(entry)
+			}
+			if authKind == "apikey" {
+				excluded = entry.ExcludedModels
+			}
+		}
 		models = applyExcludedModels(models, excluded)
 	default:
 		if len(configModels) > 0 {
@@ -475,8 +499,22 @@ func (r *Runtime) resolveConfigVertexCompatKey(cfg *config.Config, auth *coreaut
 
 // resolveConfigCodexKey resolves a config codex key.
 func (r *Runtime) resolveConfigCodexKey(cfg *config.Config, auth *coreauth.Auth) *config.CodexKey {
-	// Normalize source data before building the derived payload.
-	if auth == nil || cfg == nil {
+	if cfg == nil {
+		return nil
+	}
+	return resolveConfigCodexStyleKey(auth, cfg.CodexKey)
+}
+
+// resolveConfigXAIKey resolves a config xAI key.
+func (r *Runtime) resolveConfigXAIKey(cfg *config.Config, auth *coreauth.Auth) *config.XAIKey {
+	if cfg == nil {
+		return nil
+	}
+	return resolveConfigCodexStyleKey(auth, cfg.XAIKey)
+}
+
+func resolveConfigCodexStyleKey(auth *coreauth.Auth, entries []config.CodexKey) *config.CodexKey {
+	if auth == nil {
 		return nil
 	}
 	var attrKey, attrBase string
@@ -484,8 +522,8 @@ func (r *Runtime) resolveConfigCodexKey(cfg *config.Config, auth *coreauth.Auth)
 		attrKey = strings.TrimSpace(auth.Attributes["api_key"])
 		attrBase = strings.TrimSpace(auth.Attributes["base_url"])
 	}
-	for i := range cfg.CodexKey {
-		entry := &cfg.CodexKey[i]
+	for i := range entries {
+		entry := &entries[i]
 		cfgKey := strings.TrimSpace(entry.APIKey)
 		cfgBase := strings.TrimSpace(entry.BaseURL)
 		if attrKey != "" && strings.EqualFold(cfgKey, attrKey) {
@@ -628,6 +666,14 @@ type modelEntry interface {
 	GetAlias() string
 }
 
+type displayNameModelEntry interface {
+	GetDisplayName() string
+}
+
+type forceMappingModelEntry interface {
+	GetForceMapping() bool
+}
+
 // buildConfigModels builds a config models.
 func buildConfigModels[T modelEntry](models []T, ownedBy, modelType string) []*ModelInfo {
 	// Normalize source data before building the derived payload.
@@ -652,18 +698,32 @@ func buildConfigModels[T modelEntry](models []T, ownedBy, modelType string) []*M
 			continue
 		}
 		seen[key] = struct{}{}
-		display := name
+		configuredDisplay := ""
+		if displayEntry, okDisplay := any(model).(displayNameModelEntry); okDisplay {
+			configuredDisplay = strings.TrimSpace(displayEntry.GetDisplayName())
+		}
+		display := configuredDisplay
+		if display == "" {
+			display = name
+		}
 		if display == "" {
 			display = alias
 		}
+		forceMapping := false
+		if forceEntry, okForce := any(model).(forceMappingModelEntry); okForce {
+			forceMapping = forceEntry.GetForceMapping()
+		}
 		info := &ModelInfo{
-			ID:          alias,
-			Object:      "model",
-			Created:     now,
-			OwnedBy:     ownedBy,
-			Type:        modelType,
-			DisplayName: display,
-			UserDefined: true,
+			ID:                alias,
+			Object:            "model",
+			Created:           now,
+			OwnedBy:           ownedBy,
+			Type:              modelType,
+			DisplayName:       display,
+			Name:              name,
+			UserDefined:       true,
+			ConfigDisplayName: configuredDisplay,
+			ForceMapping:      forceMapping,
 		}
 		if name != "" {
 			if upstream := registry.LookupStaticModelInfo(name); upstream != nil && upstream.Thinking != nil {
@@ -697,6 +757,14 @@ func buildClaudeConfigModels(entry *config.ClaudeKey) []*ModelInfo {
 		return nil
 	}
 	return buildConfigModels(entry.Models, "anthropic", "claude")
+}
+
+// buildXAIConfigModels builds xAI config models.
+func buildXAIConfigModels(entry *config.XAIKey) []*ModelInfo {
+	if entry == nil {
+		return nil
+	}
+	return buildConfigModels(entry.Models, "xai", "xai")
 }
 
 // buildCodexConfigModels builds a codex config models.

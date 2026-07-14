@@ -94,6 +94,7 @@ func TestGetProviderKeyRoutesReturnConfiguredModels(t *testing.T) {
 	engine.GET("/gemini-api-key", handler.GetGeminiKeys)
 	engine.GET("/claude-api-key", handler.GetClaudeKeys)
 	engine.GET("/codex-api-key", handler.GetCodexKeys)
+	engine.GET("/xai-api-key", handler.GetXAIKeys)
 	engine.GET("/vertex-api-key", handler.GetVertexCompatKeys)
 
 	payload := `port: 8327
@@ -113,6 +114,12 @@ codex-api-key:
     models:
       - name: "codex-upstream"
         alias: "codex-alias"
+xai-api-key:
+  - api-key: xai-key
+    base-url: "https://api.x.ai/v1"
+    models:
+      - name: "xai-upstream"
+        alias: "xai-alias"
 vertex-api-key:
   - api-key: vertex-key
     base-url: "https://vertex.example"
@@ -138,6 +145,7 @@ vertex-api-key:
 		{Path: "/gemini-api-key", Key: "gemini-api-key", WantName: "gemini-upstream", WantAlias: "gemini-alias"},
 		{Path: "/claude-api-key", Key: "claude-api-key", WantName: "claude-upstream", WantAlias: "claude-alias"},
 		{Path: "/codex-api-key", Key: "codex-api-key", WantName: "codex-upstream", WantAlias: "codex-alias"},
+		{Path: "/xai-api-key", Key: "xai-api-key", WantName: "xai-upstream", WantAlias: "xai-alias"},
 		{Path: "/vertex-api-key", Key: "vertex-api-key", WantName: "vertex-upstream", WantAlias: "vertex-alias"},
 	}
 	for _, tc := range cases {

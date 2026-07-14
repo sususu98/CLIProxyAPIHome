@@ -1,6 +1,12 @@
 package cluster
 
-import "testing"
+import (
+	"context"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestUsageRecordFromPayloadStoresRequestIDAndHomeIP(t *testing.T) {
 	payload := `{"timestamp":"2026-05-29T01:02:03Z","request_id":"req-usage-1","executor_type":"CodexWebsocketsExecutor","tokens":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}`
@@ -21,6 +27,92 @@ func TestUsageRecordFromPayloadStoresRequestIDAndHomeIP(t *testing.T) {
 	}
 	if record.TotalTokens != 15 {
 		t.Fatalf("total tokens = %d, want 15", record.TotalTokens)
+	}
+}
+
+func TestUsageRecordFromPayloadStoresXAIAPIKeyStatistics(t *testing.T) {
+	payload := `{"timestamp":"2026-07-14T01:02:03Z","source":"xai-upstream-secret","provider":"xai","executor_type":"XAIExecutor","model":"grok-4.5","alias":"grok-latest","auth_type":"api_key","auth_index":"xai-auth","tokens":{"input_tokens":12,"output_tokens":8,"reasoning_tokens":3,"cached_tokens":2,"total_tokens":23}}`
+
+	record, errRecord := UsageRecordFromPayload(payload, "192.0.2.10")
+	if errRecord != nil {
+		t.Fatalf("UsageRecordFromPayload: %v", errRecord)
+	}
+	if record.Provider != "xai" || record.ExecutorType != "XAIExecutor" || record.AuthType != "api_key" || record.AuthIndex != "xai-auth" {
+		t.Fatalf("xAI usage identity = %+v", record)
+	}
+	if record.Model != "grok-4.5" || record.Alias != "grok-latest" {
+		t.Fatalf("xAI usage model/alias = %q/%q", record.Model, record.Alias)
+	}
+	if record.Source != "xai-auth" || strings.Contains(string(record.PayloadJSON), "xai-upstream-secret") {
+		t.Fatalf("xAI usage source was not sanitized: source=%q payload=%s", record.Source, string(record.PayloadJSON))
+	}
+	if record.InputTokens != 12 || record.OutputTokens != 8 || record.ReasoningTokens != 3 || record.CachedTokens != 2 || record.TotalTokens != 23 {
+		t.Fatalf("xAI usage tokens = %+v", record)
+	}
+}
+
+func TestMigrateUsageProviderAPIKeySourcesSanitizesHistoricalRows(t *testing.T) {
+	db, errOpen := OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "home.db"))
+	if errOpen != nil {
+		t.Fatalf("OpenSQLite() error = %v", errOpen)
+	}
+	sqlDB, errDB := db.DB()
+	if errDB != nil {
+		t.Fatalf("db.DB() error = %v", errDB)
+	}
+	defer func() {
+		if errClose := sqlDB.Close(); errClose != nil {
+			t.Errorf("close sqlite db: %v", errClose)
+		}
+	}()
+	if errMigrate := db.AutoMigrate(&UsageRecord{}); errMigrate != nil {
+		t.Fatalf("AutoMigrate() error = %v", errMigrate)
+	}
+
+	payload := `{"timestamp":"2026-07-14T01:02:03Z","source":"historical-upstream-secret","provider":"xai","auth_type":"apikey","auth_index":"xai-auth"}`
+	record := &UsageRecord{
+		Timestamp:   time.Date(2026, time.July, 14, 1, 2, 3, 0, time.UTC),
+		Source:      "historical-upstream-secret",
+		AuthIndex:   "xai-auth",
+		AuthType:    "apikey",
+		PayloadJSON: JSONB(payload),
+		CreatedAt:   time.Now().UTC(),
+	}
+	if errCreate := db.Create(record).Error; errCreate != nil {
+		t.Fatalf("create usage record: %v", errCreate)
+	}
+
+	if errMigrate := migrateUsageProviderAPIKeySources(db); errMigrate != nil {
+		t.Fatalf("migrateUsageProviderAPIKeySources() error = %v", errMigrate)
+	}
+	var stored UsageRecord
+	if errFirst := db.First(&stored, record.ID).Error; errFirst != nil {
+		t.Fatalf("load migrated usage: %v", errFirst)
+	}
+	if stored.Source != "xai-auth" || strings.Contains(string(stored.PayloadJSON), "historical-upstream-secret") {
+		t.Fatalf("historical usage source was not sanitized: source=%q payload=%s", stored.Source, string(stored.PayloadJSON))
+	}
+	latePayload := `{"timestamp":"2026-07-14T01:02:04Z","source":"late-upstream-secret","provider":"xai","auth_type":"provider_api_key","auth_index":"late-xai-auth"}`
+	lateRecord := &UsageRecord{
+		Timestamp:   time.Date(2026, time.July, 14, 1, 2, 4, 0, time.UTC),
+		Source:      "late-upstream-secret",
+		AuthIndex:   "late-xai-auth",
+		AuthType:    "provider_api_key",
+		PayloadJSON: JSONB(latePayload),
+		CreatedAt:   time.Now().UTC(),
+	}
+	if errCreate := db.Create(lateRecord).Error; errCreate != nil {
+		t.Fatalf("create late usage record: %v", errCreate)
+	}
+	if errMigrate := migrateUsageProviderAPIKeySources(db); errMigrate != nil {
+		t.Fatalf("repeat migrateUsageProviderAPIKeySources() error = %v", errMigrate)
+	}
+	stored = UsageRecord{}
+	if errFirst := db.First(&stored, lateRecord.ID).Error; errFirst != nil {
+		t.Fatalf("load late migrated usage: %v", errFirst)
+	}
+	if stored.Source != "late-xai-auth" || strings.Contains(string(stored.PayloadJSON), "late-upstream-secret") {
+		t.Fatalf("late usage source was not sanitized: source=%q payload=%s", stored.Source, string(stored.PayloadJSON))
 	}
 }
 

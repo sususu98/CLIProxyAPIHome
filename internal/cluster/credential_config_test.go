@@ -15,12 +15,13 @@ func TestApplyCredentialConfigToRootHydratesAPIKeyAuths(t *testing.T) {
 		testConfigAPIKeyAuth("gemini-id", "gemini", "config:gemini[token]", "gemini-key"),
 		testConfigAPIKeyAuth("vertex-id", "vertex", "config:vertex-apikey[token]", "vertex-key"),
 		testConfigAPIKeyAuth("codex-id", "codex", "config:codex[token]", "codex-key"),
+		testConfigAPIKeyAuth("xai-id", "xai", "config:xai[token]", "xai-key"),
 		testConfigAPIKeyAuth("claude-id", "claude", "config:claude[token]", "claude-key"),
 		testConfigAPIKeyAuth("codex-file-id", "codex", "auth-file.json", "ignored-key"),
 	}
 
 	counts := ApplyCredentialConfigToRoot(root, auths)
-	if counts.GeminiKeys != 1 || counts.VertexKeys != 1 || counts.CodexKeys != 1 || counts.ClaudeKeys != 1 {
+	if counts.GeminiKeys != 1 || counts.VertexKeys != 1 || counts.CodexKeys != 1 || counts.XAIKeys != 1 || counts.ClaudeKeys != 1 {
 		t.Fatalf("unexpected credential counts: %#v", counts)
 	}
 	if got := root["debug"]; got != true {
@@ -38,6 +39,10 @@ func TestApplyCredentialConfigToRootHydratesAPIKeyAuths(t *testing.T) {
 	codexKeys, ok := root["codex-api-key"].([]appconfig.CodexKey)
 	if !ok || len(codexKeys) != 1 || codexKeys[0].APIKey != "codex-key" {
 		t.Fatalf("unexpected codex-api-key root value: %#v", root["codex-api-key"])
+	}
+	xaiKeys, ok := root["xai-api-key"].([]appconfig.XAIKey)
+	if !ok || len(xaiKeys) != 1 || xaiKeys[0].APIKey != "xai-key" {
+		t.Fatalf("unexpected xai-api-key root value: %#v", root["xai-api-key"])
 	}
 	claudeKeys, ok := root["claude-api-key"].([]appconfig.ClaudeKey)
 	if !ok || len(claudeKeys) != 1 || claudeKeys[0].APIKey != "claude-key" {

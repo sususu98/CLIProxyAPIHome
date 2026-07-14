@@ -54,6 +54,18 @@ func (h *Handler) PatchCodexKey(c *gin.Context) { h.patchAPIKey(c, "codex-api-ke
 // DeleteCodexKey deletes a codex key.
 func (h *Handler) DeleteCodexKey(c *gin.Context) { h.deleteAPIKey(c, "codex-api-key") }
 
+// GetXAIKeys returns xAI keys.
+func (h *Handler) GetXAIKeys(c *gin.Context) { h.getAPIKeyList(c, "xai-api-key") }
+
+// PutXAIKeys replaces xAI keys.
+func (h *Handler) PutXAIKeys(c *gin.Context) { h.putAPIKeyList(c, "xai-api-key") }
+
+// PatchXAIKey applies a partial update to an xAI key.
+func (h *Handler) PatchXAIKey(c *gin.Context) { h.patchAPIKey(c, "xai-api-key") }
+
+// DeleteXAIKey deletes an xAI key.
+func (h *Handler) DeleteXAIKey(c *gin.Context) { h.deleteAPIKey(c, "xai-api-key") }
+
 // GetClaudeKeys returns a claude keys.
 func (h *Handler) GetClaudeKeys(c *gin.Context) { h.getAPIKeyList(c, "claude-api-key") }
 
@@ -152,7 +164,11 @@ func (h *Handler) patchAPIKey(c *gin.Context, key string) {
 		respondError(c, http.StatusInternalServerError, "auth_load_failed", errAuths)
 		return
 	}
-	target := findAPIKeyAuth(auths, key, patch.Identifier(c))
+	target, ambiguous := findAPIKeyAuth(auths, key, patch.Identifier(c))
+	if ambiguous {
+		respondError(c, http.StatusBadRequest, "multiple items match api-key; base-url is required", nil)
+		return
+	}
 	if target == nil {
 		respondError(c, http.StatusNotFound, "item not found", nil)
 		return
@@ -182,13 +198,14 @@ func (h *Handler) patchAPIKey(c *gin.Context, key string) {
 		}
 	} else {
 		next := nextAuths[0]
+		preserveAPIKeyAuthDisabledState(next, target)
 		if next.ID != target.ID {
 			if errDelete := h.repo.SoftDeleteAuth(ctx, target.ID); errDelete != nil {
 				respondError(c, http.StatusInternalServerError, "write_failed", errDelete)
 				return
 			}
 		}
-		if _, errUpsert := h.repo.UpsertAuth(ctx, next, "update"); errUpsert != nil {
+		if _, errUpsert := h.repo.UpsertAuthPreservingDisabled(ctx, next, "update"); errUpsert != nil {
 			respondError(c, http.StatusInternalServerError, "write_failed", errUpsert)
 			return
 		}
@@ -211,7 +228,11 @@ func (h *Handler) deleteAPIKey(c *gin.Context, key string) {
 		return
 	}
 	bodyID := apiKeyIdentifierFromRequest(c)
-	target := findAPIKeyAuth(auths, key, bodyID)
+	target, ambiguous := findAPIKeyAuth(auths, key, bodyID)
+	if ambiguous {
+		respondError(c, http.StatusBadRequest, "multiple items match api-key; base-url is required", nil)
+		return
+	}
 	if target == nil {
 		respondError(c, http.StatusNotFound, "item not found", nil)
 		return
@@ -253,6 +274,13 @@ func (h *Handler) synthesizeAPIKeyBody(key string, body []byte) ([]*coreauth.Aut
 		}
 		cfg.CodexKey = entries
 		cfg.SanitizeCodexKeys()
+	case "xai-api-key":
+		var entries []appconfig.XAIKey
+		if errDecode := decodeListBody(body, key, &entries); errDecode != nil {
+			return nil, errDecode
+		}
+		cfg.XAIKey = entries
+		cfg.SanitizeXAIKeys()
 	case "claude-api-key":
 		var entries []appconfig.ClaudeKey
 		if errDecode := decodeListBody(body, key, &entries); errDecode != nil {
@@ -310,10 +338,17 @@ func (h *Handler) replaceAPIKeyAuths(ctx context.Context, key string, next []*co
 		return errExisting
 	}
 	nextIDs := make(map[string]struct{}, len(next))
+	existingByID := make(map[string]*coreauth.Auth, len(existing))
+	for _, auth := range existing {
+		if auth != nil {
+			existingByID[auth.ID] = auth
+		}
+	}
 	for _, auth := range next {
 		if auth == nil {
 			continue
 		}
+		preserveAPIKeyAuthDisabledState(auth, existingByID[auth.ID])
 		nextIDs[auth.ID] = struct{}{}
 	}
 	for _, auth := range existing {
@@ -331,11 +366,22 @@ func (h *Handler) replaceAPIKeyAuths(ctx context.Context, key string, next []*co
 		if auth == nil {
 			continue
 		}
-		if _, errUpsert := h.repo.UpsertAuth(ctx, auth, "upsert"); errUpsert != nil {
+		if _, errUpsert := h.repo.UpsertAuthPreservingDisabled(ctx, auth, "upsert"); errUpsert != nil {
 			return errUpsert
 		}
 	}
 	return nil
+}
+
+func preserveAPIKeyAuthDisabledState(next, current *coreauth.Auth) {
+	if next == nil || current == nil {
+		return
+	}
+	next.Disabled = current.Disabled
+	if current.Disabled || current.Status == coreauth.StatusDisabled {
+		next.Disabled = true
+		next.Status = coreauth.StatusDisabled
+	}
 }
 
 // decodeListBody decodes a list body.
@@ -428,7 +474,7 @@ func apiKeyIdentifierFromRequest(c *gin.Context) apiKeyIdentifier {
 }
 
 // findAPIKeyAuth handles a find api key auth.
-func findAPIKeyAuth(auths []*coreauth.Auth, key string, identifier apiKeyIdentifier) *coreauth.Auth {
+func findAPIKeyAuth(auths []*coreauth.Auth, key string, identifier apiKeyIdentifier) (*coreauth.Auth, bool) {
 	// Validate request inputs before mutating persisted state.
 	filtered := make([]*coreauth.Auth, 0, len(auths))
 	for _, auth := range auths {
@@ -436,13 +482,19 @@ func findAPIKeyAuth(auths []*coreauth.Auth, key string, identifier apiKeyIdentif
 			filtered = append(filtered, auth)
 		}
 	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return strings.TrimSpace(filtered[i].ID) < strings.TrimSpace(filtered[j].ID)
+	})
 	if identifier.Index != nil && *identifier.Index >= 0 && *identifier.Index < len(filtered) {
-		return filtered[*identifier.Index]
+		return filtered[*identifier.Index], false
 	}
 	for _, auth := range filtered {
 		if identifier.ID != "" && (auth.ID == identifier.ID || auth.Index == identifier.ID) {
-			return auth
+			return auth, false
 		}
+	}
+	matches := make([]*coreauth.Auth, 0, 1)
+	for _, auth := range filtered {
 		attrs := auth.Attributes
 		if attrs == nil {
 			continue
@@ -456,11 +508,17 @@ func findAPIKeyAuth(auths []*coreauth.Auth, key string, identifier apiKeyIdentif
 		if identifier.Name != "" && strings.TrimSpace(attrs["compat_name"]) != identifier.Name && strings.TrimSpace(auth.Label) != identifier.Name {
 			continue
 		}
-		if identifier.ID != "" || identifier.APIKey != "" || identifier.Name != "" {
-			return auth
+		if identifier.APIKey != "" || identifier.Name != "" {
+			matches = append(matches, auth)
 		}
 	}
-	return nil
+	if identifier.APIKey != "" && identifier.BaseURL == "" && len(matches) > 1 {
+		return nil, true
+	}
+	if len(matches) > 0 {
+		return matches[0], false
+	}
+	return nil, false
 }
 
 // isAPIKeyAuthForKey reports whether api key auth for key.
@@ -476,6 +534,8 @@ func isAPIKeyAuthForKey(auth *coreauth.Auth, key string) bool {
 		return auth.Provider == "claude" && strings.HasPrefix(source, "config:claude[")
 	case "codex-api-key":
 		return auth.Provider == "codex" && strings.HasPrefix(source, "config:codex[")
+	case "xai-api-key":
+		return auth.Provider == "xai" && strings.HasPrefix(source, "config:xai[")
 	case "vertex-api-key":
 		return auth.Provider == "vertex" && strings.HasPrefix(source, "config:vertex-apikey[")
 	case "openai-compatibility":
@@ -529,11 +589,17 @@ func apiKeyAuthToMap(auth *coreauth.Auth, key string) map[string]any {
 			"proxy-url": auth.ProxyURL,
 		}}
 	}
-	if key == "codex-api-key" && strings.EqualFold(attrs["websockets"], "true") {
+	if (key == "codex-api-key" || key == "xai-api-key") && strings.EqualFold(attrs["websockets"], "true") {
 		item["websockets"] = true
 	}
+	if excluded := apiKeyExcludedModels(auth); len(excluded) > 0 {
+		item["excluded-models"] = excluded
+	}
+	if disabledCooling, okDisableCooling := auth.DisableCoolingOverride(); okDisableCooling && disabledCooling {
+		item["disable-cooling"] = true
+	}
 	switch key {
-	case "codex-api-key", "gemini-api-key", "vertex-api-key", "claude-api-key":
+	case "codex-api-key", "xai-api-key", "gemini-api-key", "vertex-api-key", "claude-api-key":
 		models := credentialAPIKeyModels(auth)
 		if len(models) > 0 {
 			item["models"] = models
@@ -542,18 +608,43 @@ func apiKeyAuthToMap(auth *coreauth.Auth, key string) map[string]any {
 	return item
 }
 
+func apiKeyExcludedModels(auth *coreauth.Auth) []string {
+	if auth == nil || auth.Attributes == nil {
+		return nil
+	}
+	raw := strings.TrimSpace(auth.Attributes["excluded_models"])
+	if raw == "" {
+		return nil
+	}
+	return appconfig.NormalizeExcludedModels(strings.Split(raw, ","))
+}
+
 // credentialAPIKeyModels extracts config-like model aliases from stored model metadata.
 func credentialAPIKeyModels(auth *coreauth.Auth) []map[string]any {
 	pairs := credentialModelPairs(auth)
 	out := make([]map[string]any, 0, len(pairs))
 	for _, pair := range pairs {
-		out = append(out, map[string]any{"name": pair.Name, "alias": pair.Alias})
+		item := map[string]any{"name": pair.Name, "alias": pair.Alias}
+		if pair.DisplayName != "" {
+			item["display-name"] = pair.DisplayName
+		}
+		if pair.ForceMapping {
+			item["force-mapping"] = true
+		}
+		out = append(out, item)
 	}
 	return out
 }
 
+type credentialAPIKeyModelPair struct {
+	Name         string
+	Alias        string
+	DisplayName  string
+	ForceMapping bool
+}
+
 // credentialModelPairs returns unique model name/alias pairs from auth metadata.
-func credentialModelPairs(auth *coreauth.Auth) []struct{ Name, Alias string } {
+func credentialModelPairs(auth *coreauth.Auth) []credentialAPIKeyModelPair {
 	if auth == nil || auth.Metadata == nil {
 		return nil
 	}
@@ -562,7 +653,7 @@ func credentialModelPairs(auth *coreauth.Auth) []struct{ Name, Alias string } {
 	if !ok || len(models) == 0 {
 		return nil
 	}
-	out := make([]struct{ Name, Alias string }, 0, len(models))
+	out := make([]credentialAPIKeyModelPair, 0, len(models))
 	seen := make(map[string]struct{}, len(models))
 	for _, rawModel := range models {
 		modelMap, okMap := rawModel.(map[string]any)
@@ -578,9 +669,9 @@ func credentialModelPairs(auth *coreauth.Auth) []struct{ Name, Alias string } {
 				continue
 			}
 		}
-		name := strings.TrimSpace(stringFromAny(modelMap["display_name"]))
+		name := strings.TrimSpace(stringFromAny(modelMap["name"]))
 		if name == "" {
-			name = strings.TrimSpace(stringFromAny(modelMap["name"]))
+			name = strings.TrimSpace(stringFromAny(modelMap["display_name"]))
 		}
 		if name == "" {
 			name = alias
@@ -590,7 +681,13 @@ func credentialModelPairs(auth *coreauth.Auth) []struct{ Name, Alias string } {
 			continue
 		}
 		seen[key] = struct{}{}
-		out = append(out, struct{ Name, Alias string }{Name: name, Alias: alias})
+		forceMapping, _ := parseBoolAny(modelMap["force_mapping"])
+		out = append(out, credentialAPIKeyModelPair{
+			Name:         name,
+			Alias:        alias,
+			DisplayName:  strings.TrimSpace(stringFromAny(modelMap["config_display_name"])),
+			ForceMapping: forceMapping,
+		})
 	}
 	return out
 }

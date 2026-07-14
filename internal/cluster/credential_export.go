@@ -19,6 +19,7 @@ type CredentialConfigCounts struct {
 	GeminiKeys          int
 	VertexKeys          int
 	CodexKeys           int
+	XAIKeys             int
 	ClaudeKeys          int
 	OpenAICompatibility int
 }
@@ -34,9 +35,11 @@ func ApplyCredentialConfigToRoot(root map[string]any, auths []*coreauth.Auth) Cr
 }
 
 type credentialModelPair struct {
-	Name     string
-	Alias    string
-	Thinking *registry.ThinkingSupport
+	Name         string
+	Alias        string
+	DisplayName  string
+	ForceMapping bool
+	Thinking     *registry.ThinkingSupport
 }
 
 type credentialOpenAICompatGroup struct {
@@ -52,6 +55,7 @@ func applyCredentialConfigToRoot(root map[string]any, auths []*coreauth.Auth, re
 	geminiKeys := make([]appconfig.GeminiKey, 0)
 	vertexKeys := make([]appconfig.VertexCompatKey, 0)
 	codexKeys := make([]appconfig.CodexKey, 0)
+	xaiKeys := make([]appconfig.XAIKey, 0)
 	claudeKeys := make([]appconfig.ClaudeKey, 0)
 	openAICompat := make(map[string]*credentialOpenAICompatGroup)
 
@@ -63,6 +67,8 @@ func applyCredentialConfigToRoot(root map[string]any, auths []*coreauth.Auth, re
 			vertexKeys = append(vertexKeys, credentialVertexKey(auth))
 		case "codex-api-key":
 			codexKeys = append(codexKeys, credentialCodexKey(auth))
+		case "xai-api-key":
+			xaiKeys = append(xaiKeys, credentialXAIKey(auth))
 		case "claude-api-key":
 			claudeKeys = append(claudeKeys, credentialClaudeKey(auth))
 		case "openai-compatibility":
@@ -81,6 +87,10 @@ func applyCredentialConfigToRoot(root map[string]any, auths []*coreauth.Auth, re
 	if len(codexKeys) > 0 {
 		root["codex-api-key"] = codexKeys
 		result.CodexKeys = len(codexKeys)
+	}
+	if len(xaiKeys) > 0 {
+		root["xai-api-key"] = xaiKeys
+		result.XAIKeys = len(xaiKeys)
 	}
 	if len(claudeKeys) > 0 {
 		root["claude-api-key"] = claudeKeys
@@ -119,6 +129,8 @@ func credentialConfigAuthKind(auth *coreauth.Auth) string {
 		return "vertex-api-key"
 	case auth.Provider == "codex" && strings.HasPrefix(source, "config:codex["):
 		return "codex-api-key"
+	case auth.Provider == "xai" && strings.HasPrefix(source, "config:xai["):
+		return "xai-api-key"
 	case auth.Provider == "claude" && strings.HasPrefix(source, "config:claude["):
 		return "claude-api-key"
 	case isOpenAICompatConfigAuth(auth):
@@ -179,6 +191,22 @@ func credentialCodexKey(auth *coreauth.Auth) appconfig.CodexKey {
 		Websockets:     strings.EqualFold(authAttribute(auth, "websockets"), "true"),
 		ProxyURL:       strings.TrimSpace(auth.ProxyURL),
 		Models:         credentialCodexModels(auth),
+		Headers:        credentialHeaders(auth),
+		ExcludedModels: credentialExcludedModels(auth),
+		DisableCooling: credentialDisableCooling(auth),
+	}
+}
+
+// credentialXAIKey builds an xAI key config from an auth record.
+func credentialXAIKey(auth *coreauth.Auth) appconfig.XAIKey {
+	return appconfig.XAIKey{
+		APIKey:         authAttribute(auth, "api_key"),
+		Priority:       credentialPriority(auth),
+		Prefix:         strings.TrimSpace(auth.Prefix),
+		BaseURL:        authAttribute(auth, "base_url"),
+		Websockets:     strings.EqualFold(authAttribute(auth, "websockets"), "true"),
+		ProxyURL:       strings.TrimSpace(auth.ProxyURL),
+		Models:         credentialXAIModels(auth),
 		Headers:        credentialHeaders(auth),
 		ExcludedModels: credentialExcludedModels(auth),
 		DisableCooling: credentialDisableCooling(auth),
@@ -287,7 +315,27 @@ func credentialCodexModels(auth *coreauth.Auth) []appconfig.CodexModel {
 	pairs := credentialModelPairs(auth)
 	out := make([]appconfig.CodexModel, 0, len(pairs))
 	for _, pair := range pairs {
-		out = append(out, appconfig.CodexModel{Name: pair.Name, Alias: pair.Alias})
+		out = append(out, appconfig.CodexModel{
+			Name:         pair.Name,
+			Alias:        pair.Alias,
+			DisplayName:  pair.DisplayName,
+			ForceMapping: pair.ForceMapping,
+		})
+	}
+	return out
+}
+
+// credentialXAIModels builds xAI model config from stored model metadata.
+func credentialXAIModels(auth *coreauth.Auth) []appconfig.XAIModel {
+	pairs := credentialModelPairs(auth)
+	out := make([]appconfig.XAIModel, 0, len(pairs))
+	for _, pair := range pairs {
+		out = append(out, appconfig.XAIModel{
+			Name:         pair.Name,
+			Alias:        pair.Alias,
+			DisplayName:  pair.DisplayName,
+			ForceMapping: pair.ForceMapping,
+		})
 	}
 	return out
 }
@@ -338,9 +386,9 @@ func credentialModelPairs(auth *coreauth.Auth) []credentialModelPair {
 		if isNonUserCodexBuiltin(modelMap, alias) {
 			continue
 		}
-		name := strings.TrimSpace(stringFromAny(modelMap["display_name"]))
+		name := strings.TrimSpace(stringFromAny(modelMap["name"]))
 		if name == "" {
-			name = strings.TrimSpace(stringFromAny(modelMap["name"]))
+			name = strings.TrimSpace(stringFromAny(modelMap["display_name"]))
 		}
 		if name == "" {
 			name = alias
@@ -350,10 +398,13 @@ func credentialModelPairs(auth *coreauth.Auth) []credentialModelPair {
 			continue
 		}
 		seen[key] = struct{}{}
+		forceMapping, _ := boolFromAny(modelMap["force_mapping"])
 		out = append(out, credentialModelPair{
-			Name:     name,
-			Alias:    alias,
-			Thinking: credentialThinking(modelMap["thinking"]),
+			Name:         name,
+			Alias:        alias,
+			DisplayName:  strings.TrimSpace(stringFromAny(modelMap["config_display_name"])),
+			ForceMapping: forceMapping,
+			Thinking:     credentialThinking(modelMap["thinking"]),
 		})
 	}
 	return out

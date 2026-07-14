@@ -120,6 +120,10 @@ func handleAuth(ctx context.Context, env dispatch.Env, args []string) dispatch.R
 	out := []byte("{}")
 	out, _ = sjson.SetBytes(out, "model", strings.TrimSpace(result.Model))
 	out, _ = sjson.SetBytes(out, "provider", strings.TrimSpace(result.Provider))
+	if result.ForceMapping && strings.TrimSpace(result.OriginalAlias) != "" {
+		out, _ = sjson.SetBytes(out, "force_mapping", true)
+		out, _ = sjson.SetBytes(out, "original_alias", strings.TrimSpace(result.OriginalAlias))
+	}
 	out, _ = sjson.SetBytes(out, "auth_index", authIndex)
 	out, _ = sjson.SetBytes(out, "user_api_key", strings.TrimSpace(userAPIKey))
 	out, _ = sjson.SetRawBytes(out, "auth", authJSON)

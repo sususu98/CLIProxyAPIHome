@@ -23,6 +23,8 @@ gemini-api-key:
   - api-key: "g1"
 codex-api-key:
   - api-key: "c1"
+xai-api-key:
+  - api-key: "x1"
 claude-api-key:
   - api-key: "a1"
 openai-compatibility:
@@ -83,6 +85,7 @@ plugins:
 	assertNotContains("api-keys:")
 	assertNotContains("gemini-api-key:")
 	assertNotContains("codex-api-key:")
+	assertNotContains("xai-api-key:")
 	assertNotContains("claude-api-key:")
 	assertNotContains("openai-compatibility:")
 	assertNotContains("vertex-api-key:")

@@ -30,6 +30,12 @@ gemini-api-key:
   - api-key: gemini-key
     models:
       - name: gemini-2.5-pro
+xai-api-key:
+  - api-key: xai-key
+    base-url: https://api.x.ai/v1
+    models:
+      - name: grok-4.5
+        alias: grok-latest
 `)
 	writeFile(t, filepath.Join(authDir, "codex.json"), `{"type":"codex","email":"a@example.com","access_token":"token"}`)
 
@@ -58,7 +64,7 @@ gemini-api-key:
 		t.Fatalf("cluster_events count after second import = %d, want %d", secondEventCount, firstEventCount)
 	}
 	assertTableCount(t, db, &APIKeyRecord{}, 1)
-	assertActiveAuthCount(t, db, 2)
+	assertActiveAuthCount(t, db, 3)
 }
 
 func TestRepositoryUpsertResult_UsesSemanticJSONEquality(t *testing.T) {

@@ -645,10 +645,12 @@ func (r *Runtime) loadAuths(ctx context.Context) error {
 }
 
 type DispatchResult struct {
-	Model       string
-	AccessToken string
-	BaseURL     string
-	APIKey      string
+	Model         string
+	AccessToken   string
+	BaseURL       string
+	APIKey        string
+	ForceMapping  bool
+	OriginalAlias string
 
 	AuthID   string
 	Provider string
@@ -727,13 +729,15 @@ func (r *Runtime) dispatchWithOptions(ctx context.Context, reqModel string, opts
 	}
 
 	return &DispatchResult{
-		Model:       upstreamModel,
-		AccessToken: accessToken,
-		BaseURL:     baseURL,
-		APIKey:      apiKey,
-		AuthID:      auth.ID,
-		Provider:    decision.Provider,
-		Auth:        auth.Clone(),
+		Model:         upstreamModel,
+		AccessToken:   accessToken,
+		BaseURL:       baseURL,
+		APIKey:        apiKey,
+		ForceMapping:  decision.ForceMapping,
+		OriginalAlias: decision.OriginalAlias,
+		AuthID:        auth.ID,
+		Provider:      decision.Provider,
+		Auth:          auth.Clone(),
 	}, nil
 }
 

@@ -277,6 +277,10 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `PATCH` | `/vertex-api-key` |
 | `PUT` | `/vertex-api-key` |
 | `POST` | `/vertex/import` |
+| `DELETE` | `/xai-api-key` |
+| `GET` | `/xai-api-key` |
+| `PATCH` | `/xai-api-key` |
+| `PUT` | `/xai-api-key` |
 | `GET` | `/xai-auth-url` |
 
 ## 配置接口
@@ -338,6 +342,7 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
   "antigravity-signature-bypass-strict": false,
   "gemini-api-key": [],
   "codex-api-key": [],
+  "xai-api-key": [],
   "codex-header-defaults": {
     "user-agent": "",
     "beta-features": ""
@@ -401,6 +406,7 @@ auth-dir
 gemini-api-key
 vertex-api-key
 codex-api-key
+xai-api-key
 claude-api-key
 openai-compatibility
 ```
@@ -1758,6 +1764,11 @@ PUT    /codex-api-key
 PATCH  /codex-api-key
 DELETE /codex-api-key
 
+GET    /xai-api-key
+PUT    /xai-api-key
+PATCH  /xai-api-key
+DELETE /xai-api-key
+
 GET    /vertex-api-key
 PUT    /vertex-api-key
 PATCH  /vertex-api-key
@@ -1769,7 +1780,7 @@ PATCH  /openai-compatibility
 DELETE /openai-compatibility
 ```
 
-Home 会从这些 config-like payload 合成 DB auth records。
+Home 会从这些 config-like payload 合成 DB auth records。xAI API-key usage 会以 `provider=xai` 和 API-key credential type 进入通用 usage 管线，因此可用于 usage records、provider/credential aggregates、billing，并会出现在旧版 `/api-key-usage` 的 `xai` provider bucket 中。
 
 ### 凭证字段结构
 
@@ -1788,15 +1799,15 @@ Home 会从这些 config-like payload 合成 DB auth records。
 | `disable-cooling` | boolean | 对该凭证禁用 quota cooldown 调度。 |
 | `auth-index` | string | Compatibility credential identifier。 |
 | `auth_index`, `id`, `uuid` | string | DB auth identifier aliases。 |
-| `disabled` | boolean | DB auth disabled flag。 |
+| `disabled` | boolean | 只读 DB auth disabled flag；请使用 `PATCH /auth-files/status` 修改。 |
 
-`ClaudeKey`、`CodexKey` 和 `VertexCompatKey` 使用相同通用字段，额外字段如下：
+`ClaudeKey`、`CodexKey`、`XAIKey` 和 `VertexCompatKey` 使用相同通用字段。`XAIKey` 使用原生 xAI executor，并要求提供 `base-url`（通常为 `https://api.x.ai/v1`）。额外字段如下：
 
 | 字段 | 适用范围 | 说明 |
 | --- | --- | --- |
 | `cloak` | Claude | 可选请求 cloaking 配置。 |
 | `experimental-cch-signing` | Claude | 为 cloaked Claude 请求启用实验性 CCH signing。 |
-| `websockets` | Codex | 启用 Responses API websocket transport。 |
+| `websockets` | Codex、xAI | 启用 Responses API websocket transport。 |
 | `api-key` | Vertex | 作为 `x-goog-api-key` 发送。 |
 
 `OpenAICompatibility`：
@@ -1821,7 +1832,9 @@ Home 会从这些 config-like payload 合成 DB auth records。
 {
   "ModelAlias": {
     "name": "upstream-model",
-    "alias": "client-visible-model"
+    "alias": "client-visible-model",
+    "display-name": "Catalog name",
+    "force-mapping": true
   },
   "OpenAICompatibilityAPIKey": {
     "api-key": "provider-key",
@@ -3423,6 +3436,7 @@ DELETE query：
 | `antigravity-signature-bypass-strict` | boolean pointer | 控制 Antigravity signature bypass 严格程度。 |
 | `gemini-api-key` | array of `GeminiKey` | Gemini API-key credentials；应使用 provider-key routes。 |
 | `codex-api-key` | array of `CodexKey` | Codex API-key credentials；应使用 provider-key routes。 |
+| `xai-api-key` | array of `XAIKey` | 原生 xAI API-key credentials；应使用 provider-key routes。 |
 | `codex-header-defaults.user-agent` | string | 默认 Codex User-Agent。 |
 | `codex-header-defaults.beta-features` | string | 默认 Codex websocket beta features header。 |
 | `claude-api-key` | array of `ClaudeKey` | Claude API-key credentials；应使用 provider-key routes。 |

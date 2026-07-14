@@ -141,6 +141,7 @@ func sanitizeConfigYAMLForDownstream(payload []byte) ([]byte, error) {
 		"tls",
 		"gemini-api-key",
 		"codex-api-key",
+		"xai-api-key",
 		"claude-api-key",
 		"openai-compatibility",
 		"vertex-api-key",

@@ -531,6 +531,8 @@ type dispatchCandidate struct {
 	providerKey   string
 	upstreamModel string
 	upstreamKey   string
+	forceMapping  bool
+	originalAlias string
 }
 
 func (m *Manager) buildDispatchCandidate(auth *Auth, providerKey, routeModel string, now time.Time) (dispatchCandidate, bool, blockReason, time.Time) {
@@ -559,6 +561,8 @@ func (m *Manager) buildDispatchCandidate(auth *Auth, providerKey, routeModel str
 		providerKey:   providerKey,
 		upstreamModel: resolved.Model,
 		upstreamKey:   resolved.Key,
+		forceMapping:  resolved.ForceMapping,
+		originalAlias: resolved.OriginalAlias,
 	}, true, blockReasonNone, time.Time{}
 }
 
@@ -650,6 +654,8 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 				Provider:      fullProviderKey,
 				UpstreamModel: upstream,
 				PooledModels:  false,
+				ForceMapping:  fullCandidate.forceMapping,
+				OriginalAlias: fullCandidate.originalAlias,
 			}, nil
 		}
 	}
@@ -789,6 +795,8 @@ func (m *Manager) Dispatch(ctx context.Context, providers []string, requestedMod
 			Provider:      providerKey,
 			UpstreamModel: upstream,
 			PooledModels:  false,
+			ForceMapping:  fullCandidate.forceMapping,
+			OriginalAlias: fullCandidate.originalAlias,
 		}, nil
 	}
 }

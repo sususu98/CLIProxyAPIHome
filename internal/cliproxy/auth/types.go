@@ -296,6 +296,8 @@ func (a *Auth) indexSeed() string {
 			apiPrefix = "gemini-api-key"
 		case strings.EqualFold(provider, "codex"):
 			apiPrefix = "codex-api-key"
+		case strings.EqualFold(provider, "xai"):
+			apiPrefix = "xai-api-key"
 		case strings.EqualFold(provider, "claude"):
 			apiPrefix = "claude-api-key"
 		}

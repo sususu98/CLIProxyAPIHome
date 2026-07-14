@@ -277,6 +277,10 @@ The table below is extracted from the final Home route registry built by `intern
 | `PATCH` | `/vertex-api-key` |
 | `PUT` | `/vertex-api-key` |
 | `POST` | `/vertex/import` |
+| `DELETE` | `/xai-api-key` |
+| `GET` | `/xai-api-key` |
+| `PATCH` | `/xai-api-key` |
+| `PUT` | `/xai-api-key` |
 | `GET` | `/xai-auth-url` |
 
 ## Config APIs
@@ -338,6 +342,7 @@ Example response:
   "antigravity-signature-bypass-strict": false,
   "gemini-api-key": [],
   "codex-api-key": [],
+  "xai-api-key": [],
   "codex-header-defaults": {
     "user-agent": "",
     "beta-features": ""
@@ -401,6 +406,7 @@ auth-dir
 gemini-api-key
 vertex-api-key
 codex-api-key
+xai-api-key
 claude-api-key
 openai-compatibility
 ```
@@ -1758,6 +1764,11 @@ PUT    /codex-api-key
 PATCH  /codex-api-key
 DELETE /codex-api-key
 
+GET    /xai-api-key
+PUT    /xai-api-key
+PATCH  /xai-api-key
+DELETE /xai-api-key
+
 GET    /vertex-api-key
 PUT    /vertex-api-key
 PATCH  /vertex-api-key
@@ -1769,7 +1780,7 @@ PATCH  /openai-compatibility
 DELETE /openai-compatibility
 ```
 
-Home synthesizes DB auth records from these config-like payloads.
+Home synthesizes DB auth records from these config-like payloads. xAI API-key usage is ingested through the normal usage pipeline with `provider=xai` and an API-key credential type, so it is available in usage records, provider/credential aggregates, billing, and legacy `/api-key-usage` output under the `xai` provider bucket.
 
 ### Credential Field Structures
 
@@ -1788,15 +1799,15 @@ Home synthesizes DB auth records from these config-like payloads.
 | `disable-cooling` | boolean | Disable quota cooldown scheduling for this credential. |
 | `auth-index` | string | Compatibility credential identifier. |
 | `auth_index`, `id`, `uuid` | string | DB auth identifier aliases. |
-| `disabled` | boolean | DB auth disabled flag. |
+| `disabled` | boolean | Read-only DB auth disabled flag. Use `PATCH /auth-files/status` to change it. |
 
-`ClaudeKey`, `CodexKey`, and `VertexCompatKey` use the same common fields. Additional notable fields:
+`ClaudeKey`, `CodexKey`, `XAIKey`, and `VertexCompatKey` use the same common fields. `XAIKey` uses the native xAI executor and requires `base-url` (normally `https://api.x.ai/v1`). Additional notable fields:
 
 | Field | Applies to | Description |
 | --- | --- | --- |
 | `cloak` | Claude | Optional request cloaking config. |
 | `experimental-cch-signing` | Claude | Enables experimental CCH signing for cloaked Claude requests. |
-| `websockets` | Codex | Enables Responses API websocket transport. |
+| `websockets` | Codex, xAI | Enables Responses API websocket transport. |
 | `api-key` | Vertex | Sent as `x-goog-api-key`. |
 
 `OpenAICompatibility`:
@@ -1821,7 +1832,9 @@ Shared nested structures:
 {
   "ModelAlias": {
     "name": "upstream-model",
-    "alias": "client-visible-model"
+    "alias": "client-visible-model",
+    "display-name": "Catalog name",
+    "force-mapping": true
   },
   "OpenAICompatibilityAPIKey": {
     "api-key": "provider-key",
@@ -3423,6 +3436,7 @@ These fields are accepted by Home YAML config. `PUT /config.yaml` accepts non-cr
 | `antigravity-signature-bypass-strict` | boolean pointer | Controls strictness of Antigravity signature bypass. |
 | `gemini-api-key` | array of `GeminiKey` | Gemini API-key credentials; use provider-key routes. |
 | `codex-api-key` | array of `CodexKey` | Codex API-key credentials; use provider-key routes. |
+| `xai-api-key` | array of `XAIKey` | Native xAI API-key credentials; use provider-key routes. |
 | `codex-header-defaults.user-agent` | string | Default Codex User-Agent. |
 | `codex-header-defaults.beta-features` | string | Default Codex websocket beta features header. |
 | `claude-api-key` | array of `ClaudeKey` | Claude API-key credentials; use provider-key routes. |

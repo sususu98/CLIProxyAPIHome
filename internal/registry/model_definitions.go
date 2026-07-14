@@ -7,9 +7,11 @@ import (
 )
 
 const (
-	codexBuiltinImageModelID      = "gpt-image-2"
-	xaiBuiltinImageModelID        = "grok-imagine-image"
-	xaiBuiltinImageQualityModelID = "grok-imagine-image-quality"
+	codexBuiltinImageModelID        = "gpt-image-2"
+	xaiBuiltinImageModelID          = "grok-imagine-image"
+	xaiBuiltinImageQualityModelID   = "grok-imagine-image-quality"
+	xaiBuiltinVideoModelID          = "grok-imagine-video"
+	xaiBuiltinVideo15PreviewModelID = "grok-imagine-video-1.5-preview"
 )
 
 // staticModelsJSON mirrors the top-level structure of models.json.
@@ -99,10 +101,10 @@ func WithCodexBuiltins(models []*ModelInfo) []*ModelInfo {
 	return upsertModelInfos(models, codexBuiltinImageModelInfo())
 }
 
-// WithXAIBuiltins injects hard-coded xAI image model definitions that should
+// WithXAIBuiltins injects hard-coded xAI image/video model definitions that should
 // not depend on remote models.json updates.
 func WithXAIBuiltins(models []*ModelInfo) []*ModelInfo {
-	return upsertModelInfos(models, xaiBuiltinImageModelInfo(), xaiBuiltinImageQualityModelInfo())
+	return upsertModelInfos(models, xaiBuiltinImageModelInfo(), xaiBuiltinImageQualityModelInfo(), xaiBuiltinVideoModelInfo(), xaiBuiltinVideo15PreviewModelInfo())
 }
 
 // codexBuiltinImageModelInfo handles a codex builtin image model info.
@@ -143,6 +145,34 @@ func xaiBuiltinImageQualityModelInfo() *ModelInfo {
 		DisplayName: "Grok Imagine Image Quality",
 		Name:        xaiBuiltinImageQualityModelID,
 		Description: "xAI Grok higher-fidelity image generation model.",
+	}
+}
+
+// xaiBuiltinVideoModelInfo returns the built-in xAI video model definition.
+func xaiBuiltinVideoModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          xaiBuiltinVideoModelID,
+		Object:      "model",
+		Created:     1735689600, // 2025-01-01
+		OwnedBy:     "xai",
+		Type:        "xai",
+		DisplayName: "Grok Imagine Video",
+		Name:        xaiBuiltinVideoModelID,
+		Description: "xAI Grok video generation model.",
+	}
+}
+
+// xaiBuiltinVideo15PreviewModelInfo returns the built-in xAI preview video model definition.
+func xaiBuiltinVideo15PreviewModelInfo() *ModelInfo {
+	return &ModelInfo{
+		ID:          xaiBuiltinVideo15PreviewModelID,
+		Object:      "model",
+		Created:     1735689600, // 2025-01-01
+		OwnedBy:     "xai",
+		Type:        "xai",
+		DisplayName: "Grok Imagine Video 1.5 Preview",
+		Name:        xaiBuiltinVideo15PreviewModelID,
+		Description: "xAI Grok preview video generation model.",
 	}
 }
 

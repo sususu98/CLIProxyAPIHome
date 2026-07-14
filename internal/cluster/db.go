@@ -144,6 +144,9 @@ func autoMigrate(db *gorm.DB) error {
 	if errMigrate := migrateUsageDerivedColumns(db); errMigrate != nil {
 		return errMigrate
 	}
+	if errMigrate := migrateUsageProviderAPIKeySources(db); errMigrate != nil {
+		return errMigrate
+	}
 	return migrateLegacyAPIKeys(db)
 }
 
@@ -213,6 +216,33 @@ func migrateUsageDerivedColumns(db *gorm.DB) error {
 					continue
 				}
 				if errUpdate := tx.Model(&UsageRecord{}).Where("id = ?", record.ID).Updates(updates).Error; errUpdate != nil {
+					return errUpdate
+				}
+			}
+			return nil
+		}).Error
+}
+
+func migrateUsageProviderAPIKeySources(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	var records []UsageRecord
+	return db.
+		Select("id", "payload", "source", "auth_index", "auth_type").
+		Where(`LOWER(REPLACE("auth_type", '-', '_')) IN (?, ?, ?)`, "provider_api_key", "api_key", "apikey").
+		Where(`COALESCE("source", '') <> CASE WHEN COALESCE("auth_index", '') <> '' THEN "auth_index" ELSE ? END`, "provider-api-key").
+		FindInBatches(&records, 500, func(tx *gorm.DB, _ int) error {
+			for _, record := range records {
+				sanitized, errSanitize := sanitizeProviderAPIKeyUsageSource(string(record.PayloadJSON), record.AuthIndex)
+				if errSanitize != nil {
+					return errSanitize
+				}
+				source := usagePayloadString(sanitized, "source")
+				if errUpdate := tx.Model(&UsageRecord{}).Where("id = ?", record.ID).Updates(map[string]any{
+					"source":  source,
+					"payload": JSONB(sanitized),
+				}).Error; errUpdate != nil {
 					return errUpdate
 				}
 			}

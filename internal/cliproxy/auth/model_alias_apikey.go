@@ -10,8 +10,10 @@ import (
 const homeConfigModelsMetadataKey = "home_config_models"
 
 type dispatchModelResolution struct {
-	Model string
-	Key   string
+	Model         string
+	Key           string
+	ForceMapping  bool
+	OriginalAlias string
 }
 
 // rewriteModelForAuth returns a rewrite model for auth.
@@ -61,6 +63,8 @@ func (m *Manager) applyAPIKeyModelAlias(auth *Auth, requestedModel string) strin
 		upstreamModel = resolveUpstreamModelForClaudeAPIKey(cfg, auth, requestedModel)
 	case "codex":
 		upstreamModel = resolveUpstreamModelForCodexAPIKey(cfg, auth, requestedModel)
+	case "xai":
+		upstreamModel = resolveUpstreamModelForXAIAPIKey(cfg, auth, requestedModel)
 	case "vertex":
 		upstreamModel = resolveUpstreamModelForVertexAPIKey(cfg, auth, requestedModel)
 	default:
@@ -92,15 +96,19 @@ func (m *Manager) resolveDispatchModel(auth *Auth, routeModel string) dispatchMo
 	if resolved == "" {
 		return dispatchModelResolution{}
 	}
+	forceMapping, originalAlias := forceMappingFromAuthConfigModels(auth, requestedModel)
 	return dispatchModelResolution{
-		Model: resolved,
-		Key:   canonicalModelKey(resolved),
+		Model:         resolved,
+		Key:           canonicalModelKey(resolved),
+		ForceMapping:  forceMapping,
+		OriginalAlias: originalAlias,
 	}
 }
 
 type metadataModelAliasEntry struct {
-	name  string
-	alias string
+	name         string
+	alias        string
+	forceMapping bool
 }
 
 // GetName returns the upstream model name.
@@ -108,6 +116,9 @@ func (m metadataModelAliasEntry) GetName() string { return m.name }
 
 // GetAlias returns the client-visible model alias.
 func (m metadataModelAliasEntry) GetAlias() string { return m.alias }
+
+// GetForceMapping returns whether response model fields should be rewritten.
+func (m metadataModelAliasEntry) GetForceMapping() bool { return m.forceMapping }
 
 // resolveUpstreamModelFromAuthConfigModels resolves alias metadata stored on cluster auth records.
 func resolveUpstreamModelFromAuthConfigModels(auth *Auth, requestedModel string) string {
@@ -148,9 +159,41 @@ func modelAliasEntriesFromMetadata(raw any) []modelAliasEntry {
 		if alias == "" || name == "" {
 			continue
 		}
-		out = append(out, metadataModelAliasEntry{name: name, alias: alias})
+		out = append(out, metadataModelAliasEntry{
+			name:         name,
+			alias:        alias,
+			forceMapping: metadataBool(item["force_mapping"]),
+		})
 	}
 	return out
+}
+
+func forceMappingFromAuthConfigModels(auth *Auth, requestedModel string) (bool, string) {
+	if auth == nil {
+		return false, ""
+	}
+	kind, _ := auth.AccountInfo()
+	if !strings.EqualFold(strings.TrimSpace(kind), "api_key") || auth.Metadata == nil {
+		return false, ""
+	}
+	entries := modelAliasEntriesFromMetadata(auth.Metadata[homeConfigModelsMetadataKey])
+	if len(entries) == 0 {
+		return false, ""
+	}
+	_, candidates := modelAliasLookupCandidates(requestedModel)
+	for _, entry := range entries {
+		metadataEntry, okMetadata := entry.(metadataModelAliasEntry)
+		if !okMetadata || !metadataEntry.forceMapping {
+			continue
+		}
+		alias := strings.TrimSpace(metadataEntry.alias)
+		for _, candidate := range candidates {
+			if alias != "" && strings.EqualFold(alias, strings.TrimSpace(candidate)) {
+				return true, alias
+			}
+		}
+	}
+	return false, ""
 }
 
 // metadataString derives a string from metadata values.
@@ -247,6 +290,14 @@ func resolveCodexAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internalc
 	return resolveAPIKeyConfig(cfg.CodexKey, auth)
 }
 
+// resolveXAIAPIKeyConfig resolves an xAI api key config.
+func resolveXAIAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internalconfig.XAIKey {
+	if cfg == nil {
+		return nil
+	}
+	return resolveAPIKeyConfig(cfg.XAIKey, auth)
+}
+
 // resolveVertexAPIKeyConfig resolves a vertex api key config.
 func resolveVertexAPIKeyConfig(cfg *internalconfig.Config, auth *Auth) *internalconfig.VertexCompatKey {
 	if cfg == nil {
@@ -276,6 +327,15 @@ func resolveUpstreamModelForClaudeAPIKey(cfg *internalconfig.Config, auth *Auth,
 // resolveUpstreamModelForCodexAPIKey resolves an upstream model for codex api key.
 func resolveUpstreamModelForCodexAPIKey(cfg *internalconfig.Config, auth *Auth, requestedModel string) string {
 	entry := resolveCodexAPIKeyConfig(cfg, auth)
+	if entry == nil {
+		return ""
+	}
+	return resolveModelAliasFromConfigModels(requestedModel, asModelAliasEntries(entry.Models))
+}
+
+// resolveUpstreamModelForXAIAPIKey resolves an upstream model for xAI api key.
+func resolveUpstreamModelForXAIAPIKey(cfg *internalconfig.Config, auth *Auth, requestedModel string) string {
+	entry := resolveXAIAPIKeyConfig(cfg, auth)
 	if entry == nil {
 		return ""
 	}

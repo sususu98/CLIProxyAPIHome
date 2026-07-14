@@ -6,4 +6,6 @@ type DispatchDecision struct {
 	Provider      string
 	UpstreamModel string
 	PooledModels  bool
+	ForceMapping  bool
+	OriginalAlias string
 }

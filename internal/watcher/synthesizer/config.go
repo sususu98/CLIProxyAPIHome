@@ -16,7 +16,7 @@ import (
 const homeConfigModelsMetadataKey = "home_config_models"
 
 // ConfigSynthesizer generates Auth entries from configuration API keys.
-// It handles Gemini, Claude, Codex, OpenAI-compat, and Vertex-compat providers.
+// It handles Gemini, Claude, Codex, xAI, OpenAI-compat, and Vertex-compat providers.
 type ConfigSynthesizer struct{}
 
 // NewConfigSynthesizer creates a new ConfigSynthesizer instance.
@@ -37,6 +37,8 @@ func (s *ConfigSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth,
 	out = append(out, s.synthesizeClaudeKeys(ctx)...)
 	// Codex API Keys
 	out = append(out, s.synthesizeCodexKeys(ctx)...)
+	// xAI API Keys
+	out = append(out, s.synthesizeXAIKeys(ctx)...)
 	// OpenAI-compat
 	out = append(out, s.synthesizeOpenAICompat(ctx)...)
 	// Vertex-compat
@@ -165,56 +167,74 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 
 // synthesizeCodexKeys creates Auth entries for Codex API keys.
 func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreauth.Auth {
-	// Normalize source data before building the derived payload.
+	return s.synthesizeCodexStyleKeys(ctx, ctx.Config.CodexKey, "codex")
+}
+
+// synthesizeXAIKeys creates Auth entries for xAI API keys.
+func (s *ConfigSynthesizer) synthesizeXAIKeys(ctx *SynthesisContext) []*coreauth.Auth {
+	return s.synthesizeCodexStyleKeys(ctx, ctx.Config.XAIKey, "xai")
+}
+
+func (s *ConfigSynthesizer) synthesizeCodexStyleKeys(ctx *SynthesisContext, entries []appconfig.CodexKey, provider string) []*coreauth.Auth {
 	cfg := ctx.Config
 	now := ctx.Now
 	idGen := ctx.IDGenerator
 
-	out := make([]*coreauth.Auth, 0, len(cfg.CodexKey))
-	for i := range cfg.CodexKey {
-		ck := cfg.CodexKey[i]
-		key := strings.TrimSpace(ck.APIKey)
+	out := make([]*coreauth.Auth, 0, len(entries))
+	for i := range entries {
+		entry := entries[i]
+		key := strings.TrimSpace(entry.APIKey)
 		if key == "" {
 			continue
 		}
-		prefix := strings.TrimSpace(ck.Prefix)
-		id, token := idGen.Next("codex:apikey", key, ck.BaseURL)
+		prefix := strings.TrimSpace(entry.Prefix)
+		baseURL := strings.TrimSpace(entry.BaseURL)
+		id, token := idGen.Next(provider+":apikey", key, baseURL)
 		attrs := map[string]string{
-			"source":  fmt.Sprintf("config:codex[%s]", token),
+			"source":  fmt.Sprintf("config:%s[%s]", provider, token),
 			"api_key": key,
 		}
 		metadata := map[string]any{}
-		if ck.DisableCooling {
+		if entry.DisableCooling {
 			metadata["disable_cooling"] = true
 		}
-		addConfigModelsToMetadata(metadata, registry.WithCodexBuiltins(buildConfigModels(ck.Models, "openai", "openai", now)))
-		if ck.Priority != 0 {
-			attrs["priority"] = strconv.Itoa(ck.Priority)
+		modelOwner := provider
+		modelType := provider
+		if provider == "codex" {
+			modelOwner = "openai"
+			modelType = "openai"
 		}
-		if ck.BaseURL != "" {
-			attrs["base_url"] = ck.BaseURL
+		models := buildConfigModels(entry.Models, modelOwner, modelType, now)
+		if provider == "codex" {
+			models = registry.WithCodexBuiltins(models)
 		}
-		if ck.Websockets {
+		addConfigModelsToMetadata(metadata, models)
+		if entry.Priority != 0 {
+			attrs["priority"] = strconv.Itoa(entry.Priority)
+		}
+		if baseURL != "" {
+			attrs["base_url"] = baseURL
+		}
+		if entry.Websockets {
 			attrs["websockets"] = "true"
 		}
-		if hash := diff.ComputeCodexModelsHash(ck.Models); hash != "" {
+		if hash := diff.ComputeCodexModelsHash(entry.Models); hash != "" {
 			attrs["models_hash"] = hash
 		}
-		addConfigHeadersToAttrs(ck.Headers, attrs)
-		proxyURL := strings.TrimSpace(ck.ProxyURL)
+		addConfigHeadersToAttrs(entry.Headers, attrs)
 		a := &coreauth.Auth{
 			ID:         id,
-			Provider:   "codex",
-			Label:      "codex-apikey",
+			Provider:   provider,
+			Label:      provider + "-apikey",
 			Prefix:     prefix,
 			Status:     coreauth.StatusActive,
-			ProxyURL:   proxyURL,
+			ProxyURL:   strings.TrimSpace(entry.ProxyURL),
 			Attributes: attrs,
 			Metadata:   metadata,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
-		ApplyAuthExcludedModelsMeta(a, cfg, ck.ExcludedModels, "apikey")
+		ApplyAuthExcludedModelsMeta(a, cfg, entry.ExcludedModels, "apikey")
 		if len(a.Metadata) == 0 {
 			a.Metadata = nil
 		}
@@ -397,6 +417,14 @@ type modelEntry interface {
 	GetAlias() string
 }
 
+type displayNameModelEntry interface {
+	GetDisplayName() string
+}
+
+type forceMappingModelEntry interface {
+	GetForceMapping() bool
+}
+
 // buildConfigModels builds a config models.
 func buildConfigModels[T modelEntry](models []T, ownedBy, modelType string, now time.Time) []*registry.ModelInfo {
 	// Normalize source data before building the derived payload.
@@ -424,18 +452,32 @@ func buildConfigModels[T modelEntry](models []T, ownedBy, modelType string, now 
 			continue
 		}
 		seen[key] = struct{}{}
-		display := name
+		configuredDisplay := ""
+		if displayEntry, okDisplay := any(model).(displayNameModelEntry); okDisplay {
+			configuredDisplay = strings.TrimSpace(displayEntry.GetDisplayName())
+		}
+		display := configuredDisplay
+		if display == "" {
+			display = name
+		}
 		if display == "" {
 			display = alias
 		}
+		forceMapping := false
+		if forceEntry, okForce := any(model).(forceMappingModelEntry); okForce {
+			forceMapping = forceEntry.GetForceMapping()
+		}
 		info := &registry.ModelInfo{
-			ID:          alias,
-			Object:      "model",
-			Created:     created,
-			OwnedBy:     ownedBy,
-			Type:        modelType,
-			DisplayName: display,
-			UserDefined: true,
+			ID:                alias,
+			Object:            "model",
+			Created:           created,
+			OwnedBy:           ownedBy,
+			Type:              modelType,
+			DisplayName:       display,
+			Name:              name,
+			UserDefined:       true,
+			ConfigDisplayName: configuredDisplay,
+			ForceMapping:      forceMapping,
 		}
 		if name != "" {
 			if upstream := registry.LookupStaticModelInfo(name); upstream != nil && upstream.Thinking != nil {
@@ -522,6 +564,12 @@ func modelInfoMetadataPayload(models []*registry.ModelInfo) []map[string]any {
 			continue
 		}
 		item["user_defined"] = model.UserDefined
+		if displayName := strings.TrimSpace(model.ConfigDisplayName); displayName != "" {
+			item["config_display_name"] = displayName
+		}
+		if model.ForceMapping {
+			item["force_mapping"] = true
+		}
 		out = append(out, item)
 	}
 	return out

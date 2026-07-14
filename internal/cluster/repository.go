@@ -138,6 +138,16 @@ func (r *Repository) UpsertAuth(ctx context.Context, auth *coreauth.Auth, op str
 
 // UpsertAuthWithResult inserts or updates an auth and reports the mutation result.
 func (r *Repository) UpsertAuthWithResult(ctx context.Context, auth *coreauth.Auth, op string) (*AuthRecord, UpsertResult, error) {
+	return r.upsertAuthWithResult(ctx, auth, op, false)
+}
+
+// UpsertAuthPreservingDisabled inserts or updates an auth without re-enabling an existing disabled record.
+func (r *Repository) UpsertAuthPreservingDisabled(ctx context.Context, auth *coreauth.Auth, op string) (*AuthRecord, error) {
+	record, _, errUpsert := r.upsertAuthWithResult(ctx, auth, op, true)
+	return record, errUpsert
+}
+
+func (r *Repository) upsertAuthWithResult(ctx context.Context, auth *coreauth.Auth, op string, preserveDisabled bool) (*AuthRecord, UpsertResult, error) {
 	// Normalize auth state before updating runtime indexes.
 	db, errDB := r.database()
 	if errDB != nil {
@@ -156,7 +166,11 @@ func (r *Repository) UpsertAuthWithResult(ctx context.Context, auth *coreauth.Au
 	out := record
 	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		existing := AuthRecord{}
-		errFirst := tx.Unscoped().Where("uuid = ?", record.UUID).First(&existing).Error
+		query := tx.Unscoped().Where("uuid = ?", record.UUID)
+		if preserveDisabled && tx.Dialector != nil && tx.Dialector.Name() == "postgres" {
+			query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		errFirst := query.First(&existing).Error
 		switch {
 		case errors.Is(errFirst, gorm.ErrRecordNotFound):
 			record.Version = 1
@@ -168,6 +182,21 @@ func (r *Repository) UpsertAuthWithResult(ctx context.Context, auth *coreauth.Au
 		case errFirst != nil:
 			return errFirst
 		default:
+			if preserveDisabled {
+				current, errCurrent := RecordToAuth(&existing)
+				if errCurrent != nil {
+					return errCurrent
+				}
+				next := auth.Clone()
+				next.Disabled = current.Disabled
+				next.Status = current.Status
+				next.StatusMessage = current.StatusMessage
+				preservedRecord, errRecordPreserved := AuthToRecord(next)
+				if errRecordPreserved != nil {
+					return errRecordPreserved
+				}
+				record = preservedRecord
+			}
 			sameJSON, errJSONEqual := semanticJSONEqual([]byte(existing.AuthJSON), []byte(record.AuthJSON))
 			if errJSONEqual != nil {
 				return errJSONEqual

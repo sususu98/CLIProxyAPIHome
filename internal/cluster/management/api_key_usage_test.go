@@ -45,8 +45,21 @@ func TestGetAPIKeyUsageUsesHomeRuntimeAuths(t *testing.T) {
 		t.Fatalf("Register() error = %v", errRegister)
 	}
 
+	if _, errRegister := manager.Register(context.Background(), &coreauth.Auth{
+		ID:       "xai-api-key-auth",
+		Index:    "xai-api-key-auth",
+		Provider: "xai",
+		Attributes: map[string]string{
+			"api_key":  "xai-key",
+			"base_url": "https://api.x.ai/v1",
+		},
+	}); errRegister != nil {
+		t.Fatalf("Register(xAI) error = %v", errRegister)
+	}
+
 	manager.MarkResult(context.Background(), coreauth.Result{AuthID: "vast-auth", Provider: "openai-compatible-vast", Model: "gpt-5", Success: true})
 	manager.MarkResult(context.Background(), coreauth.Result{AuthID: "vast-auth", Provider: "openai-compatible-vast", Model: "gpt-5", Success: false})
+	manager.MarkResult(context.Background(), coreauth.Result{AuthID: "xai-api-key-auth", Provider: "xai", Model: "grok-4.5", Success: true})
 
 	handler := NewHandler(nil, rt, "127.0.0.1", 0)
 	rec := httptest.NewRecorder()
@@ -80,5 +93,18 @@ func TestGetAPIKeyUsageUsesHomeRuntimeAuths(t *testing.T) {
 	success, failed := sumRecentRequestBuckets(entry.RecentRequests)
 	if success != 1 || failed != 1 {
 		t.Fatalf("recent request totals = %d/%d, want 1/1", success, failed)
+	}
+
+	xaiBucket, exists := payload["xai"]
+	if !exists {
+		t.Fatalf("missing xAI provider bucket: %#v", payload)
+	}
+	xaiEntry := xaiBucket["https://api.x.ai/v1|xai-key"]
+	if xaiEntry.Success != 1 || xaiEntry.Failed != 0 {
+		t.Fatalf("xAI totals = %d/%d, want 1/0", xaiEntry.Success, xaiEntry.Failed)
+	}
+	xaiSuccess, xaiFailed := sumRecentRequestBuckets(xaiEntry.RecentRequests)
+	if xaiSuccess != 1 || xaiFailed != 0 {
+		t.Fatalf("xAI recent request totals = %d/%d, want 1/0", xaiSuccess, xaiFailed)
 	}
 }

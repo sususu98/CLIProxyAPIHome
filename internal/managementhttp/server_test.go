@@ -113,9 +113,16 @@ func TestClusterManagementAPIKeyUsageRouteRegistered(t *testing.T) {
 	handler := clustermanagement.NewHandler(nil, nil, "", 0)
 	registerClusterManagementRoutes(reg, handler)
 
-	route := RouteKey{Method: http.MethodGet, Path: "/api-key-usage"}
-	if reg.routes[route] == nil {
-		t.Fatalf("route %s %s was not registered", route.Method, route.Path)
+	for _, route := range []RouteKey{
+		{Method: http.MethodGet, Path: "/api-key-usage"},
+		{Method: http.MethodGet, Path: "/xai-api-key"},
+		{Method: http.MethodPut, Path: "/xai-api-key"},
+		{Method: http.MethodPatch, Path: "/xai-api-key"},
+		{Method: http.MethodDelete, Path: "/xai-api-key"},
+	} {
+		if reg.routes[route] == nil {
+			t.Fatalf("route %s %s was not registered", route.Method, route.Path)
+		}
 	}
 }
 

@@ -279,24 +279,19 @@ func modelAliasChannel(auth *Auth) string {
 func OAuthModelAliasChannel(provider, authKind string) string {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	authKind = strings.ToLower(strings.TrimSpace(authKind))
+	authKind = strings.ReplaceAll(authKind, "-", "_")
+	if authKind == "api_key" || authKind == "apikey" {
+		return ""
+	}
 	switch provider {
 	case "gemini":
 		// gemini provider uses gemini-api-key config, not oauth-model-alias.
 		return ""
 	case "vertex":
-		if authKind == "apikey" {
-			return ""
-		}
 		return "vertex"
 	case "claude":
-		if authKind == "apikey" {
-			return ""
-		}
 		return "claude"
 	case "codex":
-		if authKind == "apikey" {
-			return ""
-		}
 		return "codex"
 	case "antigravity", "kimi", "xai":
 		return provider

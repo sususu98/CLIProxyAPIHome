@@ -126,8 +126,8 @@ type credentialConfigAuthList struct {
 
 // credentialConfigAuthsFromRoot synthesizes DB-backed credentials present in YAML config.
 func (h *Handler) credentialConfigAuthsFromRoot(root map[string]any) ([]credentialConfigAuthList, bool, error) {
-	out := make([]credentialConfigAuthList, 0, 5)
-	for _, key := range []string{"gemini-api-key", "vertex-api-key", "codex-api-key", "claude-api-key", "openai-compatibility"} {
+	out := make([]credentialConfigAuthList, 0, 6)
+	for _, key := range []string{"gemini-api-key", "vertex-api-key", "codex-api-key", "xai-api-key", "claude-api-key", "openai-compatibility"} {
 		value, exists := root[key]
 		if !exists {
 			continue
@@ -402,7 +402,7 @@ func mergeConfigPatch(current map[string]any, patch map[string]any) map[string]a
 // isCredentialConfigKey reports whether credential config key.
 func isCredentialConfigKey(key string) bool {
 	switch strings.TrimSpace(key) {
-	case "auth-dir", "gemini-api-key", "vertex-api-key", "codex-api-key", "claude-api-key", "openai-compatibility":
+	case "auth-dir", "gemini-api-key", "vertex-api-key", "codex-api-key", "xai-api-key", "claude-api-key", "openai-compatibility":
 		return true
 	default:
 		return false

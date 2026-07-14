@@ -16,6 +16,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
+	resppush "github.com/router-for-me/CLIProxyAPIHome/internal/respserver/push"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -38,6 +39,9 @@ const (
 
 // New creates a new.
 func New(addr string, runtime *home.Runtime) *Server {
+	if errSanitize := resppush.SanitizeUsageLog(); errSanitize != nil {
+		log.Errorf("usage log sanitization error: %v", errSanitize)
+	}
 	return &Server{
 		addr:     strings.TrimSpace(addr),
 		runtime:  runtime,

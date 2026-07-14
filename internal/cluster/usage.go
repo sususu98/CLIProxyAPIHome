@@ -88,6 +88,11 @@ func UsageRecordFromPayloadWithRuntime(payload string, metadata UsageRuntimeMeta
 	if !json.Valid([]byte(payload)) {
 		return nil, fmt.Errorf("usage payload is invalid json")
 	}
+	sanitizedPayload, errSanitize := SanitizeUsagePayloadSecrets(payload)
+	if errSanitize != nil {
+		return nil, errSanitize
+	}
+	payload = sanitizedPayload
 	enrichedPayload, errEnrich := UsagePayloadWithRuntimeMetadata(payload, metadata)
 	if errEnrich != nil {
 		return nil, errEnrich
@@ -149,6 +154,37 @@ func UsageRecordFromPayloadWithRuntime(payload string, metadata UsageRuntimeMeta
 		record.CPALabel = usageCPALabel(record.CPANodeID, record.CPAIP, record.CPAPort)
 	}
 	return record, nil
+}
+
+// SanitizeUsagePayloadSecrets removes provider credential material from usage payloads.
+func SanitizeUsagePayloadSecrets(payload string) (string, error) {
+	payload = strings.TrimSpace(payload)
+	if payload == "" {
+		return "", fmt.Errorf("usage payload is empty")
+	}
+	if !json.Valid([]byte(payload)) {
+		return "", fmt.Errorf("usage payload is invalid json")
+	}
+	if normalizeUsageObservabilityCredentialType(gjson.Get(payload, "auth_type").String()) != "provider_api_key" {
+		return payload, nil
+	}
+	return sanitizeProviderAPIKeyUsageSource(payload, gjson.Get(payload, "auth_index").String())
+}
+
+func sanitizeProviderAPIKeyUsageSource(payload string, authIndex string) (string, error) {
+	payload = strings.TrimSpace(payload)
+	if payload == "" || !json.Valid([]byte(payload)) {
+		return "", fmt.Errorf("usage payload is invalid json")
+	}
+	source := strings.TrimSpace(authIndex)
+	if source == "" {
+		source = "provider-api-key"
+	}
+	out, errSet := sjson.Set(payload, "source", source)
+	if errSet != nil {
+		return "", fmt.Errorf("sanitize usage source: %w", errSet)
+	}
+	return out, nil
 }
 
 // usageServiceTierFromPayload returns the reported service tier or the default tier.
