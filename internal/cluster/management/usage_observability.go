@@ -26,6 +26,8 @@ const (
 func (h *Handler) GetCapabilities(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"capabilities": gin.H{
+			"quota_snapshots":         true,
+			"quota_snapshot_details":  true,
 			"usage":                   true,
 			"usage_overview":          true,
 			"usage_records":           true,

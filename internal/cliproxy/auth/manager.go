@@ -923,12 +923,23 @@ func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
 		return false
 	}
 	if hasExpiry && !expiry.IsZero() {
-		return time.Until(expiry) <= *lead
+		return expiry.Sub(now) <= *lead
 	}
 	if !lastRefresh.IsZero() {
 		return now.Sub(lastRefresh) >= *lead
 	}
 	return true
+}
+
+// ShouldRefreshCredential reports whether the credential is due for refresh.
+func (m *Manager) ShouldRefreshCredential(auth *Auth, now time.Time) bool {
+	if m == nil || auth == nil {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return m.shouldRefresh(auth, now.UTC())
 }
 
 // authRefreshDisabled reports whether auth should be absent from auto-refresh scheduling.

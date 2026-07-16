@@ -51,6 +51,15 @@ func NewRepository(db *gorm.DB) *Repository {
 	return &Repository{db: db}
 }
 
+// DialectName returns the repository database dialect.
+func (r *Repository) DialectName() string {
+	db, errDB := r.database()
+	if errDB != nil || db.Dialector == nil {
+		return ""
+	}
+	return db.Dialector.Name()
+}
+
 // AuthToRecord converts auth to record.
 func AuthToRecord(auth *coreauth.Auth) (*AuthRecord, error) {
 	// Normalize auth state before updating runtime indexes.
@@ -643,6 +652,12 @@ func (r *Repository) SoftDeleteAuth(ctx context.Context, uuid string) error {
 		record.Version = newVersion
 		if errDelete := tx.Delete(&record).Error; errDelete != nil {
 			return errDelete
+		}
+		if errDeleteWindows := tx.Where("credential_id = ?", uuid).Delete(&QuotaWindowRecord{}).Error; errDeleteWindows != nil {
+			return errDeleteWindows
+		}
+		if errDeleteSnapshot := tx.Where("credential_id = ?", uuid).Delete(&QuotaSnapshotRecord{}).Error; errDeleteSnapshot != nil {
+			return errDeleteSnapshot
 		}
 		return appendEvent(tx, "auth", "delete", record.UUID, record.Version)
 	})

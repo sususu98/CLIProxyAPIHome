@@ -105,6 +105,8 @@ The table below is extracted from the final Home route registry built by `intern
 | `POST` | `/api-call` |
 | `GET` | `/api-key-usage` |
 | `GET` | `/capabilities` |
+| `GET` | `/quota/credentials` |
+| `GET` | `/quota/credentials/:credential_id` |
 | `DELETE` | `/api-keys` |
 | `GET` | `/api-keys` |
 | `PATCH` | `/api-keys` |
@@ -2408,6 +2410,8 @@ Response fields:
 | Field | Type | Description |
 | --- | --- | --- |
 | `capabilities.usage` | boolean | Whether the legacy `GET /api-key-usage` capability is available. |
+| `capabilities.quota_snapshots` | boolean | Whether the DB-backed `GET /quota/credentials` snapshot list is available. |
+| `capabilities.quota_snapshot_details` | boolean | Whether `GET /quota/credentials/:credential_id` is available. |
 | `capabilities.usage_overview` | boolean | Whether `GET /usage/overview` is available. |
 | `capabilities.usage_records` | boolean | Whether `GET /usage/records` is available. |
 | `capabilities.usage_record_details` | boolean | Whether `GET /usage/records/:id` is available. |
@@ -2428,6 +2432,160 @@ Response fields:
 | `server_info.home_version` | string | Home build version. |
 | `server_info.home_commit` | string | Home build commit. |
 | `server_info.home_build_date` | string | Home build time. |
+
+### Quota Snapshot Conventions
+
+Quota snapshot endpoints are read-only DB views. Reading them does not call an upstream provider, refresh OAuth tokens, change scheduler priority, or consume a queue. A credential that exists but has never produced a snapshot or collection attempt is returned with `quota_status=unknown`, `freshness=never`, an empty window list, and HTTP `200`. If its first collection attempt fails before any usable quota fact exists, it is returned as `quota_status=error`, `freshness=never`, and `collection_status=failed`. A credential whose provider is explicitly outside the current collector plan is returned as `unsupported`. Deleted credentials are not visible and their quota rows are deleted with the credential.
+
+All timestamps are RFC3339 UTC values or `null`. Ratios are numbers in `[0,1]`. Quantity fields may be `null`; unlimited quota uses `is_unlimited=true`. Different provider periods remain separate windows. While a snapshot is fresh, an individually expired merged window is omitted and no longer contributes to status/source. Once the snapshot itself is stale, the detail view retains its last-known windows for diagnosis. `earliest_reset_at` is the minimum non-null `reset_at` across the same complete internal window set represented by the credential item. It may be in the past for stale last-known data.
+
+Current passive collection extracts a bounded `quota_headers` object from the CPA usage event `response_headers`. Home preserves only the Codex `X-Codex-*` quota allowlist plus a bounded upstream request ID, and removes the raw `response_headers` object before writing the usage payload. Codex Header observations are normalized and upserted in the same database transaction as the usage record. Older observations cannot replace a newer snapshot or window. A newer Header observation invalidates an in-flight active-probe lease. Partial Header updates retain only still-valid older windows; expired windows cannot make a new snapshot appear healthy or exhausted.
+
+Home also runs fixed-target active collectors for Claude, Antigravity, Codex, Kimi, and xAI OAuth/file credentials. Codex reads the official usage endpoint; Claude reads usage and profile, reporting `partial` when quota succeeds but profile metadata fails; Antigravity tries its fixed backend candidates with the credential `project_id`; Kimi reads coding usage; xAI reads billing and converts provider cents into explicit USD currency values. Provider API-key credentials that cannot use these OAuth collectors are returned as `unsupported`.
+
+Collectors read DB credentials directly and never accept a URL from HMC. Before probing, they resolve the latest DB credential and refresh OAuth state when the runtime refresh policy says it is due. They use the current hot-reloaded global proxy unless the credential has its own proxy. They use a 20-second request timeout, a per-provider concurrency limit of 3 on PostgreSQL and a global limit of 1 on SQLite, a per-credential DB lease, and a five-minute exponential retry backoff with per-credential jitter capped near one hour. `Retry-After` can extend the next attempt. Disabled credentials and credentials whose retry deadline is still in the future are not actively probed; persisted unavailable/error state no longer blocks recovery after that deadline. Successful snapshots are fresh for 30 minutes. Failures preserve last-known windows and store only structured, redacted error metadata.
+
+Credential fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `credential_id` | string | Stable Home auth UUID used by the detail path. |
+| `auth_index` | string/null | Current runtime auth index. |
+| `provider` | string | Normalized provider ID. |
+| `credential_type` | string | `oauth`, `provider_api_key`, `file_auth`, `vertex`, or `unknown`. |
+| `label` | string | Safe display label with a stable fallback. |
+| `account`, `project` | string/null | Masked display account/project metadata when present. Search uses these displayed values. |
+| `credential_status` | string | `enabled`, `disabled`, `unavailable`, `cooldown`, or `unknown`. |
+| `quota_status` | string | `healthy`, `low`, `exhausted`, `unknown`, `error`, or `unsupported`. |
+| `freshness` | string | `fresh`, `stale`, or `never`. `stale` is computed when current time reaches `expires_at`; a legacy observation without an expiry is also stale. |
+| `collection_status` | string | `idle`, `collecting`, `success`, `partial`, `failed`, or `unsupported`. |
+| `source` | string/null | `response_header`, `active_probe`, `mixed`, or `null`. |
+| `observed_at`, `expires_at` | string/null | Latest valid observation and its freshness deadline. |
+| `earliest_reset_at` | string/null | Earliest reset across all effective windows, including windows omitted from `primary_windows`. Stale last-known values may be in the past. |
+| `last_attempt_at`, `last_success_at`, `next_probe_at` | string/null | Collection scheduling metadata. |
+| `consecutive_failures` | integer | Consecutive collection failures. |
+| `primary_windows` | array | Stable selection of at most two current windows. |
+| `window_count` | integer | Number of all current windows. |
+| `error` | object/null | Redacted collection error. Messages are capped at 500 bytes. |
+| `runtime` | object/null | Home and CPA ownership metadata. |
+
+Quota window fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | string | Stable per-credential window ID. |
+| `label`, `scope_id`, `currency` | string/null | Optional display metadata. |
+| `scope` | string | `account`, `project`, `model`, `organization`, or `unknown`. |
+| `mode` | string | `rolling`, `fixed`, `balance`, or `unknown`. |
+| `status` | string | Window-level quota status. |
+| `unit` | string | `requests`, `tokens`, `credits`, `currency`, `percentage`, or `unknown`. |
+| `used`, `remaining`, `limit` | number/null | Normalized quantities. |
+| `used_ratio`, `remaining_ratio` | number/null | Normalized ratios in `[0,1]`. |
+| `is_unlimited` | boolean | Whether this window has no finite limit. |
+| `reset_at` | string/null | Next reset boundary. |
+| `window_seconds` | integer/null | Duration when it has a safe seconds representation. |
+| `period_unit`, `period_value` | mixed | Structured display period. Unit is `minute`, `hour`, `day`, `week`, `month`, or `unknown`; `period_value` is positive for known units and `null` for `unknown`. |
+| `source` | string | Window collection source. |
+| `observed_at` | string | Actual window observation time. |
+
+### GET `/quota/credentials`
+
+Returns filtered, paginated current credential snapshots.
+
+| Query | Type | Default | Description |
+| --- | --- | --- | --- |
+| `limit` | integer | `50` | Page size from 1 to 200. |
+| `offset` | integer | `0` | Non-negative result offset. |
+| `search` | string | none | Case-insensitive contains match over label, account, project, auth index, and provider. |
+| `provider` | string/CSV | none | One or more provider IDs. |
+| `quota_status` | string/CSV | none | One or more quota statuses. |
+| `freshness` | string/CSV | none | `fresh`, `stale`, or `never`. |
+| `source` | string/CSV | none | `response_header`, `active_probe`, `mixed`, or `none`. |
+| `credential_status` | string/CSV | none | One or more credential statuses. |
+| `collection_status` | string/CSV | none | One or more collection statuses. |
+| `sort` | string | `risk_desc` | `risk_desc`, `observed_at_desc`, `observed_at_asc`, `reset_at_asc`, `provider_asc`, or `label_asc`. `reset_at_asc` uses the returned `earliest_reset_at`, with `null` values last. |
+
+`summary` and `facets` cover the complete filtered result before pagination. `global_summary` covers all visible credentials without list filters. `needs_attention` counts each credential once when it is non-healthy, non-fresh, partial, or failed.
+
+```json
+{
+  "items": [],
+  "total": 0,
+  "limit": 50,
+  "offset": 0,
+  "sort": "risk_desc",
+  "generated_at": "2026-07-16T01:00:00Z",
+  "summary": {
+    "total_credentials": 0,
+    "healthy": 0,
+    "low": 0,
+    "exhausted": 0,
+    "unknown": 0,
+    "error": 0,
+    "unsupported": 0,
+    "stale": 0,
+    "never": 0,
+    "collecting": 0,
+    "needs_attention": 0,
+    "last_observed_at": null
+  },
+  "global_summary": {},
+  "facets": {
+    "providers": [],
+    "quota_statuses": [],
+    "freshness": [],
+    "sources": [],
+    "credential_statuses": [],
+    "collection_statuses": []
+  }
+}
+```
+
+### GET `/quota/credentials/:credential_id`
+
+Returns the same credential core object, every current window in stable order, collection metadata, and `generated_at`. Unknown or unsupported current credentials return HTTP `200`; missing, deleted, or invisible credentials return `404`.
+
+```json
+{
+  "credential": {
+    "credential_id": "auth-db-id",
+    "provider": "codex",
+    "quota_status": "low",
+    "earliest_reset_at": "2026-07-16T01:10:00Z",
+    "primary_windows": [],
+    "window_count": 1
+  },
+  "windows": [],
+  "collection": {
+    "source": "response_header",
+    "freshness": "fresh",
+    "status": "success",
+    "observed_at": "2026-07-16T01:00:00Z",
+    "expires_at": "2026-07-16T01:30:00Z",
+    "last_attempt_at": "2026-07-16T01:00:00Z",
+    "last_success_at": "2026-07-16T01:00:00Z",
+    "next_probe_at": "2026-07-16T01:30:00Z",
+    "consecutive_failures": 0,
+    "error": null
+  },
+  "generated_at": "2026-07-16T01:01:00Z"
+}
+```
+
+Quota endpoint validation errors use:
+
+```json
+{
+  "error": {
+    "code": "INVALID_FILTER",
+    "message": "quota_status contains an unsupported value",
+    "request_id": "",
+    "retryable": false
+  }
+}
+```
+
+Invalid filters, sorts, or pagination return `400`; missing credentials return `404`; temporary database/context unavailability returns `503`; other database read failures return `500`.
 
 ### Usage Observability Conventions
 
