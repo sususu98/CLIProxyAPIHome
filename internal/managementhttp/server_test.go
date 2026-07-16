@@ -133,6 +133,8 @@ func TestClusterManagementUsageObservabilityRoutesRegistered(t *testing.T) {
 
 	for _, route := range []RouteKey{
 		{Method: http.MethodGet, Path: "/capabilities"},
+		{Method: http.MethodGet, Path: "/quota/credentials"},
+		{Method: http.MethodGet, Path: "/quota/credentials/:credential_id"},
 		{Method: http.MethodGet, Path: "/usage/overview"},
 		{Method: http.MethodGet, Path: "/usage/records"},
 		{Method: http.MethodGet, Path: "/usage/records/:id"},

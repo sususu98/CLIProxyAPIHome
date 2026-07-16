@@ -1,0 +1,1392 @@
+package cluster
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+const quotaSnapshotSchemaVersion = 1
+
+const quotaSnapshotFallbackFreshness = 30 * time.Minute
+
+// ErrQuotaProbeLeaseLost reports that an in-flight probe no longer owns its completion lease.
+var ErrQuotaProbeLeaseLost = errors.New("quota probe lease is no longer owned")
+
+var quotaBearerSecretPattern = regexp.MustCompile(`(?i)\bbearer\s+[^\s,;\]}]+`)
+
+type QuotaSnapshotRecord struct {
+	CredentialID        string     `gorm:"column:credential_id;primaryKey;size:128"`
+	QuotaStatus         string     `gorm:"column:quota_status;not null;size:32;index"`
+	CollectionStatus    string     `gorm:"column:collection_status;not null;size:32;index"`
+	Source              string     `gorm:"column:source;size:32;index"`
+	ObservedAt          *time.Time `gorm:"column:observed_at;index"`
+	ExpiresAt           *time.Time `gorm:"column:expires_at;index"`
+	LastAttemptAt       *time.Time `gorm:"column:last_attempt_at"`
+	LastSuccessAt       *time.Time `gorm:"column:last_success_at"`
+	NextProbeAt         *time.Time `gorm:"column:next_probe_at;index"`
+	ConsecutiveFailure  int        `gorm:"column:consecutive_failures;not null;default:0"`
+	ErrorCode           string     `gorm:"column:error_code;size:128"`
+	ErrorMessage        string     `gorm:"column:error_message;size:500"`
+	ErrorRetryable      bool       `gorm:"column:error_retryable;not null;default:false"`
+	ErrorOccurredAt     *time.Time `gorm:"column:error_occurred_at"`
+	ErrorStatusCode     int        `gorm:"column:error_status_code;not null;default:0"`
+	ErrorRequestID      string     `gorm:"column:error_request_id;size:128"`
+	HomeID              string     `gorm:"column:home_id;size:256"`
+	HomeLabel           string     `gorm:"column:home_label;size:256"`
+	CPANodeID           string     `gorm:"column:cpa_node_id;size:256"`
+	CPANodeLabel        string     `gorm:"column:cpa_node_label;size:256"`
+	ProbeLeaseOwner     string     `gorm:"column:probe_lease_owner;size:256"`
+	ProbeLeaseExpiresAt *time.Time `gorm:"column:probe_lease_expires_at;index"`
+	ParserVersion       int        `gorm:"column:parser_version;not null;default:1"`
+	CollectorVersion    int        `gorm:"column:collector_version;not null;default:1"`
+	CreatedAt           time.Time  `gorm:"column:created_at"`
+	UpdatedAt           time.Time  `gorm:"column:updated_at"`
+}
+
+func (QuotaSnapshotRecord) TableName() string { return "quota_snapshot" }
+
+type QuotaWindowRecord struct {
+	CredentialID   string     `gorm:"column:credential_id;primaryKey;size:128;index:idx_quota_window_credential_order,priority:1"`
+	WindowID       string     `gorm:"column:window_id;primaryKey;size:256;index:idx_quota_window_credential_order,priority:2"`
+	Priority       int        `gorm:"column:priority;not null;default:0;index:idx_quota_window_credential_order,priority:3"`
+	Label          string     `gorm:"column:label;size:256"`
+	Scope          string     `gorm:"column:scope;not null;size:32"`
+	ScopeID        string     `gorm:"column:scope_id;size:256"`
+	Mode           string     `gorm:"column:mode;not null;size:32"`
+	Status         string     `gorm:"column:status;not null;size:32"`
+	Unit           string     `gorm:"column:unit;not null;size:32"`
+	Currency       string     `gorm:"column:currency;size:16"`
+	Used           *float64   `gorm:"column:used"`
+	Remaining      *float64   `gorm:"column:remaining"`
+	Limit          *float64   `gorm:"column:limit_value"`
+	UsedRatio      *float64   `gorm:"column:used_ratio"`
+	RemainingRatio *float64   `gorm:"column:remaining_ratio"`
+	IsUnlimited    bool       `gorm:"column:is_unlimited;not null;default:false"`
+	ResetAt        *time.Time `gorm:"column:reset_at;index"`
+	WindowSeconds  *int64     `gorm:"column:window_seconds"`
+	PeriodUnit     string     `gorm:"column:period_unit;not null;size:32"`
+	PeriodValue    *float64   `gorm:"column:period_value"`
+	Source         string     `gorm:"column:source;not null;size:32"`
+	ObservedAt     time.Time  `gorm:"column:observed_at;not null;index"`
+	ExpiresAt      *time.Time `gorm:"column:expires_at;index"`
+	CreatedAt      time.Time  `gorm:"column:created_at"`
+	UpdatedAt      time.Time  `gorm:"column:updated_at"`
+}
+
+func (QuotaWindowRecord) TableName() string { return "quota_window" }
+
+type QuotaWindow struct {
+	ID             string     `json:"id"`
+	Label          *string    `json:"label"`
+	Scope          string     `json:"scope"`
+	ScopeID        *string    `json:"scope_id"`
+	Mode           string     `json:"mode"`
+	Status         string     `json:"status"`
+	Unit           string     `json:"unit"`
+	Currency       *string    `json:"currency"`
+	Used           *float64   `json:"used"`
+	Remaining      *float64   `json:"remaining"`
+	Limit          *float64   `json:"limit"`
+	UsedRatio      *float64   `json:"used_ratio"`
+	RemainingRatio *float64   `json:"remaining_ratio"`
+	IsUnlimited    bool       `json:"is_unlimited"`
+	ResetAt        *time.Time `json:"reset_at"`
+	WindowSeconds  *int64     `json:"window_seconds"`
+	PeriodUnit     string     `json:"period_unit"`
+	PeriodValue    *float64   `json:"period_value"`
+	Source         string     `json:"source"`
+	ObservedAt     time.Time  `json:"observed_at"`
+	ExpiresAt      *time.Time `json:"-"`
+	Priority       int        `json:"-"`
+}
+
+type QuotaCollectionError struct {
+	Code               string     `json:"code"`
+	Message            string     `json:"message"`
+	Retryable          bool       `json:"retryable"`
+	OccurredAt         *time.Time `json:"occurred_at"`
+	UpstreamStatusCode *int       `json:"upstream_status_code"`
+	RequestID          *string    `json:"request_id"`
+}
+
+type QuotaRuntime struct {
+	HomeID       string `json:"home_id"`
+	HomeLabel    string `json:"home_label"`
+	CPANodeID    string `json:"cpa_node_id"`
+	CPANodeLabel string `json:"cpa_node_label"`
+}
+
+type QuotaCredentialSnapshot struct {
+	CredentialID       string                `json:"credential_id"`
+	AuthIndex          *string               `json:"auth_index"`
+	Provider           string                `json:"provider"`
+	CredentialType     string                `json:"credential_type"`
+	Label              string                `json:"label"`
+	Account            *string               `json:"account"`
+	Project            *string               `json:"project"`
+	CredentialStatus   string                `json:"credential_status"`
+	QuotaStatus        string                `json:"quota_status"`
+	Freshness          string                `json:"freshness"`
+	CollectionStatus   string                `json:"collection_status"`
+	Source             *string               `json:"source"`
+	ObservedAt         *time.Time            `json:"observed_at"`
+	ExpiresAt          *time.Time            `json:"expires_at"`
+	EarliestResetAt    *time.Time            `json:"earliest_reset_at"`
+	LastAttemptAt      *time.Time            `json:"last_attempt_at"`
+	LastSuccessAt      *time.Time            `json:"last_success_at"`
+	NextProbeAt        *time.Time            `json:"next_probe_at,omitempty"`
+	ConsecutiveFailure int                   `json:"consecutive_failures"`
+	PrimaryWindows     []QuotaWindow         `json:"primary_windows"`
+	WindowCount        int                   `json:"window_count"`
+	Error              *QuotaCollectionError `json:"error"`
+	Runtime            *QuotaRuntime         `json:"runtime"`
+	Windows            []QuotaWindow         `json:"-"`
+}
+
+type QuotaSnapshotWrite struct {
+	CredentialID       string
+	QuotaStatus        string
+	CollectionStatus   string
+	Source             string
+	ObservedAt         *time.Time
+	ExpiresAt          *time.Time
+	LastAttemptAt      *time.Time
+	LastSuccessAt      *time.Time
+	NextProbeAt        *time.Time
+	ConsecutiveFailure int
+	Error              *QuotaCollectionError
+	Runtime            *QuotaRuntime
+	ParserVersion      int
+	CollectorVersion   int
+	ExpectedProbeOwner string
+	ClearProbeLease    bool
+	ReplaceWindows     bool
+	Windows            []QuotaWindow
+}
+
+type QuotaListQuery struct {
+	Limit              int
+	Offset             int
+	Search             string
+	Providers          map[string]struct{}
+	QuotaStatuses      map[string]struct{}
+	Freshness          map[string]struct{}
+	Sources            map[string]struct{}
+	CredentialStatuses map[string]struct{}
+	CollectionStatuses map[string]struct{}
+	Sort               string
+	Now                time.Time
+}
+
+type QuotaSummary struct {
+	TotalCredentials int        `json:"total_credentials"`
+	Healthy          int        `json:"healthy"`
+	Low              int        `json:"low"`
+	Exhausted        int        `json:"exhausted"`
+	Unknown          int        `json:"unknown"`
+	Error            int        `json:"error"`
+	Unsupported      int        `json:"unsupported"`
+	Stale            int        `json:"stale"`
+	Never            int        `json:"never"`
+	Collecting       int        `json:"collecting"`
+	NeedsAttention   int        `json:"needs_attention"`
+	LastObservedAt   *time.Time `json:"last_observed_at"`
+}
+
+type QuotaFacetOption struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
+type QuotaFacets struct {
+	Providers          []QuotaFacetOption `json:"providers"`
+	QuotaStatuses      []QuotaFacetOption `json:"quota_statuses"`
+	Freshness          []QuotaFacetOption `json:"freshness"`
+	Sources            []QuotaFacetOption `json:"sources"`
+	CredentialStatuses []QuotaFacetOption `json:"credential_statuses"`
+	CollectionStatuses []QuotaFacetOption `json:"collection_statuses"`
+}
+
+type QuotaListResult struct {
+	Items         []QuotaCredentialSnapshot
+	Total         int
+	Summary       QuotaSummary
+	GlobalSummary QuotaSummary
+	Facets        QuotaFacets
+}
+
+func (r *Repository) UpsertQuotaSnapshot(ctx context.Context, input QuotaSnapshotWrite) (bool, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return false, errDB
+	}
+	return upsertQuotaSnapshotDB(ctx, db, input)
+}
+
+func upsertQuotaSnapshotDB(ctx context.Context, db *gorm.DB, input QuotaSnapshotWrite) (bool, error) {
+	if errValidate := validateQuotaSnapshotWrite(&input); errValidate != nil {
+		return false, errValidate
+	}
+	if db == nil {
+		return false, fmt.Errorf("quota snapshot database is nil")
+	}
+	ctx = contextOrBackground(ctx)
+	updated := false
+	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing QuotaSnapshotRecord
+		errExisting := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, "credential_id = ?", input.CredentialID).Error
+		if errExisting != nil && !errors.Is(errExisting, gorm.ErrRecordNotFound) {
+			return errExisting
+		}
+		if expectedOwner := strings.TrimSpace(input.ExpectedProbeOwner); expectedOwner != "" {
+			if errors.Is(errExisting, gorm.ErrRecordNotFound) || existing.ProbeLeaseOwner != expectedOwner {
+				return nil
+			}
+		}
+		if errExisting == nil && quotaObservationIsOlder(existing.ObservedAt, input.ObservedAt) {
+			return nil
+		}
+
+		record := quotaSnapshotRecordFromWrite(input)
+		if errExisting == nil {
+			record.CreatedAt = existing.CreatedAt
+			if record.HomeID == "" {
+				record.HomeID = existing.HomeID
+			}
+			if record.HomeLabel == "" {
+				record.HomeLabel = existing.HomeLabel
+			}
+			if record.CPANodeID == "" {
+				record.CPANodeID = existing.CPANodeID
+			}
+			if record.CPANodeLabel == "" {
+				record.CPANodeLabel = existing.CPANodeLabel
+			}
+			if !input.ClearProbeLease {
+				record.ProbeLeaseOwner = existing.ProbeLeaseOwner
+				record.ProbeLeaseExpiresAt = quotaUTC(existing.ProbeLeaseExpiresAt)
+			}
+		}
+		if errSave := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "credential_id"}},
+			UpdateAll: true,
+		}).Create(&record).Error; errSave != nil {
+			return errSave
+		}
+
+		if input.ReplaceWindows {
+			windowIDs := make([]string, 0, len(input.Windows))
+			for _, window := range input.Windows {
+				windowIDs = append(windowIDs, window.ID)
+			}
+			deleteQuery := tx.Where("credential_id = ?", input.CredentialID)
+			if len(windowIDs) > 0 {
+				deleteQuery = deleteQuery.Where("window_id NOT IN ?", windowIDs)
+			}
+			if errDelete := deleteQuery.Delete(&QuotaWindowRecord{}).Error; errDelete != nil {
+				return errDelete
+			}
+		} else if input.ObservedAt != nil {
+			incomingObservedAt := input.ObservedAt.UTC()
+			if errExisting == nil && existing.ExpiresAt != nil {
+				if errBackfill := tx.Model(&QuotaWindowRecord{}).
+					Where("credential_id = ? AND expires_at IS NULL", input.CredentialID).
+					Update("expires_at", existing.ExpiresAt.UTC()).Error; errBackfill != nil {
+					return errBackfill
+				}
+			} else if errExisting == nil {
+				if errPruneUnknown := tx.Where("credential_id = ? AND expires_at IS NULL AND observed_at < ?", input.CredentialID, incomingObservedAt).
+					Delete(&QuotaWindowRecord{}).Error; errPruneUnknown != nil {
+					return errPruneUnknown
+				}
+			}
+			if errPrune := tx.Where("credential_id = ? AND expires_at IS NOT NULL AND expires_at <= ?", input.CredentialID, incomingObservedAt).
+				Delete(&QuotaWindowRecord{}).Error; errPrune != nil {
+				return errPrune
+			}
+		}
+		for _, window := range input.Windows {
+			windowRecord := quotaWindowRecordFromDTO(input.CredentialID, window)
+			var current QuotaWindowRecord
+			errCurrent := tx.First(&current, "credential_id = ? AND window_id = ?", input.CredentialID, window.ID).Error
+			if errCurrent != nil && !errors.Is(errCurrent, gorm.ErrRecordNotFound) {
+				return errCurrent
+			}
+			if errCurrent == nil && current.ObservedAt.After(window.ObservedAt) {
+				continue
+			}
+			if errCurrent == nil {
+				windowRecord.CreatedAt = current.CreatedAt
+			}
+			if errSave := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "credential_id"}, {Name: "window_id"}},
+				UpdateAll: true,
+			}).Create(&windowRecord).Error; errSave != nil {
+				return errSave
+			}
+		}
+		if !input.ReplaceWindows && len(input.Windows) > 0 {
+			var merged []QuotaWindowRecord
+			mergedQuery := tx.Where("credential_id = ?", input.CredentialID)
+			if input.ObservedAt != nil {
+				mergedQuery = mergedQuery.Where("expires_at IS NULL OR expires_at > ?", input.ObservedAt.UTC())
+			}
+			if errFind := mergedQuery.Find(&merged).Error; errFind != nil {
+				return errFind
+			}
+			if errUpdate := tx.Model(&QuotaSnapshotRecord{}).Where("credential_id = ?", input.CredentialID).Updates(map[string]any{
+				"quota_status": quotaWindowRecordAggregateStatus(merged), "source": quotaWindowRecordAggregateSource(merged), "updated_at": time.Now().UTC(),
+			}).Error; errUpdate != nil {
+				return errUpdate
+			}
+		}
+		updated = true
+		return nil
+	})
+	return updated, errTransaction
+}
+
+func quotaWindowRecordAggregateStatus(windows []QuotaWindowRecord) string {
+	status := "unknown"
+	for _, window := range windows {
+		switch window.Status {
+		case "exhausted":
+			return "exhausted"
+		case "low":
+			status = "low"
+		case "error":
+			if status != "low" {
+				status = "error"
+			}
+		case "healthy":
+			if status == "unknown" {
+				status = "healthy"
+			}
+		}
+	}
+	return status
+}
+
+func quotaWindowRecordAggregateSource(windows []QuotaWindowRecord) string {
+	source := ""
+	for _, window := range windows {
+		candidate := strings.TrimSpace(window.Source)
+		if candidate == "" {
+			continue
+		}
+		if source == "" {
+			source = candidate
+			continue
+		}
+		if source != candidate {
+			return "mixed"
+		}
+	}
+	return source
+}
+
+func (r *Repository) ClaimQuotaProbe(ctx context.Context, credentialID string, owner string, now time.Time, leaseDuration time.Duration) (bool, error) {
+	credentialID = strings.TrimSpace(credentialID)
+	owner = strings.TrimSpace(owner)
+	if credentialID == "" || owner == "" {
+		return false, fmt.Errorf("quota probe credential and owner are required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	if leaseDuration <= 0 {
+		leaseDuration = time.Minute
+	}
+	db, errDB := r.database()
+	if errDB != nil {
+		return false, errDB
+	}
+	claimed := false
+	errTransaction := db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		var record QuotaSnapshotRecord
+		errFind := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&record, "credential_id = ?", credentialID).Error
+		if errFind != nil && !errors.Is(errFind, gorm.ErrRecordNotFound) {
+			return errFind
+		}
+		if errFind == nil {
+			if record.ProbeLeaseExpiresAt != nil && record.ProbeLeaseExpiresAt.After(now) {
+				return nil
+			}
+			if record.NextProbeAt != nil && record.NextProbeAt.After(now) {
+				return nil
+			}
+			if record.NextProbeAt == nil && record.ExpiresAt != nil && record.ExpiresAt.After(now) {
+				return nil
+			}
+		}
+		leaseExpiresAt := now.Add(leaseDuration)
+		if errors.Is(errFind, gorm.ErrRecordNotFound) {
+			record = QuotaSnapshotRecord{
+				CredentialID: credentialID, QuotaStatus: "unknown", CollectionStatus: "collecting",
+				LastAttemptAt: &now, ProbeLeaseOwner: owner, ProbeLeaseExpiresAt: &leaseExpiresAt,
+				ParserVersion: quotaSnapshotSchemaVersion, CollectorVersion: quotaSnapshotSchemaVersion,
+				CreatedAt: now, UpdatedAt: now,
+			}
+			if errCreate := tx.Create(&record).Error; errCreate != nil {
+				return errCreate
+			}
+		} else {
+			if errUpdate := tx.Model(&QuotaSnapshotRecord{}).Where("credential_id = ?", credentialID).Updates(map[string]any{
+				"collection_status": "collecting", "last_attempt_at": now, "probe_lease_owner": owner,
+				"probe_lease_expires_at": leaseExpiresAt, "updated_at": now,
+			}).Error; errUpdate != nil {
+				return errUpdate
+			}
+		}
+		claimed = true
+		return nil
+	})
+	return claimed, errTransaction
+}
+
+func (r *Repository) FailQuotaProbe(ctx context.Context, credentialID string, owner string, failure QuotaCollectionError, nextProbeAt time.Time) error {
+	return r.FailQuotaProbeAt(ctx, credentialID, owner, failure, nextProbeAt, time.Now().UTC())
+}
+
+// FailQuotaProbeAt persists a failed probe using the supplied clock value.
+func (r *Repository) FailQuotaProbeAt(ctx context.Context, credentialID string, owner string, failure QuotaCollectionError, nextProbeAt time.Time, now time.Time) error {
+	credentialID = strings.TrimSpace(credentialID)
+	owner = strings.TrimSpace(owner)
+	if credentialID == "" || owner == "" {
+		return fmt.Errorf("quota probe credential and owner are required")
+	}
+	db, errDB := r.database()
+	if errDB != nil {
+		return errDB
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	updates := map[string]any{
+		"collection_status": "failed", "last_attempt_at": now, "next_probe_at": quotaUTC(&nextProbeAt),
+		"consecutive_failures": gorm.Expr("consecutive_failures + 1"), "error_code": strings.TrimSpace(failure.Code),
+		"error_message": quotaSafeErrorMessage(failure.Message), "error_retryable": failure.Retryable,
+		"error_occurred_at": quotaUTC(failure.OccurredAt), "error_status_code": 0, "error_request_id": "",
+		"probe_lease_owner": "", "probe_lease_expires_at": nil, "updated_at": now,
+	}
+	updates["quota_status"] = gorm.Expr("CASE WHEN observed_at IS NULL THEN ? ELSE quota_status END", "error")
+	if failure.UpstreamStatusCode != nil {
+		updates["error_status_code"] = *failure.UpstreamStatusCode
+	}
+	if failure.RequestID != nil {
+		updates["error_request_id"] = quotaBoundedRequestID(*failure.RequestID)
+	}
+	result := db.WithContext(contextOrBackground(ctx)).Model(&QuotaSnapshotRecord{}).
+		Where("credential_id = ? AND probe_lease_owner = ?", credentialID, owner).Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrQuotaProbeLeaseLost
+	}
+	return nil
+}
+
+func (r *Repository) ListQuotaCredentials(ctx context.Context, query QuotaListQuery) (QuotaListResult, error) {
+	all, errList := r.loadQuotaCredentials(ctx, query.Now)
+	if errList != nil {
+		return QuotaListResult{}, errList
+	}
+	filtered := make([]QuotaCredentialSnapshot, 0, len(all))
+	for _, item := range all {
+		if quotaCredentialMatches(item, query) {
+			filtered = append(filtered, item)
+		}
+	}
+	quotaSortCredentials(filtered, query.Sort)
+	result := QuotaListResult{
+		Total:         len(filtered),
+		Summary:       quotaSummary(filtered),
+		GlobalSummary: quotaSummary(all),
+		Facets:        quotaFacets(filtered),
+	}
+	start := query.Offset
+	if start < 0 {
+		start = 0
+	}
+	if start > len(filtered) {
+		start = len(filtered)
+	}
+	end := start + query.Limit
+	if query.Limit <= 0 || end > len(filtered) {
+		end = len(filtered)
+	}
+	result.Items = append([]QuotaCredentialSnapshot(nil), filtered[start:end]...)
+	return result, nil
+}
+
+func (r *Repository) GetQuotaCredential(ctx context.Context, credentialID string, now time.Time) (*QuotaCredentialSnapshot, error) {
+	credentialID = strings.TrimSpace(credentialID)
+	if credentialID == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	ctx = contextOrBackground(ctx)
+	var record AuthRecord
+	if errFind := db.WithContext(ctx).Where("uuid = ?", credentialID).First(&record).Error; errFind != nil {
+		return nil, errFind
+	}
+	auth, errAuth := RecordToAuth(&record)
+	if errAuth != nil {
+		return nil, errAuth
+	}
+	var snapshot QuotaSnapshotRecord
+	errSnapshot := db.WithContext(ctx).Where("credential_id = ?", credentialID).First(&snapshot).Error
+	if errSnapshot != nil && !errors.Is(errSnapshot, gorm.ErrRecordNotFound) {
+		return nil, errSnapshot
+	}
+	var windowRecords []QuotaWindowRecord
+	if errWindows := db.WithContext(ctx).
+		Where("credential_id = ?", credentialID).
+		Order("priority ASC, reset_at ASC, window_id ASC").
+		Find(&windowRecords).Error; errWindows != nil {
+		return nil, errWindows
+	}
+	windows := make([]QuotaWindow, 0, len(windowRecords))
+	for _, windowRecord := range windowRecords {
+		windows = append(windows, quotaWindowDTO(windowRecord))
+	}
+	item := quotaCredentialFromAuth(record, auth, snapshot, windows, now)
+	return &item, nil
+}
+
+func (r *Repository) loadQuotaCredentials(ctx context.Context, now time.Time) ([]QuotaCredentialSnapshot, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	ctx = contextOrBackground(ctx)
+	var authRecords []AuthRecord
+	if errFind := db.WithContext(ctx).Order("uuid ASC").Find(&authRecords).Error; errFind != nil {
+		return nil, errFind
+	}
+	var snapshots []QuotaSnapshotRecord
+	if errFind := db.WithContext(ctx).Find(&snapshots).Error; errFind != nil {
+		return nil, errFind
+	}
+	var windowRecords []QuotaWindowRecord
+	if errFind := db.WithContext(ctx).Order("credential_id ASC, priority ASC, window_id ASC").Find(&windowRecords).Error; errFind != nil {
+		return nil, errFind
+	}
+	snapshotByCredential := make(map[string]QuotaSnapshotRecord, len(snapshots))
+	for _, snapshot := range snapshots {
+		snapshotByCredential[snapshot.CredentialID] = snapshot
+	}
+	windowsByCredential := make(map[string][]QuotaWindow)
+	for _, record := range windowRecords {
+		windowsByCredential[record.CredentialID] = append(windowsByCredential[record.CredentialID], quotaWindowDTO(record))
+	}
+	items := make([]QuotaCredentialSnapshot, 0, len(authRecords))
+	for index := range authRecords {
+		auth, errAuth := RecordToAuth(&authRecords[index])
+		if errAuth != nil {
+			return nil, errAuth
+		}
+		item := quotaCredentialFromAuth(authRecords[index], auth, snapshotByCredential[authRecords[index].UUID], windowsByCredential[authRecords[index].UUID], now)
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func quotaCredentialFromAuth(record AuthRecord, auth *coreauth.Auth, snapshot QuotaSnapshotRecord, windows []QuotaWindow, now time.Time) QuotaCredentialSnapshot {
+	credentialID := strings.TrimSpace(record.UUID)
+	authIndex := credentialID
+	provider := normalizeQuotaProviderID(record.Provider)
+	label := quotaSafeDisplayLabel(record.Label)
+	if label == "" && auth != nil {
+		label = quotaSafeDisplayLabel(firstQuotaMetadataString(auth.Metadata, "name"))
+		if label == "" {
+			label = quotaMaskAccount(firstQuotaMetadataString(auth.Metadata, "email", "account", "username"))
+		}
+	}
+	if label == "" {
+		label = provider
+		if label == "" {
+			label = "credential"
+		}
+		label += " " + credentialID
+	}
+	credentialType := quotaCredentialType(auth)
+	item := QuotaCredentialSnapshot{
+		CredentialID:     credentialID,
+		AuthIndex:        &authIndex,
+		Provider:         firstNonEmptyQuotaString(provider, "unknown"),
+		CredentialType:   credentialType,
+		Label:            label,
+		Account:          quotaOptionalString(quotaMaskAccount(firstQuotaMetadataString(quotaAuthMetadata(auth), "email", "account", "username"))),
+		Project:          quotaOptionalString(quotaMaskIdentifier(firstQuotaMetadataString(quotaAuthMetadata(auth), "project_id", "project", "organization_id", "organization"))),
+		CredentialStatus: quotaCredentialStatus(record, now),
+		QuotaStatus:      "unknown",
+		Freshness:        "never",
+		CollectionStatus: "idle",
+		PrimaryWindows:   []QuotaWindow{},
+		Windows:          []QuotaWindow{},
+	}
+	if strings.TrimSpace(snapshot.CredentialID) == "" {
+		if !quotaCredentialCollectorPlanned(provider, credentialType) {
+			item.QuotaStatus = "unsupported"
+			item.CollectionStatus = "unsupported"
+		}
+		return item
+	}
+	item.QuotaStatus = firstNonEmptyQuotaString(snapshot.QuotaStatus, "unknown")
+	item.CollectionStatus = firstNonEmptyQuotaString(snapshot.CollectionStatus, "idle")
+	item.Source = quotaOptionalString(snapshot.Source)
+	item.ObservedAt = quotaUTC(snapshot.ObservedAt)
+	item.ExpiresAt = quotaUTC(snapshot.ExpiresAt)
+	item.LastAttemptAt = quotaUTC(snapshot.LastAttemptAt)
+	item.LastSuccessAt = quotaUTC(snapshot.LastSuccessAt)
+	item.NextProbeAt = quotaUTC(snapshot.NextProbeAt)
+	item.ConsecutiveFailure = snapshot.ConsecutiveFailure
+	if item.ObservedAt != nil {
+		item.Freshness = "stale"
+		if item.ExpiresAt != nil && now.Before(*item.ExpiresAt) {
+			item.Freshness = "fresh"
+		}
+	}
+	displayWindows := append([]QuotaWindow(nil), windows...)
+	if item.Freshness == "fresh" {
+		validWindows := make([]QuotaWindow, 0, len(displayWindows))
+		for _, window := range displayWindows {
+			if window.ExpiresAt == nil || now.Before(*window.ExpiresAt) {
+				validWindows = append(validWindows, window)
+			}
+		}
+		displayWindows = validWindows
+		if len(displayWindows) > 0 {
+			item.QuotaStatus = quotaWindowAggregateDTOStatus(displayWindows)
+			item.Source = quotaOptionalString(quotaWindowAggregateDTOSource(displayWindows))
+		}
+	}
+	item.Windows = displayWindows
+	item.WindowCount = len(displayWindows)
+	item.EarliestResetAt = quotaEarliestReset(displayWindows)
+	item.Error = quotaCollectionErrorFromRecord(snapshot)
+	if snapshot.HomeID != "" || snapshot.CPANodeID != "" || snapshot.HomeLabel != "" || snapshot.CPANodeLabel != "" {
+		item.Runtime = &QuotaRuntime{HomeID: snapshot.HomeID, HomeLabel: snapshot.HomeLabel, CPANodeID: snapshot.CPANodeID, CPANodeLabel: snapshot.CPANodeLabel}
+	}
+	item.PrimaryWindows = quotaPrimaryWindows(displayWindows)
+	return item
+}
+
+func quotaWindowAggregateDTOStatus(windows []QuotaWindow) string {
+	status := "unknown"
+	for _, window := range windows {
+		switch window.Status {
+		case "exhausted":
+			return "exhausted"
+		case "low":
+			status = "low"
+		case "error":
+			if status != "low" {
+				status = "error"
+			}
+		case "healthy":
+			if status == "unknown" {
+				status = "healthy"
+			}
+		}
+	}
+	return status
+}
+
+func quotaWindowAggregateDTOSource(windows []QuotaWindow) string {
+	source := ""
+	for _, window := range windows {
+		candidate := strings.TrimSpace(window.Source)
+		if candidate == "" {
+			continue
+		}
+		if source == "" {
+			source = candidate
+			continue
+		}
+		if source != candidate {
+			return "mixed"
+		}
+	}
+	return source
+}
+
+func quotaCredentialCollectorPlanned(provider string, credentialType string) bool {
+	if !quotaProviderPlanned(provider) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(credentialType)) {
+	case "oauth", "file_auth":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateQuotaSnapshotWrite(input *QuotaSnapshotWrite) error {
+	if input == nil || strings.TrimSpace(input.CredentialID) == "" {
+		return fmt.Errorf("quota credential id is required")
+	}
+	input.CredentialID = strings.TrimSpace(input.CredentialID)
+	if input.ParserVersion <= 0 {
+		input.ParserVersion = quotaSnapshotSchemaVersion
+	}
+	if input.CollectorVersion <= 0 {
+		input.CollectorVersion = quotaSnapshotSchemaVersion
+	}
+	if !quotaAllowed(input.QuotaStatus, "healthy", "low", "exhausted", "unknown", "error", "unsupported") {
+		return fmt.Errorf("unsupported quota status %q", input.QuotaStatus)
+	}
+	if !quotaAllowed(input.CollectionStatus, "idle", "collecting", "success", "partial", "failed", "unsupported") {
+		return fmt.Errorf("unsupported quota collection status %q", input.CollectionStatus)
+	}
+	if strings.TrimSpace(input.Source) != "" && !quotaAllowed(input.Source, "response_header", "active_probe", "mixed") {
+		return fmt.Errorf("unsupported quota source %q", input.Source)
+	}
+	if input.ConsecutiveFailure < 0 {
+		return fmt.Errorf("quota consecutive failures must be non-negative")
+	}
+	if input.ObservedAt != nil {
+		observedAt := input.ObservedAt.UTC()
+		input.ObservedAt = &observedAt
+		if input.ExpiresAt == nil {
+			expiresAt := observedAt.Add(quotaSnapshotFallbackFreshness)
+			input.ExpiresAt = &expiresAt
+		}
+	}
+	seen := make(map[string]struct{}, len(input.Windows))
+	for index := range input.Windows {
+		window := &input.Windows[index]
+		window.ID = strings.TrimSpace(window.ID)
+		if window.ID == "" {
+			return fmt.Errorf("quota window id is required")
+		}
+		if _, ok := seen[window.ID]; ok {
+			return fmt.Errorf("duplicate quota window id %q", window.ID)
+		}
+		seen[window.ID] = struct{}{}
+		window.Scope = firstNonEmptyQuotaString(window.Scope, "unknown")
+		window.Mode = firstNonEmptyQuotaString(window.Mode, "unknown")
+		window.Status = firstNonEmptyQuotaString(window.Status, "unknown")
+		window.Unit = firstNonEmptyQuotaString(window.Unit, "unknown")
+		window.PeriodUnit = firstNonEmptyQuotaString(window.PeriodUnit, "unknown")
+		window.Source = firstNonEmptyQuotaString(window.Source, input.Source)
+		if !quotaAllowed(window.Scope, "account", "project", "model", "organization", "unknown") {
+			return fmt.Errorf("quota window %q has unsupported scope %q", window.ID, window.Scope)
+		}
+		if !quotaAllowed(window.Mode, "rolling", "fixed", "balance", "unknown") {
+			return fmt.Errorf("quota window %q has unsupported mode %q", window.ID, window.Mode)
+		}
+		if !quotaAllowed(window.Status, "healthy", "low", "exhausted", "unknown", "error", "unsupported") {
+			return fmt.Errorf("quota window %q has unsupported status %q", window.ID, window.Status)
+		}
+		if !quotaAllowed(window.Source, "response_header", "active_probe", "mixed") {
+			return fmt.Errorf("quota window %q has unsupported source %q", window.ID, window.Source)
+		}
+		if window.ObservedAt.IsZero() {
+			return fmt.Errorf("quota window %q observed_at is required", window.ID)
+		}
+		window.ObservedAt = window.ObservedAt.UTC()
+		if !quotaFiniteOptional(window.Used) || !quotaFiniteOptional(window.Remaining) || !quotaFiniteOptional(window.Limit) || !quotaRatio(window.UsedRatio) || !quotaRatio(window.RemainingRatio) {
+			return fmt.Errorf("quota window %q contains invalid numeric values", window.ID)
+		}
+		NormalizeQuotaWindowValues(window)
+		if window.ExpiresAt == nil {
+			window.ExpiresAt = quotaUTC(input.ExpiresAt)
+		} else {
+			window.ExpiresAt = quotaUTC(window.ExpiresAt)
+		}
+		if window.PeriodUnit == "unknown" && window.PeriodValue != nil {
+			return fmt.Errorf("quota window %q period_value must be null for unknown period", window.ID)
+		}
+		if window.PeriodUnit != "unknown" && (window.PeriodValue == nil || *window.PeriodValue <= 0 || !quotaFiniteOptional(window.PeriodValue)) {
+			return fmt.Errorf("quota window %q requires a positive period_value", window.ID)
+		}
+		if window.WindowSeconds != nil && *window.WindowSeconds <= 0 {
+			return fmt.Errorf("quota window %q window_seconds must be positive", window.ID)
+		}
+	}
+	return nil
+}
+
+func quotaSnapshotRecordFromWrite(input QuotaSnapshotWrite) QuotaSnapshotRecord {
+	now := time.Now().UTC()
+	record := QuotaSnapshotRecord{
+		CredentialID: input.CredentialID, QuotaStatus: input.QuotaStatus, CollectionStatus: input.CollectionStatus,
+		Source: strings.TrimSpace(input.Source), ObservedAt: quotaUTC(input.ObservedAt), ExpiresAt: quotaUTC(input.ExpiresAt),
+		LastAttemptAt: quotaUTC(input.LastAttemptAt), LastSuccessAt: quotaUTC(input.LastSuccessAt), NextProbeAt: quotaUTC(input.NextProbeAt),
+		ConsecutiveFailure: input.ConsecutiveFailure, ParserVersion: input.ParserVersion, CollectorVersion: input.CollectorVersion,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if input.Runtime != nil {
+		record.HomeID = strings.TrimSpace(input.Runtime.HomeID)
+		record.HomeLabel = strings.TrimSpace(input.Runtime.HomeLabel)
+		record.CPANodeID = strings.TrimSpace(input.Runtime.CPANodeID)
+		record.CPANodeLabel = strings.TrimSpace(input.Runtime.CPANodeLabel)
+	}
+	if input.Error != nil {
+		record.ErrorCode = strings.TrimSpace(input.Error.Code)
+		record.ErrorMessage = quotaSafeErrorMessage(input.Error.Message)
+		record.ErrorRetryable = input.Error.Retryable
+		record.ErrorOccurredAt = quotaUTC(input.Error.OccurredAt)
+		if input.Error.UpstreamStatusCode != nil {
+			record.ErrorStatusCode = *input.Error.UpstreamStatusCode
+		}
+		if input.Error.RequestID != nil {
+			record.ErrorRequestID = quotaBoundedRequestID(*input.Error.RequestID)
+		}
+	}
+	return record
+}
+
+func quotaWindowRecordFromDTO(credentialID string, window QuotaWindow) QuotaWindowRecord {
+	now := time.Now().UTC()
+	return QuotaWindowRecord{
+		CredentialID: credentialID, WindowID: window.ID, Priority: window.Priority, Label: quotaStringValue(window.Label),
+		Scope: window.Scope, ScopeID: quotaStringValue(window.ScopeID), Mode: window.Mode, Status: window.Status, Unit: window.Unit,
+		Currency: quotaStringValue(window.Currency), Used: window.Used, Remaining: window.Remaining, Limit: window.Limit,
+		UsedRatio: window.UsedRatio, RemainingRatio: window.RemainingRatio, IsUnlimited: window.IsUnlimited,
+		ResetAt: quotaUTC(window.ResetAt), WindowSeconds: window.WindowSeconds, PeriodUnit: window.PeriodUnit, PeriodValue: window.PeriodValue,
+		Source: window.Source, ObservedAt: window.ObservedAt.UTC(), ExpiresAt: quotaUTC(window.ExpiresAt), CreatedAt: now, UpdatedAt: now,
+	}
+}
+
+func quotaWindowDTO(record QuotaWindowRecord) QuotaWindow {
+	return QuotaWindow{
+		ID: record.WindowID, Label: quotaOptionalString(record.Label), Scope: record.Scope, ScopeID: quotaOptionalString(record.ScopeID),
+		Mode: record.Mode, Status: record.Status, Unit: record.Unit, Currency: quotaOptionalString(record.Currency), Used: record.Used,
+		Remaining: record.Remaining, Limit: record.Limit, UsedRatio: record.UsedRatio, RemainingRatio: record.RemainingRatio,
+		IsUnlimited: record.IsUnlimited, ResetAt: quotaUTC(record.ResetAt), WindowSeconds: record.WindowSeconds,
+		PeriodUnit: record.PeriodUnit, PeriodValue: record.PeriodValue, Source: record.Source, ObservedAt: record.ObservedAt.UTC(), ExpiresAt: quotaUTC(record.ExpiresAt), Priority: record.Priority,
+	}
+}
+
+func quotaCredentialMatches(item QuotaCredentialSnapshot, query QuotaListQuery) bool {
+	if !quotaSetMatches(query.Providers, item.Provider) || !quotaSetMatches(query.QuotaStatuses, item.QuotaStatus) ||
+		!quotaSetMatches(query.Freshness, item.Freshness) || !quotaSetMatches(query.Sources, quotaSourceValue(item.Source)) ||
+		!quotaSetMatches(query.CredentialStatuses, item.CredentialStatus) || !quotaSetMatches(query.CollectionStatuses, item.CollectionStatus) {
+		return false
+	}
+	search := strings.ToLower(strings.TrimSpace(query.Search))
+	if search == "" {
+		return true
+	}
+	for _, value := range []string{item.Label, quotaStringValue(item.Account), quotaStringValue(item.Project), quotaStringValue(item.AuthIndex), item.Provider} {
+		if strings.Contains(strings.ToLower(value), search) {
+			return true
+		}
+	}
+	return false
+}
+
+func quotaSortCredentials(items []QuotaCredentialSnapshot, sortValue string) {
+	sort.SliceStable(items, func(i, j int) bool {
+		left, right := items[i], items[j]
+		switch sortValue {
+		case "observed_at_desc", "observed_at_asc":
+			if (left.ObservedAt == nil) != (right.ObservedAt == nil) {
+				return left.ObservedAt != nil
+			}
+			comparison := quotaCompareTime(left.ObservedAt, right.ObservedAt)
+			if comparison != 0 {
+				if sortValue == "observed_at_desc" {
+					return comparison > 0
+				}
+				return comparison < 0
+			}
+		case "reset_at_asc":
+			comparison := quotaCompareTime(left.EarliestResetAt, right.EarliestResetAt)
+			if comparison != 0 {
+				return comparison < 0
+			}
+		case "provider_asc":
+			if left.Provider != right.Provider {
+				return left.Provider < right.Provider
+			}
+		case "label_asc":
+			leftLabel, rightLabel := strings.ToLower(left.Label), strings.ToLower(right.Label)
+			if leftLabel != rightLabel {
+				return leftLabel < rightLabel
+			}
+		default:
+			leftRisk, rightRisk := quotaRiskRank(left), quotaRiskRank(right)
+			if leftRisk != rightRisk {
+				return leftRisk < rightRisk
+			}
+		}
+		return left.CredentialID < right.CredentialID
+	})
+}
+
+func quotaSummary(items []QuotaCredentialSnapshot) QuotaSummary {
+	summary := QuotaSummary{TotalCredentials: len(items)}
+	for _, item := range items {
+		switch item.QuotaStatus {
+		case "healthy":
+			summary.Healthy++
+		case "low":
+			summary.Low++
+		case "exhausted":
+			summary.Exhausted++
+		case "error":
+			summary.Error++
+		case "unsupported":
+			summary.Unsupported++
+		default:
+			summary.Unknown++
+		}
+		if item.Freshness == "stale" {
+			summary.Stale++
+		}
+		if item.Freshness == "never" {
+			summary.Never++
+		}
+		if item.CollectionStatus == "collecting" {
+			summary.Collecting++
+		}
+		if item.QuotaStatus != "healthy" || item.Freshness != "fresh" || item.CollectionStatus == "partial" || item.CollectionStatus == "failed" {
+			summary.NeedsAttention++
+		}
+		if item.ObservedAt != nil && (summary.LastObservedAt == nil || item.ObservedAt.After(*summary.LastObservedAt)) {
+			value := item.ObservedAt.UTC()
+			summary.LastObservedAt = &value
+		}
+	}
+	return summary
+}
+
+func quotaFacets(items []QuotaCredentialSnapshot) QuotaFacets {
+	providers, statuses, freshness, sources := map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}
+	credentialStatuses, collectionStatuses := map[string]int{}, map[string]int{}
+	for _, item := range items {
+		providers[item.Provider]++
+		statuses[item.QuotaStatus]++
+		freshness[item.Freshness]++
+		sources[quotaSourceValue(item.Source)]++
+		credentialStatuses[item.CredentialStatus]++
+		collectionStatuses[item.CollectionStatus]++
+	}
+	return QuotaFacets{
+		Providers: quotaFacetOptions(providers), QuotaStatuses: quotaFacetOptions(statuses), Freshness: quotaFacetOptions(freshness),
+		Sources: quotaFacetOptions(sources), CredentialStatuses: quotaFacetOptions(credentialStatuses), CollectionStatuses: quotaFacetOptions(collectionStatuses),
+	}
+}
+
+func quotaFacetOptions(counts map[string]int) []QuotaFacetOption {
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	items := make([]QuotaFacetOption, 0, len(keys))
+	for _, key := range keys {
+		items = append(items, QuotaFacetOption{Value: key, Count: counts[key]})
+	}
+	return items
+}
+
+func quotaPrimaryWindows(windows []QuotaWindow) []QuotaWindow {
+	items := append([]QuotaWindow(nil), windows...)
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Priority != items[j].Priority {
+			return items[i].Priority < items[j].Priority
+		}
+		leftRisk, rightRisk := quotaWindowRisk(items[i].Status), quotaWindowRisk(items[j].Status)
+		if leftRisk != rightRisk {
+			return leftRisk < rightRisk
+		}
+		return items[i].ID < items[j].ID
+	})
+	if len(items) > 2 {
+		items = items[:2]
+	}
+	if items == nil {
+		return []QuotaWindow{}
+	}
+	return items
+}
+
+func quotaCollectionErrorFromRecord(record QuotaSnapshotRecord) *QuotaCollectionError {
+	if record.ErrorCode == "" && record.ErrorMessage == "" {
+		return nil
+	}
+	var status *int
+	if record.ErrorStatusCode > 0 {
+		value := record.ErrorStatusCode
+		status = &value
+	}
+	requestID := quotaOptionalString(record.ErrorRequestID)
+	return &QuotaCollectionError{Code: record.ErrorCode, Message: record.ErrorMessage, Retryable: record.ErrorRetryable, OccurredAt: quotaUTC(record.ErrorOccurredAt), UpstreamStatusCode: status, RequestID: requestID}
+}
+
+func quotaCredentialType(auth *coreauth.Auth) string {
+	if auth == nil {
+		return "unknown"
+	}
+	if auth.Attributes != nil && strings.HasPrefix(strings.TrimSpace(auth.Attributes["source"]), "config:") {
+		return "provider_api_key"
+	}
+	if auth.Metadata != nil && strings.TrimSpace(firstQuotaMetadataString(auth.Metadata, "type")) != "" {
+		return "oauth"
+	}
+	if strings.Contains(strings.ToLower(auth.Provider), "vertex") {
+		return "vertex"
+	}
+	if auth.Attributes != nil && strings.TrimSpace(auth.Attributes["api_key"]) != "" {
+		return "provider_api_key"
+	}
+	return "file_auth"
+}
+
+func quotaCredentialStatus(record AuthRecord, now time.Time) string {
+	if record.Disabled || record.Status == coreauth.StatusDisabled {
+		return "disabled"
+	}
+	if record.NextRetryAfter != nil && record.NextRetryAfter.After(now) {
+		return "cooldown"
+	}
+	if record.Unavailable || record.Status == coreauth.StatusError {
+		return "unavailable"
+	}
+	if record.Status == coreauth.StatusActive || record.Status == "" {
+		return "enabled"
+	}
+	return "unknown"
+}
+
+func quotaProviderPlanned(provider string) bool {
+	switch normalizeQuotaProviderID(provider) {
+	case "claude", "antigravity", "codex", "kimi", "xai":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeQuotaProviderID(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "anthropic", "claude":
+		return "claude"
+	case "grok", "xai":
+		return "xai"
+	case "gemini_cli", "gemini-cli":
+		return "gemini-cli"
+	default:
+		return strings.ToLower(strings.TrimSpace(provider))
+	}
+}
+
+func quotaRiskRank(item QuotaCredentialSnapshot) int {
+	switch item.QuotaStatus {
+	case "exhausted":
+		return 0
+	case "low":
+		return 1
+	case "error":
+		return 2
+	}
+	if item.CollectionStatus == "failed" {
+		return 2
+	}
+	if item.Freshness == "stale" || item.Freshness == "never" {
+		return 3
+	}
+	if item.QuotaStatus == "unknown" {
+		return 4
+	}
+	if item.QuotaStatus == "unsupported" {
+		return 5
+	}
+	if item.CollectionStatus == "partial" {
+		return 6
+	}
+	return 7
+}
+
+func quotaWindowRisk(status string) int {
+	switch status {
+	case "exhausted":
+		return 0
+	case "low":
+		return 1
+	case "error":
+		return 2
+	case "unknown":
+		return 3
+	case "unsupported":
+		return 4
+	default:
+		return 5
+	}
+}
+func quotaSourceValue(value *string) string {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return "none"
+	}
+	return strings.TrimSpace(*value)
+}
+func quotaSetMatches(values map[string]struct{}, value string) bool {
+	if len(values) == 0 {
+		return true
+	}
+	_, ok := values[strings.ToLower(strings.TrimSpace(value))]
+	return ok
+}
+func quotaAllowed(value string, allowed ...string) bool {
+	value = strings.TrimSpace(value)
+	for _, item := range allowed {
+		if value == item {
+			return true
+		}
+	}
+	return false
+}
+
+// NormalizeQuotaWindowValues reconciles quantities, ratios, and derived status.
+func NormalizeQuotaWindowValues(window *QuotaWindow) {
+	if window == nil || window.Status == "error" || window.Status == "unsupported" {
+		return
+	}
+	if window.IsUnlimited {
+		window.Status = "healthy"
+		window.UsedRatio = nil
+		window.RemainingRatio = nil
+		return
+	}
+	if window.Limit != nil {
+		limit := math.Max(0, *window.Limit)
+		window.Limit = quotaFloat64Pointer(limit)
+		if limit == 0 {
+			zero, one := 0.0, 1.0
+			window.Used, window.Remaining = &zero, &zero
+			window.UsedRatio, window.RemainingRatio = &one, &zero
+			window.Status = "exhausted"
+			return
+		}
+		used := math.NaN()
+		switch {
+		case window.Used != nil:
+			used = math.Max(0, math.Min(limit, *window.Used))
+		case window.Remaining != nil:
+			used = limit - math.Max(0, math.Min(limit, *window.Remaining))
+		case window.UsedRatio != nil:
+			used = limit * math.Max(0, math.Min(1, *window.UsedRatio))
+		case window.RemainingRatio != nil:
+			used = limit * (1 - math.Max(0, math.Min(1, *window.RemainingRatio)))
+		}
+		if !math.IsNaN(used) {
+			remaining := limit - used
+			usedRatio := used / limit
+			remainingRatio := 1 - usedRatio
+			window.Used, window.Remaining = &used, &remaining
+			window.UsedRatio, window.RemainingRatio = &usedRatio, &remainingRatio
+			window.Status = quotaStatusFromRemainingRatio(remainingRatio)
+		}
+		return
+	}
+	if window.UsedRatio != nil || window.RemainingRatio != nil {
+		usedRatio := 0.0
+		if window.UsedRatio != nil {
+			usedRatio = math.Max(0, math.Min(1, *window.UsedRatio))
+		} else {
+			usedRatio = 1 - math.Max(0, math.Min(1, *window.RemainingRatio))
+		}
+		remainingRatio := 1 - usedRatio
+		window.UsedRatio, window.RemainingRatio = &usedRatio, &remainingRatio
+		window.Status = quotaStatusFromRemainingRatio(remainingRatio)
+		return
+	}
+	if window.Remaining != nil {
+		if *window.Remaining == 0 {
+			window.Status = "exhausted"
+		} else if window.Status == "unknown" {
+			window.Status = "healthy"
+		}
+	}
+}
+
+func quotaFloat64Pointer(value float64) *float64 {
+	return &value
+}
+
+func quotaMaskAccount(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	local, domain, found := strings.Cut(value, "@")
+	if !found || strings.TrimSpace(domain) == "" {
+		return quotaMaskIdentifier(value)
+	}
+	localRunes := []rune(local)
+	visible := 2
+	if len(localRunes) < visible {
+		visible = len(localRunes)
+	}
+	if visible == 0 {
+		return "***@" + domain
+	}
+	return string(localRunes[:visible]) + "***@" + domain
+}
+
+func quotaMaskIdentifier(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= 4 {
+		return strings.Repeat("*", len(runes))
+	}
+	if len(runes) <= 8 {
+		return string(runes[:2]) + "..." + string(runes[len(runes)-2:])
+	}
+	return string(runes[:4]) + "..." + string(runes[len(runes)-4:])
+}
+
+func quotaSafeDisplayLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.Contains(value, "@") {
+		return quotaMaskAccount(value)
+	}
+	return value
+}
+
+func quotaBoundedRequestID(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 128 {
+		return ""
+	}
+	return value
+}
+
+func quotaFiniteOptional(value *float64) bool {
+	return value == nil || (!math.IsNaN(*value) && !math.IsInf(*value, 0) && *value >= 0)
+}
+func quotaRatio(value *float64) bool {
+	return quotaFiniteOptional(value) && (value == nil || *value <= 1)
+}
+func quotaObservationIsOlder(current, incoming *time.Time) bool {
+	if current == nil {
+		return false
+	}
+	return incoming == nil || current.After(incoming.UTC())
+}
+func quotaUTC(value *time.Time) *time.Time {
+	if value == nil || value.IsZero() {
+		return nil
+	}
+	utc := value.UTC()
+	return &utc
+}
+func quotaOptionalString(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+func quotaStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
+}
+func firstNonEmptyQuotaString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+func quotaAuthMetadata(auth *coreauth.Auth) map[string]any {
+	if auth == nil {
+		return nil
+	}
+	return auth.Metadata
+}
+func firstQuotaMetadataString(metadata map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := metadata[key]; ok {
+			switch typed := value.(type) {
+			case string:
+				if strings.TrimSpace(typed) != "" {
+					return strings.TrimSpace(typed)
+				}
+			case json.Number:
+				return typed.String()
+			}
+		}
+	}
+	return ""
+}
+func quotaCompareTime(left, right *time.Time) int {
+	if left == nil && right == nil {
+		return 0
+	}
+	if left == nil {
+		return 1
+	}
+	if right == nil {
+		return -1
+	}
+	if left.Before(*right) {
+		return -1
+	}
+	if left.After(*right) {
+		return 1
+	}
+	return 0
+}
+func quotaEarliestReset(windows []QuotaWindow) *time.Time {
+	var earliest *time.Time
+	for _, window := range windows {
+		if window.ResetAt != nil && (earliest == nil || window.ResetAt.Before(*earliest)) {
+			value := window.ResetAt.UTC()
+			earliest = &value
+		}
+	}
+	return earliest
+}
+func quotaSafeErrorMessage(message string) string {
+	message = strings.TrimSpace(message)
+	message = quotaBearerSecretPattern.ReplaceAllString(message, "[redacted]")
+	message = usageObservabilitySecretPattern.ReplaceAllString(message, "[redacted]")
+	replacer := strings.NewReplacer("Authorization", "[redacted]", "authorization", "[redacted]", "access_token", "[redacted]", "refresh_token", "[redacted]", "Cookie", "[redacted]", "cookie", "[redacted]")
+	message = replacer.Replace(message)
+	if len(message) > 500 {
+		message = message[:500]
+	}
+	return message
+}

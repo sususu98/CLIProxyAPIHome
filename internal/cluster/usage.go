@@ -177,6 +177,10 @@ func SanitizeUsagePayloadSecrets(payload string) (string, error) {
 	if !json.Valid([]byte(payload)) {
 		return "", fmt.Errorf("usage payload is invalid json")
 	}
+	payload, errQuotaHeaders := sanitizeUsageQuotaHeaders(payload)
+	if errQuotaHeaders != nil {
+		return "", errQuotaHeaders
+	}
 	if normalizeUsageObservabilityCredentialType(gjson.Get(payload, "auth_type").String()) != "provider_api_key" {
 		return payload, nil
 	}
@@ -266,7 +270,10 @@ func (r *Repository) AppendUsageWithRuntime(ctx context.Context, payload string,
 		if errCreate := tx.WithContext(ctx).Create(record).Error; errCreate != nil {
 			return errCreate
 		}
-		return r.createBillingChargeForUsageTx(ctx, tx, record, payload)
+		if errBilling := r.createBillingChargeForUsageTx(ctx, tx, record, payload); errBilling != nil {
+			return errBilling
+		}
+		return upsertQuotaFromUsagePayloadTx(ctx, tx, string(record.PayloadJSON), metadata)
 	})
 	if errTransaction != nil {
 		return nil, errTransaction

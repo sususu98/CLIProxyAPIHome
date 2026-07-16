@@ -17,12 +17,14 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/buildinfo"
+	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/logging"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/managementhttp"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/protocolmux"
+	quotacollector "github.com/router-for-me/CLIProxyAPIHome/internal/quota"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
@@ -272,6 +274,38 @@ func run() int {
 		log.Errorf("failed to start runtime: %v", errStart)
 		return 1
 	}
+	quotaHomeID := net.JoinHostPort(clusterClientAddr, strconv.Itoa(clusterAdvertisedPort))
+	quotaCollector := quotacollector.NewCollector(repo, quotacollector.Options{
+		HomeID: quotaHomeID,
+		GlobalProxyURLProvider: func() string {
+			currentConfig := rt.Config()
+			if currentConfig == nil {
+				return ""
+			}
+			return currentConfig.ProxyURL
+		},
+		ResolveAuth: func(ctx context.Context, candidate *coreauth.Auth) (*coreauth.Auth, error) {
+			if candidate == nil {
+				return nil, fmt.Errorf("quota collector credential is nil")
+			}
+			current, _, errAuth := repo.GetAuth(ctx, candidate.ID)
+			if errAuth != nil {
+				return nil, errAuth
+			}
+			manager := rt.CoreManager()
+			if manager != nil && manager.ShouldRefreshCredential(current, time.Now().UTC()) {
+				if _, errRefresh := rt.RefreshNow(ctx, current.ID); errRefresh != nil {
+					return nil, errRefresh
+				}
+				current, _, errAuth = repo.GetAuth(ctx, candidate.ID)
+				if errAuth != nil {
+					return nil, errAuth
+				}
+			}
+			return current, nil
+		},
+	})
+	quotaCollector.Start(runCtx)
 
 	respSrv := respserver.New(addr, rt)
 	respSrv.SetClusterHandler(clusterRESPHandler)

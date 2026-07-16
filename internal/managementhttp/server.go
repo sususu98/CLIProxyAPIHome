@@ -197,6 +197,8 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodDelete, "/api-keys", handler.DeleteAPIKeys)
 	r.Set(http.MethodGet, "/api-key-usage", handler.GetAPIKeyUsage)
 	r.Set(http.MethodGet, "/capabilities", handler.GetCapabilities)
+	r.Set(http.MethodGet, "/quota/credentials", handler.ListQuotaCredentials)
+	r.Set(http.MethodGet, "/quota/credentials/:credential_id", handler.GetQuotaCredential)
 	r.Set(http.MethodGet, "/usage/overview", handler.GetUsageOverview)
 	r.Set(http.MethodGet, "/usage/records", handler.ListUsageRecords)
 	r.Set(http.MethodGet, "/usage/records/:id", handler.GetUsageRecord)
