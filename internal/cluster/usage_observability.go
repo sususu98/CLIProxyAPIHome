@@ -2331,7 +2331,7 @@ func usageObservabilityRecordFromRow(row *usageObservabilityRecordRow) UsageObse
 		UsageID:            row.UsageID,
 		Timestamp:          row.Timestamp.UTC(),
 		RequestID:          strings.TrimSpace(row.RequestID),
-		UpstreamRequestID:  firstNonEmptyUsageObservabilityString(row.UpstreamRequestID, firstStringFromPayload(payload, "upstream_request_id", "upstream.request_id", "response.request_id", "response.id")),
+		UpstreamRequestID:  SafeQuotaRequestID(firstNonEmptyUsageObservabilityString(row.UpstreamRequestID, firstStringFromPayload(payload, "upstream_request_id", "upstream.request_id", "response.request_id", "response.id"))),
 		EventType:          usageObservabilityEventType(row, payload),
 		Status:             usageObservabilityRecordStatus(row.Failed),
 		Failed:             row.Failed,

@@ -196,7 +196,7 @@ func (c *Collector) collect(ctx context.Context) {
 
 func (c *Collector) collectCredential(ctx context.Context, auth *coreauth.Auth) {
 	now := c.options.Now().UTC()
-	claimed, errClaim := c.repo.ClaimQuotaProbe(ctx, auth.ID, c.options.Owner, now, c.options.LeaseDuration)
+	claimed, errClaim := c.repo.ClaimEligibleQuotaProbe(ctx, auth.ID, c.options.Owner, now, c.options.LeaseDuration)
 	if errClaim != nil {
 		log.WithError(errClaim).WithField("credential_id", auth.ID).Warn("quota collector: claim failed")
 		return
@@ -214,7 +214,6 @@ func (c *Collector) collectCredential(ctx context.Context, auth *coreauth.Auth) 
 		}
 		auth = resolved
 	}
-
 	result, errProbe := c.probeCredential(ctx, auth)
 	if errProbe != nil {
 		c.failProbe(ctx, auth.ID, errProbe)
@@ -229,7 +228,7 @@ func (c *Collector) collectCredential(ctx context.Context, auth *coreauth.Auth) 
 	}
 	input := cluster.QuotaSnapshotWrite{
 		CredentialID: auth.ID, QuotaStatus: status, CollectionStatus: collectionStatus, Source: "active_probe",
-		ObservedAt: &observedAt, ExpiresAt: &expiresAt, LastAttemptAt: &observedAt, LastSuccessAt: &observedAt,
+		ObservedAt: &observedAt, MaxAcceptedObservedAt: &observedAt, ExpiresAt: &expiresAt, LastAttemptAt: &observedAt, LastSuccessAt: &observedAt,
 		NextProbeAt: &expiresAt, ConsecutiveFailure: 0, Error: result.collectionError, ParserVersion: 1, CollectorVersion: 1,
 		ExpectedProbeOwner: c.options.Owner, ClearProbeLease: true, ReplaceWindows: result.replaceWindows, Windows: result.windows,
 	}
@@ -419,13 +418,45 @@ func quotaProbeEligible(auth *coreauth.Auth, now time.Time) bool {
 }
 
 func quotaProviderAPIKeyAuth(auth *coreauth.Auth) bool {
-	if auth == nil || auth.Attributes == nil {
+	if auth == nil {
+		return false
+	}
+	switch quotaExplicitAuthKind(auth) {
+	case "provider_api_key":
+		return true
+	case "oauth":
+		return false
+	}
+	if auth.Attributes == nil {
 		return false
 	}
 	if strings.HasPrefix(strings.TrimSpace(auth.Attributes["source"]), "config:") {
 		return true
 	}
 	return strings.TrimSpace(auth.Attributes["api_key"]) != "" && quotaMetadataString(auth.Metadata, "type") == ""
+}
+
+func quotaExplicitAuthKind(auth *coreauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	value := ""
+	if auth.Attributes != nil {
+		value = strings.TrimSpace(auth.Attributes["auth_kind"])
+	}
+	if value == "" {
+		value = quotaMetadataString(auth.Metadata, "auth_kind")
+	}
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	switch value {
+	case "apikey", "api_key", "provider_api_key":
+		return "provider_api_key"
+	case "oauth", "oauth2":
+		return "oauth"
+	default:
+		return ""
+	}
 }
 
 func normalizedQuotaProvider(provider string) string {
@@ -500,7 +531,7 @@ func quotaMetadataString(metadata map[string]any, keys ...string) string {
 
 func quotaResponseRequestID(headers http.Header) string {
 	for _, key := range []string{"X-Request-ID", "Request-ID", "OpenAI-Request-ID"} {
-		if value := strings.TrimSpace(headers.Get(key)); value != "" && len(value) <= 128 {
+		if value := cluster.SafeQuotaRequestID(headers.Get(key)); value != "" {
 			return value
 		}
 	}

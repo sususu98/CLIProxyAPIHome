@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"regexp"
 	"sort"
@@ -20,10 +21,21 @@ const quotaSnapshotSchemaVersion = 1
 
 const quotaSnapshotFallbackFreshness = 30 * time.Minute
 
+const (
+	quotaCredentialIDMaxLength = 128
+	quotaWindowTextMaxLength   = 256
+	quotaCurrencyMaxLength     = 16
+)
+
 // ErrQuotaProbeLeaseLost reports that an in-flight probe no longer owns its completion lease.
 var ErrQuotaProbeLeaseLost = errors.New("quota probe lease is no longer owned")
 
-var quotaBearerSecretPattern = regexp.MustCompile(`(?i)\bbearer\s+[^\s,;\]}]+`)
+var (
+	quotaBearerSecretPattern    = regexp.MustCompile(`(?i)\bbearer\s+[^\s,;\]}]+`)
+	quotaRequestIDSafePattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/+=-]{0,127}$`)
+	quotaRequestIDSecretPattern = regexp.MustCompile(`(?i)(bearer|authorization|access[_-]?token|refresh[_-]?token|api[_-]?key|cookie|secret|^sk[-_]|^gh[pousr]_)`)
+	quotaJWTSecretPattern       = regexp.MustCompile(`^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$`)
+)
 
 type QuotaSnapshotRecord struct {
 	CredentialID        string     `gorm:"column:credential_id;primaryKey;size:128"`
@@ -145,7 +157,7 @@ type QuotaCredentialSnapshot struct {
 	EarliestResetAt    *time.Time            `json:"earliest_reset_at"`
 	LastAttemptAt      *time.Time            `json:"last_attempt_at"`
 	LastSuccessAt      *time.Time            `json:"last_success_at"`
-	NextProbeAt        *time.Time            `json:"next_probe_at,omitempty"`
+	NextProbeAt        *time.Time            `json:"next_probe_at"`
 	ConsecutiveFailure int                   `json:"consecutive_failures"`
 	PrimaryWindows     []QuotaWindow         `json:"primary_windows"`
 	WindowCount        int                   `json:"window_count"`
@@ -155,24 +167,25 @@ type QuotaCredentialSnapshot struct {
 }
 
 type QuotaSnapshotWrite struct {
-	CredentialID       string
-	QuotaStatus        string
-	CollectionStatus   string
-	Source             string
-	ObservedAt         *time.Time
-	ExpiresAt          *time.Time
-	LastAttemptAt      *time.Time
-	LastSuccessAt      *time.Time
-	NextProbeAt        *time.Time
-	ConsecutiveFailure int
-	Error              *QuotaCollectionError
-	Runtime            *QuotaRuntime
-	ParserVersion      int
-	CollectorVersion   int
-	ExpectedProbeOwner string
-	ClearProbeLease    bool
-	ReplaceWindows     bool
-	Windows            []QuotaWindow
+	CredentialID          string
+	QuotaStatus           string
+	CollectionStatus      string
+	Source                string
+	ObservedAt            *time.Time
+	MaxAcceptedObservedAt *time.Time
+	ExpiresAt             *time.Time
+	LastAttemptAt         *time.Time
+	LastSuccessAt         *time.Time
+	NextProbeAt           *time.Time
+	ConsecutiveFailure    int
+	Error                 *QuotaCollectionError
+	Runtime               *QuotaRuntime
+	ParserVersion         int
+	CollectorVersion      int
+	ExpectedProbeOwner    string
+	ClearProbeLease       bool
+	ReplaceWindows        bool
+	Windows               []QuotaWindow
 }
 
 type QuotaListQuery struct {
@@ -254,7 +267,8 @@ func upsertQuotaSnapshotDB(ctx context.Context, db *gorm.DB, input QuotaSnapshot
 				return nil
 			}
 		}
-		if errExisting == nil && quotaObservationIsOlder(existing.ObservedAt, input.ObservedAt) {
+		existingObservationInvalid := errExisting == nil && input.MaxAcceptedObservedAt != nil && existing.ObservedAt != nil && existing.ObservedAt.After(input.MaxAcceptedObservedAt.UTC())
+		if errExisting == nil && !existingObservationInvalid && quotaObservationIsOlder(existing.ObservedAt, input.ObservedAt) {
 			return nil
 		}
 
@@ -278,11 +292,21 @@ func upsertQuotaSnapshotDB(ctx context.Context, db *gorm.DB, input QuotaSnapshot
 				record.ProbeLeaseExpiresAt = quotaUTC(existing.ProbeLeaseExpiresAt)
 			}
 		}
-		if errSave := tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "credential_id"}},
-			UpdateAll: true,
-		}).Create(&record).Error; errSave != nil {
+		accepted, errSave := createQuotaSnapshotRecord(tx, &record, input)
+		if errSave != nil {
 			return errSave
+		}
+		if !accepted {
+			return nil
+		}
+		if existingObservationInvalid {
+			if errDeleteWindows := tx.Where("credential_id = ?", input.CredentialID).Delete(&QuotaWindowRecord{}).Error; errDeleteWindows != nil {
+				return errDeleteWindows
+			}
+		} else if input.MaxAcceptedObservedAt != nil {
+			if errDeleteFutureWindows := tx.Where("credential_id = ? AND observed_at > ?", input.CredentialID, input.MaxAcceptedObservedAt.UTC()).Delete(&QuotaWindowRecord{}).Error; errDeleteFutureWindows != nil {
+				return errDeleteFutureWindows
+			}
 		}
 
 		if input.ReplaceWindows {
@@ -323,7 +347,8 @@ func upsertQuotaSnapshotDB(ctx context.Context, db *gorm.DB, input QuotaSnapshot
 			if errCurrent != nil && !errors.Is(errCurrent, gorm.ErrRecordNotFound) {
 				return errCurrent
 			}
-			if errCurrent == nil && current.ObservedAt.After(window.ObservedAt) {
+			currentObservationInvalid := errCurrent == nil && input.MaxAcceptedObservedAt != nil && current.ObservedAt.After(input.MaxAcceptedObservedAt.UTC())
+			if errCurrent == nil && !currentObservationInvalid && current.ObservedAt.After(window.ObservedAt) {
 				continue
 			}
 			if errCurrent == nil {
@@ -355,6 +380,32 @@ func upsertQuotaSnapshotDB(ctx context.Context, db *gorm.DB, input QuotaSnapshot
 		return nil
 	})
 	return updated, errTransaction
+}
+
+func createQuotaSnapshotRecord(tx *gorm.DB, record *QuotaSnapshotRecord, input QuotaSnapshotWrite) (bool, error) {
+	if tx == nil || record == nil {
+		return false, fmt.Errorf("quota snapshot write target is nil")
+	}
+	onConflict := clause.OnConflict{
+		Columns:   []clause.Column{{Name: "credential_id"}},
+		UpdateAll: true,
+	}
+	conditions := []string{`"quota_snapshot"."observed_at" IS NULL`}
+	values := make([]any, 0, 2)
+	if input.ObservedAt != nil {
+		conditions = append(conditions, `"quota_snapshot"."observed_at" <= ?`)
+		values = append(values, input.ObservedAt.UTC())
+	}
+	if input.MaxAcceptedObservedAt != nil {
+		conditions = append(conditions, `"quota_snapshot"."observed_at" > ?`)
+		values = append(values, input.MaxAcceptedObservedAt.UTC())
+	}
+	onConflict.Where = clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: strings.Join(conditions, " OR "), Vars: values}}}
+	resultSave := tx.Clauses(onConflict).Create(record)
+	if resultSave.Error != nil {
+		return false, resultSave.Error
+	}
+	return resultSave.RowsAffected > 0, nil
 }
 
 func quotaWindowRecordAggregateStatus(windows []QuotaWindowRecord) string {
@@ -397,6 +448,15 @@ func quotaWindowRecordAggregateSource(windows []QuotaWindowRecord) string {
 }
 
 func (r *Repository) ClaimQuotaProbe(ctx context.Context, credentialID string, owner string, now time.Time, leaseDuration time.Duration) (bool, error) {
+	return r.claimQuotaProbe(ctx, credentialID, owner, now, leaseDuration, false)
+}
+
+// ClaimEligibleQuotaProbe claims a lease only while the current DB credential remains eligible.
+func (r *Repository) ClaimEligibleQuotaProbe(ctx context.Context, credentialID string, owner string, now time.Time, leaseDuration time.Duration) (bool, error) {
+	return r.claimQuotaProbe(ctx, credentialID, owner, now, leaseDuration, true)
+}
+
+func (r *Repository) claimQuotaProbe(ctx context.Context, credentialID string, owner string, now time.Time, leaseDuration time.Duration, requireEligible bool) (bool, error) {
 	credentialID = strings.TrimSpace(credentialID)
 	owner = strings.TrimSpace(owner)
 	if credentialID == "" || owner == "" {
@@ -416,20 +476,42 @@ func (r *Repository) ClaimQuotaProbe(ctx context.Context, credentialID string, o
 	}
 	claimed := false
 	errTransaction := db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		if requireEligible {
+			var authRecord AuthRecord
+			errAuth := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&authRecord, "uuid = ?", credentialID).Error
+			if errors.Is(errAuth, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			if errAuth != nil {
+				return errAuth
+			}
+			auth, errConvert := quotaAuthFromRecord(&authRecord)
+			if errConvert != nil {
+				return errConvert
+			}
+			credentialType := quotaCredentialType(auth)
+			if !quotaCredentialCollectorPlanned(normalizeQuotaProviderID(authRecord.Provider), credentialType) || authRecord.Disabled || authRecord.Status == coreauth.StatusDisabled || authRecord.NextRetryAfter != nil && authRecord.NextRetryAfter.After(now) {
+				return nil
+			}
+		}
 		var record QuotaSnapshotRecord
 		errFind := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&record, "credential_id = ?", credentialID).Error
 		if errFind != nil && !errors.Is(errFind, gorm.ErrRecordNotFound) {
 			return errFind
 		}
+		observationInFuture := false
 		if errFind == nil {
 			if record.ProbeLeaseExpiresAt != nil && record.ProbeLeaseExpiresAt.After(now) {
 				return nil
 			}
-			if record.NextProbeAt != nil && record.NextProbeAt.After(now) {
-				return nil
-			}
-			if record.NextProbeAt == nil && record.ExpiresAt != nil && record.ExpiresAt.After(now) {
-				return nil
+			observationInFuture = record.ObservedAt != nil && record.ObservedAt.After(now.Add(quotaMaxFutureObservationSkew))
+			if !observationInFuture {
+				if record.NextProbeAt != nil && record.NextProbeAt.After(now) {
+					return nil
+				}
+				if record.NextProbeAt == nil && record.ExpiresAt != nil && record.ExpiresAt.After(now) {
+					return nil
+				}
 			}
 		}
 		leaseExpiresAt := now.Add(leaseDuration)
@@ -444,10 +526,29 @@ func (r *Repository) ClaimQuotaProbe(ctx context.Context, credentialID string, o
 				return errCreate
 			}
 		} else {
-			if errUpdate := tx.Model(&QuotaSnapshotRecord{}).Where("credential_id = ?", credentialID).Updates(map[string]any{
+			updates := map[string]any{
 				"collection_status": "collecting", "last_attempt_at": now, "probe_lease_owner": owner,
 				"probe_lease_expires_at": leaseExpiresAt, "updated_at": now,
-			}).Error; errUpdate != nil {
+			}
+			if observationInFuture {
+				if errDeleteWindows := tx.Where("credential_id = ?", credentialID).Delete(&QuotaWindowRecord{}).Error; errDeleteWindows != nil {
+					return errDeleteWindows
+				}
+				updates["quota_status"] = "unknown"
+				updates["source"] = ""
+				updates["observed_at"] = nil
+				updates["expires_at"] = nil
+				updates["last_success_at"] = nil
+				updates["next_probe_at"] = nil
+				updates["consecutive_failures"] = 0
+				updates["error_code"] = ""
+				updates["error_message"] = ""
+				updates["error_retryable"] = false
+				updates["error_occurred_at"] = nil
+				updates["error_status_code"] = 0
+				updates["error_request_id"] = ""
+			}
+			if errUpdate := tx.Model(&QuotaSnapshotRecord{}).Where("credential_id = ?", credentialID).Updates(updates).Error; errUpdate != nil {
 				return errUpdate
 			}
 		}
@@ -531,7 +632,7 @@ func (r *Repository) ListQuotaCredentials(ctx context.Context, query QuotaListQu
 	if query.Limit <= 0 || end > len(filtered) {
 		end = len(filtered)
 	}
-	result.Items = append([]QuotaCredentialSnapshot(nil), filtered[start:end]...)
+	result.Items = append([]QuotaCredentialSnapshot{}, filtered[start:end]...)
 	return result, nil
 }
 
@@ -554,7 +655,7 @@ func (r *Repository) GetQuotaCredential(ctx context.Context, credentialID string
 	if errFind := db.WithContext(ctx).Where("uuid = ?", credentialID).First(&record).Error; errFind != nil {
 		return nil, errFind
 	}
-	auth, errAuth := RecordToAuth(&record)
+	auth, errAuth := quotaAuthFromRecord(&record)
 	if errAuth != nil {
 		return nil, errAuth
 	}
@@ -611,7 +712,7 @@ func (r *Repository) loadQuotaCredentials(ctx context.Context, now time.Time) ([
 	}
 	items := make([]QuotaCredentialSnapshot, 0, len(authRecords))
 	for index := range authRecords {
-		auth, errAuth := RecordToAuth(&authRecords[index])
+		auth, errAuth := quotaAuthFromRecord(&authRecords[index])
 		if errAuth != nil {
 			return nil, errAuth
 		}
@@ -621,9 +722,23 @@ func (r *Repository) loadQuotaCredentials(ctx context.Context, now time.Time) ([
 	return items, nil
 }
 
+func quotaAuthFromRecord(record *AuthRecord) (*coreauth.Auth, error) {
+	if record == nil || strings.TrimSpace(record.UUID) == "" {
+		return nil, fmt.Errorf("quota auth record uuid is required")
+	}
+	auth := &coreauth.Auth{}
+	if errUnmarshal := json.Unmarshal([]byte(record.AuthJSON), auth); errUnmarshal != nil {
+		return nil, errUnmarshal
+	}
+	auth.ID = strings.TrimSpace(record.UUID)
+	auth.Index = firstNonEmptyQuotaString(record.Index, record.UUID)
+	auth.Provider = strings.TrimSpace(record.Provider)
+	return auth, nil
+}
+
 func quotaCredentialFromAuth(record AuthRecord, auth *coreauth.Auth, snapshot QuotaSnapshotRecord, windows []QuotaWindow, now time.Time) QuotaCredentialSnapshot {
 	credentialID := strings.TrimSpace(record.UUID)
-	authIndex := credentialID
+	authIndex := quotaOptionalString(firstNonEmptyQuotaString(record.Index, record.UUID))
 	provider := normalizeQuotaProviderID(record.Provider)
 	label := quotaSafeDisplayLabel(record.Label)
 	if label == "" && auth != nil {
@@ -642,7 +757,7 @@ func quotaCredentialFromAuth(record AuthRecord, auth *coreauth.Auth, snapshot Qu
 	credentialType := quotaCredentialType(auth)
 	item := QuotaCredentialSnapshot{
 		CredentialID:     credentialID,
-		AuthIndex:        &authIndex,
+		AuthIndex:        authIndex,
 		Provider:         firstNonEmptyQuotaString(provider, "unknown"),
 		CredentialType:   credentialType,
 		Label:            label,
@@ -677,7 +792,7 @@ func quotaCredentialFromAuth(record AuthRecord, auth *coreauth.Auth, snapshot Qu
 			item.Freshness = "fresh"
 		}
 	}
-	displayWindows := append([]QuotaWindow(nil), windows...)
+	displayWindows := append([]QuotaWindow{}, windows...)
 	if item.Freshness == "fresh" {
 		validWindows := make([]QuotaWindow, 0, len(displayWindows))
 		for _, window := range displayWindows {
@@ -758,6 +873,9 @@ func validateQuotaSnapshotWrite(input *QuotaSnapshotWrite) error {
 		return fmt.Errorf("quota credential id is required")
 	}
 	input.CredentialID = strings.TrimSpace(input.CredentialID)
+	if len(input.CredentialID) > quotaCredentialIDMaxLength {
+		return fmt.Errorf("quota credential id exceeds %d bytes", quotaCredentialIDMaxLength)
+	}
 	if input.ParserVersion <= 0 {
 		input.ParserVersion = quotaSnapshotSchemaVersion
 	}
@@ -776,6 +894,10 @@ func validateQuotaSnapshotWrite(input *QuotaSnapshotWrite) error {
 	if input.ConsecutiveFailure < 0 {
 		return fmt.Errorf("quota consecutive failures must be non-negative")
 	}
+	if input.MaxAcceptedObservedAt != nil {
+		maxAcceptedObservedAt := input.MaxAcceptedObservedAt.UTC()
+		input.MaxAcceptedObservedAt = &maxAcceptedObservedAt
+	}
 	if input.ObservedAt != nil {
 		observedAt := input.ObservedAt.UTC()
 		input.ObservedAt = &observedAt
@@ -787,7 +909,7 @@ func validateQuotaSnapshotWrite(input *QuotaSnapshotWrite) error {
 	seen := make(map[string]struct{}, len(input.Windows))
 	for index := range input.Windows {
 		window := &input.Windows[index]
-		window.ID = strings.TrimSpace(window.ID)
+		window.ID = quotaBoundedIdentifier(window.ID, quotaWindowTextMaxLength)
 		if window.ID == "" {
 			return fmt.Errorf("quota window id is required")
 		}
@@ -795,6 +917,9 @@ func validateQuotaSnapshotWrite(input *QuotaSnapshotWrite) error {
 			return fmt.Errorf("duplicate quota window id %q", window.ID)
 		}
 		seen[window.ID] = struct{}{}
+		window.Label = quotaBoundedOptionalText(window.Label, quotaWindowTextMaxLength)
+		window.ScopeID = quotaBoundedOptionalText(window.ScopeID, quotaWindowTextMaxLength)
+		window.Currency = quotaBoundedOptionalText(window.Currency, quotaCurrencyMaxLength)
 		window.Scope = firstNonEmptyQuotaString(window.Scope, "unknown")
 		window.Mode = firstNonEmptyQuotaString(window.Mode, "unknown")
 		window.Status = firstNonEmptyQuotaString(window.Status, "unknown")
@@ -849,10 +974,10 @@ func quotaSnapshotRecordFromWrite(input QuotaSnapshotWrite) QuotaSnapshotRecord 
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if input.Runtime != nil {
-		record.HomeID = strings.TrimSpace(input.Runtime.HomeID)
-		record.HomeLabel = strings.TrimSpace(input.Runtime.HomeLabel)
-		record.CPANodeID = strings.TrimSpace(input.Runtime.CPANodeID)
-		record.CPANodeLabel = strings.TrimSpace(input.Runtime.CPANodeLabel)
+		record.HomeID = quotaBoundedText(input.Runtime.HomeID, quotaWindowTextMaxLength)
+		record.HomeLabel = quotaBoundedText(input.Runtime.HomeLabel, quotaWindowTextMaxLength)
+		record.CPANodeID = quotaBoundedText(input.Runtime.CPANodeID, quotaWindowTextMaxLength)
+		record.CPANodeLabel = quotaBoundedText(input.Runtime.CPANodeLabel, quotaWindowTextMaxLength)
 	}
 	if input.Error != nil {
 		record.ErrorCode = strings.TrimSpace(input.Error.Code)
@@ -1045,13 +1170,39 @@ func quotaCollectionErrorFromRecord(record QuotaSnapshotRecord) *QuotaCollection
 		value := record.ErrorStatusCode
 		status = &value
 	}
-	requestID := quotaOptionalString(record.ErrorRequestID)
+	requestID := quotaOptionalString(SafeQuotaRequestID(record.ErrorRequestID))
 	return &QuotaCollectionError{Code: record.ErrorCode, Message: record.ErrorMessage, Retryable: record.ErrorRetryable, OccurredAt: quotaUTC(record.ErrorOccurredAt), UpstreamStatusCode: status, RequestID: requestID}
+}
+
+func quotaCredentialIdentityChanged(existing AuthRecord, next AuthRecord) bool {
+	if normalizeQuotaProviderID(existing.Provider) != normalizeQuotaProviderID(next.Provider) {
+		return true
+	}
+	existingAuth, errExisting := quotaAuthFromRecord(&existing)
+	if errExisting != nil {
+		return true
+	}
+	nextAuth, errNext := quotaAuthFromRecord(&next)
+	if errNext != nil {
+		return true
+	}
+	return quotaCredentialType(existingAuth) != quotaCredentialType(nextAuth)
 }
 
 func quotaCredentialType(auth *coreauth.Auth) string {
 	if auth == nil {
 		return "unknown"
+	}
+	if strings.Contains(strings.ToLower(auth.Provider), "vertex") {
+		return "vertex"
+	}
+	if auth.Attributes != nil {
+		if credentialType := normalizeQuotaCredentialType(auth.Attributes["auth_kind"]); credentialType != "" {
+			return credentialType
+		}
+	}
+	if credentialType := normalizeQuotaCredentialType(firstQuotaMetadataString(auth.Metadata, "auth_kind")); credentialType != "" {
+		return credentialType
 	}
 	if auth.Attributes != nil && strings.HasPrefix(strings.TrimSpace(auth.Attributes["source"]), "config:") {
 		return "provider_api_key"
@@ -1059,13 +1210,23 @@ func quotaCredentialType(auth *coreauth.Auth) string {
 	if auth.Metadata != nil && strings.TrimSpace(firstQuotaMetadataString(auth.Metadata, "type")) != "" {
 		return "oauth"
 	}
-	if strings.Contains(strings.ToLower(auth.Provider), "vertex") {
-		return "vertex"
-	}
 	if auth.Attributes != nil && strings.TrimSpace(auth.Attributes["api_key"]) != "" {
 		return "provider_api_key"
 	}
 	return "file_auth"
+}
+
+func normalizeQuotaCredentialType(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	switch value {
+	case "apikey", "api_key", "provider_api_key":
+		return "provider_api_key"
+	case "oauth", "oauth2":
+		return "oauth"
+	default:
+		return ""
+	}
 }
 
 func quotaCredentialStatus(record AuthRecord, now time.Time) string {
@@ -1235,6 +1396,41 @@ func NormalizeQuotaWindowValues(window *QuotaWindow) {
 	}
 }
 
+func quotaBoundedIdentifier(value string, maxLength int) string {
+	value = strings.TrimSpace(strings.ToValidUTF8(value, ""))
+	if maxLength <= 0 || len(value) <= maxLength {
+		return value
+	}
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(value))
+	suffix := fmt.Sprintf("-%016x", hash.Sum64())
+	prefixLength := maxLength - len(suffix)
+	if prefixLength <= 0 {
+		return suffix[len(suffix)-maxLength:]
+	}
+	prefix := strings.TrimRight(strings.ToValidUTF8(value[:prefixLength], ""), "-")
+	return prefix + suffix
+}
+
+func quotaBoundedText(value string, maxLength int) string {
+	value = strings.TrimSpace(strings.ToValidUTF8(value, ""))
+	if maxLength > 0 && len(value) > maxLength {
+		value = strings.ToValidUTF8(value[:maxLength], "")
+	}
+	return value
+}
+
+func quotaBoundedOptionalText(value *string, maxLength int) *string {
+	if value == nil {
+		return nil
+	}
+	bounded := quotaBoundedText(*value, maxLength)
+	if bounded == "" {
+		return nil
+	}
+	return &bounded
+}
+
 func quotaFloat64Pointer(value float64) *float64 {
 	return &value
 }
@@ -1282,12 +1478,17 @@ func quotaSafeDisplayLabel(value string) string {
 	return value
 }
 
-func quotaBoundedRequestID(value string) string {
+// SafeQuotaRequestID accepts only bounded, non-secret request identifiers.
+func SafeQuotaRequestID(value string) string {
 	value = strings.TrimSpace(value)
-	if len(value) > 128 {
+	if !quotaRequestIDSafePattern.MatchString(value) || quotaRequestIDSecretPattern.MatchString(value) || quotaJWTSecretPattern.MatchString(value) {
 		return ""
 	}
 	return value
+}
+
+func quotaBoundedRequestID(value string) string {
+	return SafeQuotaRequestID(value)
 }
 
 func quotaFiniteOptional(value *float64) bool {
@@ -1385,8 +1586,9 @@ func quotaSafeErrorMessage(message string) string {
 	message = usageObservabilitySecretPattern.ReplaceAllString(message, "[redacted]")
 	replacer := strings.NewReplacer("Authorization", "[redacted]", "authorization", "[redacted]", "access_token", "[redacted]", "refresh_token", "[redacted]", "Cookie", "[redacted]", "cookie", "[redacted]")
 	message = replacer.Replace(message)
+	message = strings.ToValidUTF8(message, "")
 	if len(message) > 500 {
-		message = message[:500]
+		message = strings.ToValidUTF8(message[:500], "")
 	}
 	return message
 }

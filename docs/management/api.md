@@ -2435,11 +2435,11 @@ Response fields:
 
 ### Quota Snapshot Conventions
 
-Quota snapshot endpoints are read-only DB views. Reading them does not call an upstream provider, refresh OAuth tokens, change scheduler priority, or consume a queue. A credential that exists but has never produced a snapshot or collection attempt is returned with `quota_status=unknown`, `freshness=never`, an empty window list, and HTTP `200`. If its first collection attempt fails before any usable quota fact exists, it is returned as `quota_status=error`, `freshness=never`, and `collection_status=failed`. A credential whose provider is explicitly outside the current collector plan is returned as `unsupported`. Deleted credentials are not visible and their quota rows are deleted with the credential.
+Quota snapshot endpoints are read-only DB views. Reading them does not call an upstream provider, refresh OAuth tokens, change scheduler priority, or consume a queue. A credential that exists but has never produced a snapshot or collection attempt is returned with `quota_status=unknown`, `freshness=never`, an empty window list, and HTTP `200`. If its first collection attempt fails before any usable quota fact exists, it is returned as `quota_status=error`, `freshness=never`, and `collection_status=failed`. A credential whose provider is explicitly outside the current collector plan is returned as `unsupported`. Deleted credentials are not visible and their quota rows are deleted with the credential. Changing a credential's provider or credential type also discards snapshots from the previous identity.
 
 All timestamps are RFC3339 UTC values or `null`. Ratios are numbers in `[0,1]`. Quantity fields may be `null`; unlimited quota uses `is_unlimited=true`. Different provider periods remain separate windows. While a snapshot is fresh, an individually expired merged window is omitted and no longer contributes to status/source. Once the snapshot itself is stale, the detail view retains its last-known windows for diagnosis. `earliest_reset_at` is the minimum non-null `reset_at` across the same complete internal window set represented by the credential item. It may be in the past for stale last-known data.
 
-Current passive collection extracts a bounded `quota_headers` object from the CPA usage event `response_headers`. Home preserves only the Codex `X-Codex-*` quota allowlist plus a bounded upstream request ID, and removes the raw `response_headers` object before writing the usage payload. Codex Header observations are normalized and upserted in the same database transaction as the usage record. Older observations cannot replace a newer snapshot or window. A newer Header observation invalidates an in-flight active-probe lease. Partial Header updates retain only still-valid older windows; expired windows cannot make a new snapshot appear healthy or exhausted.
+Current passive collection extracts a bounded `quota_headers` object from the CPA usage event `response_headers`. Home preserves only the Codex `X-Codex-*` quota allowlist plus a syntax-validated, non-secret-like upstream request ID, and removes the raw `response_headers` object before writing the usage payload. The reported `auth_index` is resolved against the active auth UUID, runtime index, and ID before the snapshot is stored under the stable UUID. Codex Header observations are normalized and upserted in the same database transaction as the usage record; invalid quota metadata is isolated so it cannot roll back the core usage or billing write. Timestamps more than five minutes ahead of Home's receive time are normalized to the receive time. Older observations cannot replace a newer snapshot or window, including concurrent first writes. A newer Header observation invalidates an in-flight active-probe lease. Partial Header updates retain only still-valid older windows; expired windows cannot make a new snapshot appear healthy or exhausted.
 
 Home also runs fixed-target active collectors for Claude, Antigravity, Codex, Kimi, and xAI OAuth/file credentials. Codex reads the official usage endpoint; Claude reads usage and profile, reporting `partial` when quota succeeds but profile metadata fails; Antigravity tries its fixed backend candidates with the credential `project_id`; Kimi reads coding usage; xAI reads billing and converts provider cents into explicit USD currency values. Provider API-key credentials that cannot use these OAuth collectors are returned as `unsupported`.
 
@@ -2529,7 +2529,20 @@ Returns filtered, paginated current credential snapshots.
     "needs_attention": 0,
     "last_observed_at": null
   },
-  "global_summary": {},
+  "global_summary": {
+    "total_credentials": 0,
+    "healthy": 0,
+    "low": 0,
+    "exhausted": 0,
+    "unknown": 0,
+    "error": 0,
+    "unsupported": 0,
+    "stale": 0,
+    "never": 0,
+    "collecting": 0,
+    "needs_attention": 0,
+    "last_observed_at": null
+  },
   "facets": {
     "providers": [],
     "quota_statuses": [],

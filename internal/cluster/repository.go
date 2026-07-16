@@ -220,6 +220,14 @@ func (r *Repository) upsertAuthWithResult(ctx context.Context, auth *coreauth.Au
 			if errUpdate := tx.Unscoped().Select("*").Where("uuid = ?", record.UUID).Updates(record).Error; errUpdate != nil {
 				return errUpdate
 			}
+			if existing.DeletedAt.Valid || quotaCredentialIdentityChanged(existing, *record) {
+				if errDeleteWindows := tx.Where("credential_id = ?", record.UUID).Delete(&QuotaWindowRecord{}).Error; errDeleteWindows != nil {
+					return errDeleteWindows
+				}
+				if errDeleteSnapshot := tx.Where("credential_id = ?", record.UUID).Delete(&QuotaSnapshotRecord{}).Error; errDeleteSnapshot != nil {
+					return errDeleteSnapshot
+				}
+			}
 			if existing.DeletedAt.Valid {
 				result = UpsertResultRestored
 			} else {

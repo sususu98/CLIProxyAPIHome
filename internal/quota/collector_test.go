@@ -259,6 +259,8 @@ func TestQuotaProbeEligibilitySkipsDisabledCooldownAndUnavailableCredentials(t *
 		{name: "expired cooldown", auth: &coreauth.Auth{ID: "expired-cooldown", Provider: "codex", Status: coreauth.StatusError, Unavailable: true, NextRetryAfter: now.Add(-time.Minute)}, want: true},
 		{name: "unavailable without future cooldown", auth: &coreauth.Auth{ID: "unavailable", Provider: "codex", Status: coreauth.StatusError, Unavailable: true}, want: true},
 		{name: "provider api key", auth: &coreauth.Auth{ID: "api-key", Provider: "xai", Status: coreauth.StatusActive, Attributes: map[string]string{"source": "config:xai", "api_key": "secret"}}, want: false},
+		{name: "explicit api key wins legacy oauth metadata", auth: &coreauth.Auth{ID: "explicit-api-key", Provider: "codex", Status: coreauth.StatusActive, Attributes: map[string]string{"auth_kind": "apikey", "api_key": "secret"}, Metadata: map[string]any{"type": "codex"}}, want: false},
+		{name: "explicit oauth wins api key shape", auth: &coreauth.Auth{ID: "explicit-oauth", Provider: "codex", Status: coreauth.StatusActive, Attributes: map[string]string{"auth_kind": "oauth", "api_key": "secret"}, Metadata: map[string]any{"type": "codex"}}, want: true},
 		{name: "unsupported provider", auth: &coreauth.Auth{ID: "vertex", Provider: "vertex", Status: coreauth.StatusActive}, want: false},
 	}
 	for _, test := range tests {
@@ -330,6 +332,43 @@ func TestCollectorResolvesFreshAuthBeforeProbe(t *testing.T) {
 	collector.collect(context.Background())
 	if resolved.Load() != 1 {
 		t.Fatalf("ResolveAuth calls = %d, want 1", resolved.Load())
+	}
+}
+
+func TestCollectorSkipsStaleCandidateWhenDBCredentialBecameAPIKey(t *testing.T) {
+	repo := newCollectorTestRepository(t)
+	now := time.Date(2026, 7, 16, 9, 45, 0, 0, time.UTC)
+	seedCollectorAuth(t, repo, "codex-became-api-key", map[string]any{"type": "codex", "access_token": "old-token"})
+	candidate, _, errCandidate := repo.GetAuth(context.Background(), "codex-became-api-key")
+	if errCandidate != nil {
+		t.Fatalf("GetAuth(candidate) error = %v", errCandidate)
+	}
+	apiKeyAuth := &coreauth.Auth{
+		ID: "codex-became-api-key", Index: "codex-became-api-key", Provider: "codex", Status: coreauth.StatusActive,
+		Attributes: map[string]string{"auth_kind": "apikey", "source": "config:codex", "api_key": "secret"}, Metadata: map[string]any{"type": "codex"}, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, errUpsert := repo.UpsertAuth(context.Background(), apiKeyAuth, "test"); errUpsert != nil {
+		t.Fatalf("UpsertAuth(API key) error = %v", errUpsert)
+	}
+	var resolved atomic.Int32
+	collector := NewCollector(repo, Options{
+		Owner: "home-a", Now: func() time.Time { return now },
+		ResolveAuth: func(ctx context.Context, _ *coreauth.Auth) (*coreauth.Auth, error) {
+			resolved.Add(1)
+			current, _, errGet := repo.GetAuth(ctx, apiKeyAuth.ID)
+			return current, errGet
+		},
+	})
+	collector.collectCredential(context.Background(), candidate)
+	if resolved.Load() != 0 {
+		t.Fatalf("ResolveAuth calls = %d, want 0", resolved.Load())
+	}
+	item, errGet := repo.GetQuotaCredential(context.Background(), apiKeyAuth.ID, now)
+	if errGet != nil {
+		t.Fatalf("GetQuotaCredential() error = %v", errGet)
+	}
+	if item.CredentialType != "provider_api_key" || item.QuotaStatus != "unsupported" || item.CollectionStatus != "unsupported" || item.ObservedAt != nil {
+		t.Fatalf("ineligible resolved credential retained probe state: %+v", item)
 	}
 }
 

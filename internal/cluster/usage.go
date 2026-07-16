@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	"gorm.io/gorm"
@@ -273,7 +274,13 @@ func (r *Repository) AppendUsageWithRuntime(ctx context.Context, payload string,
 		if errBilling := r.createBillingChargeForUsageTx(ctx, tx, record, payload); errBilling != nil {
 			return errBilling
 		}
-		return upsertQuotaFromUsagePayloadTx(ctx, tx, string(record.PayloadJSON), metadata)
+		errQuota := tx.WithContext(ctx).Transaction(func(quotaTx *gorm.DB) error {
+			return upsertQuotaFromUsagePayloadTx(ctx, quotaTx, string(record.PayloadJSON), metadata, record.CreatedAt)
+		})
+		if errQuota != nil {
+			log.WithError(errQuota).Warn("usage quota observation ignored")
+		}
+		return nil
 	})
 	if errTransaction != nil {
 		return nil, errTransaction

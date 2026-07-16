@@ -146,6 +146,59 @@ func TestQuotaManagementMissingCredentialReturnsUniformNotFound(t *testing.T) {
 	}
 }
 
+func TestQuotaManagementEmptyCollectionsUseJSONArrays(t *testing.T) {
+	handler, closeRepo := newUsageObservabilityTestHandler(t)
+	defer closeRepo()
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/quota/credentials", handler.ListQuotaCredentials)
+	engine.GET("/quota/credentials/:credential_id", handler.GetQuotaCredential)
+
+	listResponse := httptest.NewRecorder()
+	engine.ServeHTTP(listResponse, httptest.NewRequest(http.MethodGet, "/quota/credentials", nil))
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", listResponse.Code, listResponse.Body.String())
+	}
+	var listPayload map[string]any
+	if errDecode := json.Unmarshal(listResponse.Body.Bytes(), &listPayload); errDecode != nil {
+		t.Fatalf("decode list response: %v", errDecode)
+	}
+	items, ok := listPayload["items"].([]any)
+	if !ok || len(items) != 0 {
+		t.Fatalf("items = %#v, want empty array", listPayload["items"])
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	auth := &coreauth.Auth{ID: "quota-empty-windows", Index: "quota-empty-windows", Provider: "codex", Status: coreauth.StatusActive, Metadata: map[string]any{"type": "codex"}, CreatedAt: now, UpdatedAt: now}
+	if _, errUpsert := handler.repo.UpsertAuth(context.Background(), auth, "test"); errUpsert != nil {
+		t.Fatalf("UpsertAuth() error = %v", errUpsert)
+	}
+	if claimed, errClaim := handler.repo.ClaimQuotaProbe(context.Background(), auth.ID, "home-a", now, time.Minute); errClaim != nil || !claimed {
+		t.Fatalf("ClaimQuotaProbe() = %v, %v", claimed, errClaim)
+	}
+
+	detailResponse := httptest.NewRecorder()
+	engine.ServeHTTP(detailResponse, httptest.NewRequest(http.MethodGet, "/quota/credentials/"+auth.ID, nil))
+	if detailResponse.Code != http.StatusOK {
+		t.Fatalf("detail status = %d body=%s", detailResponse.Code, detailResponse.Body.String())
+	}
+	var detailPayload map[string]any
+	if errDecode := json.Unmarshal(detailResponse.Body.Bytes(), &detailPayload); errDecode != nil {
+		t.Fatalf("decode detail response: %v", errDecode)
+	}
+	windows, ok := detailPayload["windows"].([]any)
+	if !ok || len(windows) != 0 {
+		t.Fatalf("windows = %#v, want empty array", detailPayload["windows"])
+	}
+	credential, ok := detailPayload["credential"].(map[string]any)
+	if !ok {
+		t.Fatalf("credential = %T, want object", detailPayload["credential"])
+	}
+	if _, exists := credential["next_probe_at"]; !exists {
+		t.Fatalf("credential omitted next_probe_at: %#v", credential)
+	}
+}
+
 func TestQuotaManagementReturnsServiceUnavailableForDatabaseOutage(t *testing.T) {
 	handler := NewHandler(cluster.NewRepository(nil), nil, "", 0)
 	gin.SetMode(gin.TestMode)

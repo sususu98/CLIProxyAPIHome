@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/tidwall/gjson"
@@ -650,6 +651,420 @@ func TestSoftDeleteAuthRemovesQuotaRowsAndVisibility(t *testing.T) {
 	}
 	if snapshotCount != 0 || windowCount != 0 {
 		t.Fatalf("deleted quota rows remain: snapshots=%d windows=%d", snapshotCount, windowCount)
+	}
+}
+
+func TestAppendUsageMapsRuntimeAuthIndexToCredentialUUID(t *testing.T) {
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	now := time.Date(2026, 7, 16, 13, 0, 0, 0, time.UTC)
+	auth := &coreauth.Auth{ID: "quota-runtime-uuid", Index: "quota-runtime-uuid", Provider: "codex", Label: "Runtime Index", Status: coreauth.StatusActive, Metadata: map[string]any{"type": "codex"}, CreatedAt: now, UpdatedAt: now}
+	record, errRecord := AuthToRecord(auth)
+	if errRecord != nil {
+		t.Fatalf("AuthToRecord() error = %v", errRecord)
+	}
+	record.Index = "runtime-index-1"
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	if errCreate := db.Create(record).Error; errCreate != nil {
+		t.Fatalf("create compatibility auth: %v", errCreate)
+	}
+
+	payload := `{"timestamp":"2026-07-16T13:00:00Z","provider":"codex","auth_type":"oauth","auth_index":"runtime-index-1","response_headers":{"X-Codex-Primary-Used-Percent":["10"],"X-Codex-Primary-Window-Minutes":["300"],"X-Codex-Primary-Reset-After-Seconds":["60"]}}`
+	if _, errAppend := repo.AppendUsageWithRuntime(ctx, payload, UsageRuntimeMetadata{}); errAppend != nil {
+		t.Fatalf("AppendUsageWithRuntime() error = %v", errAppend)
+	}
+
+	item, errGet := repo.GetQuotaCredential(ctx, auth.ID, now)
+	if errGet != nil {
+		t.Fatalf("GetQuotaCredential() error = %v", errGet)
+	}
+	if item.AuthIndex == nil || *item.AuthIndex != "runtime-index-1" || item.QuotaStatus != "healthy" || len(item.Windows) != 1 {
+		t.Fatalf("runtime-index quota item = %+v", item)
+	}
+	result, errList := repo.ListQuotaCredentials(ctx, QuotaListQuery{Limit: 50, Now: now})
+	if errList != nil {
+		t.Fatalf("ListQuotaCredentials() error = %v", errList)
+	}
+	if len(result.Items) != 1 || result.Items[0].CredentialID != auth.ID {
+		t.Fatalf("quota list = %+v", result.Items)
+	}
+	var uuidCount, runtimeIndexCount int64
+	if errCount := db.Model(&QuotaSnapshotRecord{}).Where("credential_id = ?", auth.ID).Count(&uuidCount).Error; errCount != nil {
+		t.Fatalf("count UUID snapshots: %v", errCount)
+	}
+	if errCount := db.Model(&QuotaSnapshotRecord{}).Where("credential_id = ?", "runtime-index-1").Count(&runtimeIndexCount).Error; errCount != nil {
+		t.Fatalf("count runtime-index snapshots: %v", errCount)
+	}
+	if uuidCount != 1 || runtimeIndexCount != 0 {
+		t.Fatalf("snapshot counts uuid=%d runtime-index=%d", uuidCount, runtimeIndexCount)
+	}
+}
+
+func TestAppendUsageBoundsLongQuotaWindowMetadata(t *testing.T) {
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	now := time.Date(2026, 7, 16, 13, 15, 0, 0, time.UTC)
+	seedQuotaSnapshotAuth(t, repo, "quota-long-window", "codex", "Long Window", map[string]any{"type": "codex"})
+	group := strings.Repeat("A", 400)
+	label := strings.Repeat("L", 400)
+	payload := `{"timestamp":"2026-07-16T13:15:00Z","provider":"codex","auth_type":"oauth","auth_index":"quota-long-window","response_headers":{"X-Codex-` + group + `-Limit-Name":["` + label + `"],"X-Codex-` + group + `-Primary-Used-Percent":["10"],"X-Codex-` + group + `-Primary-Window-Minutes":["300"],"X-Codex-` + group + `-Primary-Reset-After-Seconds":["60"]}}`
+	if _, errAppend := repo.AppendUsageWithRuntime(ctx, payload, UsageRuntimeMetadata{}); errAppend != nil {
+		t.Fatalf("AppendUsageWithRuntime() error = %v", errAppend)
+	}
+	item, errGet := repo.GetQuotaCredential(ctx, "quota-long-window", now)
+	if errGet != nil {
+		t.Fatalf("GetQuotaCredential() error = %v", errGet)
+	}
+	if len(item.Windows) != 1 || len(item.Windows[0].ID) > quotaWindowTextMaxLength || item.Windows[0].Label == nil || len(*item.Windows[0].Label) > quotaWindowTextMaxLength {
+		t.Fatalf("bounded quota window = %+v", item.Windows)
+	}
+}
+
+func TestInvalidQuotaHeadersDoNotRollbackUsage(t *testing.T) {
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	seedQuotaSnapshotAuth(t, repo, "quota-invalid-headers", "codex", "Invalid Headers", map[string]any{"type": "codex"})
+	username := "quota-billing-user"
+	credits := 10.0
+	user, errCreateUser := repo.CreateUser(ctx, UserUpdate{Username: &username, Credits: &credits})
+	if errCreateUser != nil {
+		t.Fatalf("CreateUser() error = %v", errCreateUser)
+	}
+	clientKey := "quota-client-key"
+	if _, errCreateKey := repo.CreateAPIKeyForUser(ctx, user.ID, APIKeyUserUpdate{APIKey: &clientKey}); errCreateKey != nil {
+		t.Fatalf("CreateAPIKeyForUser() error = %v", errCreateKey)
+	}
+	if _, errCreatePrice := repo.CreateBillingModelPrice(ctx, BillingModelPriceUpdate{Provider: "codex", Model: "gpt-quota", RequestPrice: 2, Enabled: true}); errCreatePrice != nil {
+		t.Fatalf("CreateBillingModelPrice() error = %v", errCreatePrice)
+	}
+	payload := `{"timestamp":"2026-07-16T13:20:00Z","provider":"codex","model":"gpt-quota","api_key":"quota-client-key","auth_type":"oauth","auth_index":"quota-invalid-headers","request_id":"req-invalid-quota","tokens":{"total_tokens":1},"response_headers":{"X-Codex-Foo-Bar-Limit-Name":["First"],"X-Codex-Foo-Bar-Primary-Used-Percent":["10"],"X-Codex-Foo-Bar-Primary-Window-Minutes":["300"],"X-Codex-Foo-Bar-Primary-Reset-After-Seconds":["60"],"X-Codex-Foo--Bar-Limit-Name":["Second"],"X-Codex-Foo--Bar-Primary-Used-Percent":["20"],"X-Codex-Foo--Bar-Primary-Window-Minutes":["300"],"X-Codex-Foo--Bar-Primary-Reset-After-Seconds":["60"]}}`
+	if _, errAppend := repo.AppendUsageWithRuntime(ctx, payload, UsageRuntimeMetadata{}); errAppend != nil {
+		t.Fatalf("AppendUsageWithRuntime() error = %v", errAppend)
+	}
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	var usageCount, snapshotCount int64
+	if errCount := db.Model(&UsageRecord{}).Where("request_id = ?", "req-invalid-quota").Count(&usageCount).Error; errCount != nil {
+		t.Fatalf("count usage: %v", errCount)
+	}
+	if errCount := db.Model(&QuotaSnapshotRecord{}).Where("credential_id = ?", "quota-invalid-headers").Count(&snapshotCount).Error; errCount != nil {
+		t.Fatalf("count snapshots: %v", errCount)
+	}
+	if usageCount != 1 || snapshotCount != 0 {
+		t.Fatalf("usage/snapshot counts = %d/%d, want 1/0", usageCount, snapshotCount)
+	}
+	charges, errCharges := repo.ListBillingCharges(ctx, BillingChargeQuery{UserID: &user.ID, Limit: 10})
+	if errCharges != nil {
+		t.Fatalf("ListBillingCharges() error = %v", errCharges)
+	}
+	if len(charges.Records) != 1 || charges.Records[0].Amount != 2 {
+		t.Fatalf("billing charges = %+v, want one amount=2 charge", charges.Records)
+	}
+}
+
+func TestAppendUsageRejectsQuotaForMismatchedOrDeletedCredential(t *testing.T) {
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	now := time.Date(2026, 7, 16, 13, 30, 0, 0, time.UTC)
+	seedQuotaSnapshotAuth(t, repo, "quota-provider-mismatch", "claude", "Claude", map[string]any{"type": "claude"})
+	seedQuotaSnapshotAuth(t, repo, "quota-deleted-observation", "codex", "Deleted", map[string]any{"type": "codex"})
+	if errDelete := repo.SoftDeleteAuth(ctx, "quota-deleted-observation"); errDelete != nil {
+		t.Fatalf("SoftDeleteAuth() error = %v", errDelete)
+	}
+
+	for _, credentialID := range []string{"quota-provider-mismatch", "quota-deleted-observation"} {
+		payload := `{"timestamp":"2026-07-16T13:30:00Z","provider":"codex","auth_type":"oauth","auth_index":"` + credentialID + `","response_headers":{"X-Codex-Primary-Used-Percent":["10"],"X-Codex-Primary-Window-Minutes":["300"],"X-Codex-Primary-Reset-After-Seconds":["60"]}}`
+		if _, errAppend := repo.AppendUsageWithRuntime(ctx, payload, UsageRuntimeMetadata{}); errAppend != nil {
+			t.Fatalf("AppendUsageWithRuntime(%s) error = %v", credentialID, errAppend)
+		}
+	}
+
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	var count int64
+	if errCount := db.Model(&QuotaSnapshotRecord{}).Where("credential_id IN ?", []string{"quota-provider-mismatch", "quota-deleted-observation"}).Count(&count).Error; errCount != nil {
+		t.Fatalf("count quota snapshots: %v", errCount)
+	}
+	if count != 0 {
+		t.Fatalf("mismatched/deleted credential snapshot count = %d, want 0", count)
+	}
+	item, errGet := repo.GetQuotaCredential(ctx, "quota-provider-mismatch", now)
+	if errGet != nil {
+		t.Fatalf("GetQuotaCredential() error = %v", errGet)
+	}
+	if item.Freshness != "never" || item.CollectionStatus != "idle" {
+		t.Fatalf("mismatched credential quota item = %+v", item)
+	}
+}
+
+func TestSanitizeUsagePayloadRejectsSecretLikeRequestIDs(t *testing.T) {
+	payload := `{"timestamp":"2026-07-16T13:45:00Z","provider":"codex","upstream_request_id":"Bearer token","upstream":{"request_id":"sk-secret"},"response":{"request_id":"Authorization: token","id":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturevalue"}}`
+	sanitized, errSanitize := SanitizeUsagePayloadSecrets(payload)
+	if errSanitize != nil {
+		t.Fatalf("SanitizeUsagePayloadSecrets() error = %v", errSanitize)
+	}
+	for _, path := range []string{"upstream_request_id", "upstream.request_id", "response.request_id", "response.id"} {
+		if gjson.Get(sanitized, path).Exists() {
+			t.Fatalf("sanitized payload retained %s: %s", path, sanitized)
+		}
+	}
+	row := &usageObservabilityRecordRow{UpstreamRequestID: "Bearer historical-token"}
+	if record := usageObservabilityRecordFromRow(row); record.UpstreamRequestID != "" {
+		t.Fatalf("historical upstream request ID = %q, want empty", record.UpstreamRequestID)
+	}
+}
+
+func TestQuotaUsageObservationClampsExcessiveFutureTimestamp(t *testing.T) {
+	now := time.Date(2026, 7, 16, 14, 0, 0, 0, time.UTC)
+	payload := `{"timestamp":"2099-01-01T00:00:00Z","provider":"codex","auth_index":"future-auth","quota_headers":{"X-Codex-Primary-Used-Percent":"10","X-Codex-Primary-Window-Minutes":"300","X-Codex-Primary-Reset-After-Seconds":"60"}}`
+	input, ok := quotaSnapshotWriteFromUsagePayload(payload, UsageRuntimeMetadata{}, now)
+	if !ok {
+		t.Fatal("quotaSnapshotWriteFromUsagePayload() did not return a snapshot")
+	}
+	if input.ObservedAt == nil || !input.ObservedAt.Equal(now) {
+		t.Fatalf("observed_at = %v, want %v", input.ObservedAt, now)
+	}
+	wantExpiry := now.Add(quotaHeaderSnapshotFreshness)
+	if input.ExpiresAt == nil || !input.ExpiresAt.Equal(wantExpiry) || input.NextProbeAt == nil || !input.NextProbeAt.Equal(wantExpiry) {
+		t.Fatalf("expiry/next probe = %v/%v, want %v", input.ExpiresAt, input.NextProbeAt, wantExpiry)
+	}
+}
+
+func TestAppendUsageRecoversFromExistingFutureQuotaSnapshot(t *testing.T) {
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	seedQuotaSnapshotAuth(t, repo, "future-recovery", "codex", "Future Recovery", map[string]any{"type": "codex"})
+	now := time.Now().UTC().Truncate(time.Second)
+	future := now.Add(365 * 24 * time.Hour)
+	period := float64(5)
+	remainingFuture := 0.01
+	_, errFuture := repo.UpsertQuotaSnapshot(ctx, QuotaSnapshotWrite{
+		CredentialID: "future-recovery", QuotaStatus: "exhausted", CollectionStatus: "success", Source: "response_header", ObservedAt: &future, ReplaceWindows: true,
+		Windows: []QuotaWindow{{ID: "codex-primary", Scope: "account", Mode: "rolling", Status: "exhausted", Unit: "percentage", RemainingRatio: &remainingFuture, PeriodUnit: "hour", PeriodValue: &period, Source: "response_header", ObservedAt: future}},
+	})
+	if errFuture != nil {
+		t.Fatalf("UpsertQuotaSnapshot(future) error = %v", errFuture)
+	}
+	payload := `{"timestamp":"` + now.Format(time.RFC3339) + `","provider":"codex","auth_type":"oauth","auth_index":"future-recovery","response_headers":{"X-Codex-Primary-Used-Percent":["10"],"X-Codex-Primary-Window-Minutes":["300"],"X-Codex-Primary-Reset-After-Seconds":["60"]}}`
+	if _, errAppend := repo.AppendUsageWithRuntime(ctx, payload, UsageRuntimeMetadata{}); errAppend != nil {
+		t.Fatalf("AppendUsageWithRuntime() error = %v", errAppend)
+	}
+	item, errGet := repo.GetQuotaCredential(ctx, "future-recovery", now)
+	if errGet != nil {
+		t.Fatalf("GetQuotaCredential() error = %v", errGet)
+	}
+	if item.ObservedAt == nil || item.ObservedAt.After(now.Add(quotaMaxFutureObservationSkew)) || item.ObservedAt.Equal(future) || item.NextProbeAt == nil || item.NextProbeAt.After(now.Add(time.Hour)) {
+		t.Fatalf("future snapshot was not recovered: %+v", item)
+	}
+	if len(item.Windows) != 1 || item.Windows[0].ObservedAt.After(now.Add(quotaMaxFutureObservationSkew)) || item.Windows[0].Status != "healthy" {
+		t.Fatalf("future windows were not replaced: %+v", item.Windows)
+	}
+}
+
+func TestClaimQuotaProbeResetsExistingFutureSnapshot(t *testing.T) {
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	seedQuotaSnapshotAuth(t, repo, "future-probe-recovery", "codex", "Future Probe", map[string]any{"type": "codex"})
+	now := time.Date(2026, 7, 16, 14, 15, 0, 0, time.UTC)
+	future := now.Add(365 * 24 * time.Hour)
+	period := float64(5)
+	_, errFuture := repo.UpsertQuotaSnapshot(ctx, QuotaSnapshotWrite{
+		CredentialID: "future-probe-recovery", QuotaStatus: "healthy", CollectionStatus: "success", Source: "response_header", ObservedAt: &future, ReplaceWindows: true,
+		Windows: []QuotaWindow{{ID: "future", Scope: "account", Mode: "rolling", Status: "healthy", Unit: "percentage", PeriodUnit: "hour", PeriodValue: &period, Source: "response_header", ObservedAt: future}},
+	})
+	if errFuture != nil {
+		t.Fatalf("UpsertQuotaSnapshot(future) error = %v", errFuture)
+	}
+	claimed, errClaim := repo.ClaimQuotaProbe(ctx, "future-probe-recovery", "home-a", now, time.Minute)
+	if errClaim != nil || !claimed {
+		t.Fatalf("ClaimQuotaProbe() = %v, %v", claimed, errClaim)
+	}
+	item, errGet := repo.GetQuotaCredential(ctx, "future-probe-recovery", now)
+	if errGet != nil {
+		t.Fatalf("GetQuotaCredential() error = %v", errGet)
+	}
+	if item.ObservedAt != nil || item.Freshness != "never" || item.QuotaStatus != "unknown" || len(item.Windows) != 0 {
+		t.Fatalf("future snapshot was not reset: %+v", item)
+	}
+	occurredAt := now.Add(time.Second)
+	if errFail := repo.FailQuotaProbeAt(ctx, "future-probe-recovery", "home-a", QuotaCollectionError{Code: "UPSTREAM_UNAVAILABLE", Message: "failed", Retryable: true, OccurredAt: &occurredAt}, now.Add(5*time.Minute), now); errFail != nil {
+		t.Fatalf("FailQuotaProbeAt() error = %v", errFail)
+	}
+	claimed, errClaim = repo.ClaimQuotaProbe(ctx, "future-probe-recovery", "home-b", now.Add(time.Minute), time.Minute)
+	if errClaim != nil || claimed {
+		t.Fatalf("backoff claim = %v, %v, want false", claimed, errClaim)
+	}
+}
+
+func TestCreateQuotaSnapshotRecordRejectsOlderConflict(t *testing.T) {
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	newer := time.Date(2026, 7, 16, 14, 30, 0, 0, time.UTC)
+	older := newer.Add(-time.Hour)
+	newerInput := QuotaSnapshotWrite{CredentialID: "conflict-auth", QuotaStatus: "healthy", CollectionStatus: "success", Source: "response_header", ObservedAt: &newer, ParserVersion: 1, CollectorVersion: 1}
+	newerRecord := quotaSnapshotRecordFromWrite(newerInput)
+	if errCreate := db.Create(&newerRecord).Error; errCreate != nil {
+		t.Fatalf("create newer snapshot: %v", errCreate)
+	}
+	olderInput := QuotaSnapshotWrite{CredentialID: "conflict-auth", QuotaStatus: "exhausted", CollectionStatus: "success", Source: "response_header", ObservedAt: &older, ParserVersion: 1, CollectorVersion: 1}
+	olderRecord := quotaSnapshotRecordFromWrite(olderInput)
+	accepted, errCreate := createQuotaSnapshotRecord(db, &olderRecord, olderInput)
+	if errCreate != nil {
+		t.Fatalf("createQuotaSnapshotRecord() error = %v", errCreate)
+	}
+	if accepted {
+		t.Fatal("older conflicting snapshot was accepted")
+	}
+	var stored QuotaSnapshotRecord
+	if errFirst := db.First(&stored, "credential_id = ?", "conflict-auth").Error; errFirst != nil {
+		t.Fatalf("load stored snapshot: %v", errFirst)
+	}
+	if stored.ObservedAt == nil || !stored.ObservedAt.Equal(newer) || stored.QuotaStatus != "healthy" {
+		t.Fatalf("stored snapshot = %+v", stored)
+	}
+}
+
+func TestSafeQuotaRequestIDRejectsSecretLikeValues(t *testing.T) {
+	for _, valid := range []string{"req-1234", "550e8400-e29b-41d4-a716-446655440000", "request_abc.def:123"} {
+		if got := SafeQuotaRequestID(valid); got != valid {
+			t.Fatalf("SafeQuotaRequestID(%q) = %q", valid, got)
+		}
+	}
+	for _, invalid := range []string{
+		"Bearer access-token-value",
+		"Authorization: secret",
+		"sk-proj-secret-value",
+		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturevalue",
+		strings.Repeat("x", 129),
+		"request id with spaces",
+	} {
+		if got := SafeQuotaRequestID(invalid); got != "" {
+			t.Fatalf("SafeQuotaRequestID(%q) = %q, want empty", invalid, got)
+		}
+	}
+}
+
+func TestQuotaCollectionErrorFiltersHistoricalSecretRequestID(t *testing.T) {
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	now := time.Date(2026, 7, 16, 14, 40, 0, 0, time.UTC)
+	seedQuotaSnapshotAuth(t, repo, "historical-error-request-id", "codex", "Historical Error", map[string]any{"type": "codex"})
+	failure := QuotaCollectionError{Code: "UPSTREAM_UNAVAILABLE", Message: "failed", Retryable: true, OccurredAt: &now}
+	_, errSnapshot := repo.UpsertQuotaSnapshot(ctx, QuotaSnapshotWrite{CredentialID: "historical-error-request-id", QuotaStatus: "error", CollectionStatus: "failed", Error: &failure})
+	if errSnapshot != nil {
+		t.Fatalf("UpsertQuotaSnapshot() error = %v", errSnapshot)
+	}
+	db, errDB := repo.database()
+	if errDB != nil {
+		t.Fatalf("database() error = %v", errDB)
+	}
+	if errUpdate := db.Model(&QuotaSnapshotRecord{}).Where("credential_id = ?", "historical-error-request-id").Update("error_request_id", "Bearer historical-token").Error; errUpdate != nil {
+		t.Fatalf("update historical request ID: %v", errUpdate)
+	}
+	item, errGet := repo.GetQuotaCredential(ctx, "historical-error-request-id", now)
+	if errGet != nil {
+		t.Fatalf("GetQuotaCredential() error = %v", errGet)
+	}
+	if item.Error == nil || item.Error.RequestID != nil {
+		t.Fatalf("historical collection error = %+v", item.Error)
+	}
+}
+
+func TestQuotaCredentialTypeHonorsExplicitAuthKind(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		auth *coreauth.Auth
+		want string
+	}{
+		{name: "attribute api key wins over oauth metadata", auth: &coreauth.Auth{Provider: "codex", Attributes: map[string]string{"auth_kind": "apikey", "api_key": "secret"}, Metadata: map[string]any{"type": "codex"}}, want: "provider_api_key"},
+		{name: "metadata oauth wins over api key shape", auth: &coreauth.Auth{Provider: "codex", Attributes: map[string]string{"api_key": "secret"}, Metadata: map[string]any{"auth_kind": "oauth"}}, want: "oauth"},
+		{name: "vertex remains explicit", auth: &coreauth.Auth{Provider: "vertex", Metadata: map[string]any{"auth_kind": "oauth"}}, want: "vertex"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := quotaCredentialType(test.auth); got != test.want {
+				t.Fatalf("quotaCredentialType() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestQuotaSafeErrorMessagePreservesValidUTF8(t *testing.T) {
+	message := quotaSafeErrorMessage(strings.Repeat("界", 200))
+	if len(message) > 500 || !utf8.ValidString(message) {
+		t.Fatalf("quotaSafeErrorMessage() produced %d bytes of invalid UTF-8", len(message))
+	}
+}
+
+func TestAuthTypeChangeClearsAndRejectsOldQuotaObservation(t *testing.T) {
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	now := time.Date(2026, 7, 16, 14, 45, 0, 0, time.UTC)
+	seedQuotaSnapshotAuth(t, repo, "quota-type-change", "codex", "OAuth", map[string]any{"type": "codex"})
+	_, errSnapshot := repo.UpsertQuotaSnapshot(ctx, QuotaSnapshotWrite{CredentialID: "quota-type-change", QuotaStatus: "healthy", CollectionStatus: "success", Source: "active_probe", ObservedAt: &now})
+	if errSnapshot != nil {
+		t.Fatalf("UpsertQuotaSnapshot() error = %v", errSnapshot)
+	}
+	apiKeyAuth := &coreauth.Auth{ID: "quota-type-change", Index: "quota-type-change", Provider: "codex", Label: "API Key", Status: coreauth.StatusActive, Attributes: map[string]string{"auth_kind": "apikey", "source": "config:codex", "api_key": "must-not-leak"}, Metadata: map[string]any{"type": "codex"}, CreatedAt: now, UpdatedAt: now.Add(time.Minute)}
+	if _, errUpsert := repo.UpsertAuth(ctx, apiKeyAuth, "test"); errUpsert != nil {
+		t.Fatalf("UpsertAuth(API key) error = %v", errUpsert)
+	}
+	payload := `{"timestamp":"2026-07-16T14:46:00Z","provider":"codex","auth_type":"oauth","auth_index":"quota-type-change","response_headers":{"X-Codex-Primary-Used-Percent":["10"],"X-Codex-Primary-Window-Minutes":["300"],"X-Codex-Primary-Reset-After-Seconds":["60"]}}`
+	if _, errAppend := repo.AppendUsageWithRuntime(ctx, payload, UsageRuntimeMetadata{}); errAppend != nil {
+		t.Fatalf("AppendUsageWithRuntime() error = %v", errAppend)
+	}
+	item, errGet := repo.GetQuotaCredential(ctx, apiKeyAuth.ID, now.Add(2*time.Minute))
+	if errGet != nil {
+		t.Fatalf("GetQuotaCredential() error = %v", errGet)
+	}
+	if item.CredentialType != "provider_api_key" || item.QuotaStatus != "unsupported" || item.Freshness != "never" || len(item.Windows) != 0 {
+		t.Fatalf("type-change quota item = %+v", item)
+	}
+}
+
+func TestAuthProviderChangeClearsQuotaSnapshot(t *testing.T) {
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+	now := time.Date(2026, 7, 16, 15, 0, 0, 0, time.UTC)
+	seedQuotaSnapshotAuth(t, repo, "quota-provider-change", "codex", "Provider Change", map[string]any{"type": "codex"})
+	period := float64(5)
+	_, errSnapshot := repo.UpsertQuotaSnapshot(ctx, QuotaSnapshotWrite{
+		CredentialID: "quota-provider-change", QuotaStatus: "healthy", CollectionStatus: "success", Source: "active_probe", ObservedAt: &now, ReplaceWindows: true,
+		Windows: []QuotaWindow{{ID: "primary", Scope: "account", Mode: "rolling", Status: "healthy", Unit: "percentage", PeriodUnit: "hour", PeriodValue: &period, Source: "active_probe", ObservedAt: now}},
+	})
+	if errSnapshot != nil {
+		t.Fatalf("UpsertQuotaSnapshot() error = %v", errSnapshot)
+	}
+	vertex := &coreauth.Auth{ID: "quota-provider-change", Index: "quota-provider-change", Provider: "vertex", Label: "Vertex", Status: coreauth.StatusActive, Metadata: map[string]any{"type": "vertex"}, CreatedAt: now, UpdatedAt: now.Add(time.Minute)}
+	if _, errUpsert := repo.UpsertAuth(ctx, vertex, "test"); errUpsert != nil {
+		t.Fatalf("UpsertAuth(vertex) error = %v", errUpsert)
+	}
+	item, errGet := repo.GetQuotaCredential(ctx, vertex.ID, now.Add(time.Minute))
+	if errGet != nil {
+		t.Fatalf("GetQuotaCredential() error = %v", errGet)
+	}
+	if item.Provider != "vertex" || item.CredentialType != "vertex" || item.QuotaStatus != "unsupported" || item.Freshness != "never" || len(item.Windows) != 0 {
+		t.Fatalf("provider-change quota item = %+v", item)
 	}
 }
 

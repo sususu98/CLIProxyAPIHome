@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -13,13 +14,15 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
-	codexQuotaHeaderPrefix       = "X-Codex-"
-	quotaHeaderValueMaxLength    = 4096
-	quotaHeaderSnapshotFreshness = 30 * time.Minute
-	quotaLowRemainingRatio       = 0.20
+	codexQuotaHeaderPrefix        = "X-Codex-"
+	quotaHeaderValueMaxLength     = 4096
+	quotaHeaderSnapshotFreshness  = 30 * time.Minute
+	quotaMaxFutureObservationSkew = 5 * time.Minute
+	quotaLowRemainingRatio        = 0.20
 )
 
 func sanitizeUsageQuotaHeaders(payload string) (string, error) {
@@ -50,6 +53,10 @@ func sanitizeUsageQuotaHeaders(payload string) (string, error) {
 	if errDelete != nil {
 		return "", errDelete
 	}
+	out, errSanitizeRequestIDs := sanitizeUsageUpstreamRequestIDs(out)
+	if errSanitizeRequestIDs != nil {
+		return "", errSanitizeRequestIDs
+	}
 	if strings.TrimSpace(gjson.Get(out, "upstream_request_id").String()) == "" && upstreamRequestID != "" {
 		out, errDelete = sjson.Set(out, "upstream_request_id", upstreamRequestID)
 		if errDelete != nil {
@@ -62,6 +69,27 @@ func sanitizeUsageQuotaHeaders(payload string) (string, error) {
 	out, errSet := sjson.Set(out, "quota_headers", filtered)
 	if errSet != nil {
 		return "", errSet
+	}
+	return out, nil
+}
+
+func sanitizeUsageUpstreamRequestIDs(payload string) (string, error) {
+	out := payload
+	for _, path := range []string{"upstream_request_id", "upstream.request_id", "response.request_id", "response.id"} {
+		value := gjson.Get(out, path)
+		if !value.Exists() {
+			continue
+		}
+		safeValue := SafeQuotaRequestID(value.String())
+		var errUpdate error
+		if safeValue == "" {
+			out, errUpdate = sjson.Delete(out, path)
+		} else {
+			out, errUpdate = sjson.Set(out, path, safeValue)
+		}
+		if errUpdate != nil {
+			return "", errUpdate
+		}
 	}
 	return out, nil
 }
@@ -86,8 +114,7 @@ func quotaResponseHeaderRequestID(headers gjson.Result) string {
 		key := http.CanonicalHeaderKey(strings.TrimSpace(rawKey))
 		switch key {
 		case "X-Upstream-Request-Id", "X-Request-Id", "Openai-Request-Id":
-			value := quotaHeaderResultValue(rawValue)
-			if value != "" && len(value) <= 128 {
+			if value := SafeQuotaRequestID(quotaHeaderResultValue(rawValue)); value != "" {
 				return value
 			}
 		}
@@ -95,16 +122,54 @@ func quotaResponseHeaderRequestID(headers gjson.Result) string {
 	return ""
 }
 
-func upsertQuotaFromUsagePayloadTx(ctx context.Context, tx *gorm.DB, payload string, metadata UsageRuntimeMetadata) error {
-	input, ok := quotaSnapshotWriteFromUsagePayload(payload, metadata)
+func upsertQuotaFromUsagePayloadTx(ctx context.Context, tx *gorm.DB, payload string, metadata UsageRuntimeMetadata, receivedAt time.Time) error {
+	input, ok := quotaSnapshotWriteFromUsagePayload(payload, metadata, receivedAt)
 	if !ok {
 		return nil
 	}
+	record, found, errResolve := resolveQuotaObservationCredential(ctx, tx, input.CredentialID)
+	if errResolve != nil {
+		return errResolve
+	}
+	if !found || normalizeQuotaProviderID(record.Provider) != "codex" {
+		return nil
+	}
+	auth, errAuth := quotaAuthFromRecord(&record)
+	if errAuth != nil {
+		return errAuth
+	}
+	credentialType := quotaCredentialType(auth)
+	if credentialType != "oauth" && credentialType != "file_auth" {
+		return nil
+	}
+	reportedType := normalizeUsageObservabilityCredentialType(gjson.Get(payload, "auth_type").String())
+	if reportedType != "unknown" && reportedType != credentialType {
+		return nil
+	}
+	input.CredentialID = record.UUID
 	_, errUpsert := upsertQuotaSnapshotDB(ctx, tx, input)
 	return errUpsert
 }
 
-func quotaSnapshotWriteFromUsagePayload(payload string, metadata UsageRuntimeMetadata) (QuotaSnapshotWrite, bool) {
+func resolveQuotaObservationCredential(ctx context.Context, tx *gorm.DB, authIndex string) (AuthRecord, bool, error) {
+	if tx == nil || strings.TrimSpace(authIndex) == "" {
+		return AuthRecord{}, false, nil
+	}
+	for _, column := range []string{"uuid", "index", "id"} {
+		var record AuthRecord
+		errFind := tx.WithContext(contextOrBackground(ctx)).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where(map[string]any{column: strings.TrimSpace(authIndex)}).Order("uuid ASC").First(&record).Error
+		if errFind == nil {
+			return record, true, nil
+		}
+		if !errors.Is(errFind, gorm.ErrRecordNotFound) {
+			return AuthRecord{}, false, errFind
+		}
+	}
+	return AuthRecord{}, false, nil
+}
+
+func quotaSnapshotWriteFromUsagePayload(payload string, metadata UsageRuntimeMetadata, receivedAt time.Time) (QuotaSnapshotWrite, bool) {
 	provider := strings.ToLower(strings.TrimSpace(gjson.Get(payload, "provider").String()))
 	credentialID := strings.TrimSpace(gjson.Get(payload, "auth_index").String())
 	if provider != "codex" || credentialID == "" {
@@ -122,7 +187,16 @@ func quotaSnapshotWriteFromUsagePayload(payload string, metadata UsageRuntimeMet
 	if errTime != nil {
 		return QuotaSnapshotWrite{}, false
 	}
-	windows, partial := parseCodexQuotaHeaderWindows(headers, observedAt.UTC())
+	if receivedAt.IsZero() {
+		receivedAt = time.Now().UTC()
+	} else {
+		receivedAt = receivedAt.UTC()
+	}
+	observedAt = observedAt.UTC()
+	if observedAt.After(receivedAt.Add(quotaMaxFutureObservationSkew)) {
+		observedAt = receivedAt
+	}
+	windows, partial := parseCodexQuotaHeaderWindows(headers, observedAt)
 	if len(windows) == 0 {
 		return QuotaSnapshotWrite{}, false
 	}
@@ -132,6 +206,7 @@ func quotaSnapshotWriteFromUsagePayload(payload string, metadata UsageRuntimeMet
 		collectionStatus = "partial"
 	}
 	expiresAt := observedAt.UTC().Add(quotaHeaderSnapshotFreshness)
+	maxAcceptedObservedAt := receivedAt.Add(quotaMaxFutureObservationSkew)
 	homeID := strings.TrimSpace(metadata.HomeIP)
 	if metadata.HomePort > 0 {
 		homeID = fmt.Sprintf("%s:%d", homeID, metadata.HomePort)
@@ -147,7 +222,7 @@ func quotaSnapshotWriteFromUsagePayload(payload string, metadata UsageRuntimeMet
 	}
 	return QuotaSnapshotWrite{
 		CredentialID: credentialID, QuotaStatus: status, CollectionStatus: collectionStatus, Source: "response_header",
-		ObservedAt: &observedAt, ExpiresAt: &expiresAt, LastAttemptAt: &observedAt, LastSuccessAt: &observedAt,
+		ObservedAt: &observedAt, MaxAcceptedObservedAt: &maxAcceptedObservedAt, ExpiresAt: &expiresAt, LastAttemptAt: &observedAt, LastSuccessAt: &observedAt,
 		NextProbeAt: &expiresAt, Runtime: runtime, ParserVersion: quotaSnapshotSchemaVersion,
 		CollectorVersion: quotaSnapshotSchemaVersion, ClearProbeLease: true, ReplaceWindows: !partial, Windows: windows,
 	}, true
@@ -347,11 +422,14 @@ func quotaIntHeader(headers http.Header, key string) (int64, bool) {
 func quotaSlug(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	var builder strings.Builder
+	lastDash := false
 	for _, char := range value {
 		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') {
 			builder.WriteRune(char)
-		} else if builder.Len() > 0 && !strings.HasSuffix(builder.String(), "-") {
+			lastDash = false
+		} else if builder.Len() > 0 && !lastDash {
 			builder.WriteByte('-')
+			lastDash = true
 		}
 	}
 	return strings.Trim(builder.String(), "-")
