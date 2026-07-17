@@ -2604,12 +2604,12 @@ Invalid filters, sorts, or pagination return `400`; missing credentials return `
 
 These endpoints read persisted `usage`, `billing_charge`, `api_key`, `user`, and `auth` data. Responses never return raw client access keys, provider API keys, OAuth tokens, cookies, authorization headers, complete payloads, or complete failure bodies. They may return `api_key_masked`, redacted `body_preview`, and payload summaries.
 
-The aggregate range parameters apply to `/usage/overview`, `/usage/aggregates`, `/usage/realtime`, `/usage/health/providers`, and `/usage/health/credentials`, and they also act as the base range for `/usage/records` and `/usage/export`. `/usage/overview` and `/usage/aggregates` automatically fill a recent 24-hour window when `from` or `to` is missing; `/usage/records` and `/usage/export` do not fill a time range automatically.
+The aggregate range parameters apply to `/usage/overview`, `/usage/aggregates`, `/usage/realtime`, `/usage/health/providers`, and `/usage/health/credentials`, and they also act as the base range for `/usage/records` and `/usage/export`. All usage ranges use the half-open interval `[from,to)`: `from` is included and `to` is excluded. A date-only `to` value is normalized to the next local midnight, so the selected calendar day remains fully included across DST transitions. `/usage/overview` and `/usage/aggregates` automatically fill a recent 24-hour window when `from` or `to` is missing; `/usage/records` and `/usage/export` do not fill a time range automatically.
 
 | Query | Type | Default | Description |
 | --- | --- | --- | --- |
 | `from` | string | `to - 24h` for `/usage/overview` and `/usage/aggregates`; none for other endpoints | Start time. Supports `YYYY-MM-DD`, RFC3339, or Unix seconds. Date-only values are interpreted as 00:00:00 in `timezone`. |
-| `to` | string | current time for `/usage/overview` and `/usage/aggregates`; none for other endpoints | End time. Supports `YYYY-MM-DD`, RFC3339, or Unix seconds. Date-only values include the full day in `timezone`. |
+| `to` | string | current time for `/usage/overview` and `/usage/aggregates`; none for other endpoints | Exclusive end time. Supports `YYYY-MM-DD`, RFC3339, or Unix seconds. Date-only values include the full day in `timezone` by using the next local midnight as the exclusive boundary. |
 | `timezone` | string | `UTC` | Statistics timezone for date-only `from`/`to` and `day`/`week` trend buckets. |
 | `provider` | string | none | Exact provider filter. |
 | `model` | string | none | Fuzzy model filter. |
@@ -2645,7 +2645,7 @@ Query parameters in addition to aggregate range parameters:
 
 | Query | Type | Default | Description |
 | --- | --- | --- | --- |
-| `interval` | string | `auto` | `minute`, `hour`, `day`, `week`, or `auto`. `day` and `week` buckets use `timezone`; response timestamps remain UTC RFC3339. |
+| `interval` | string | `auto` | `minute`, `hour`, `day`, `week`, or `auto`. `day` and `week` buckets use `timezone`; response timestamps remain UTC RFC3339. A response is limited to 10,000 trend buckets. `auto` promotes to a coarser interval when needed; an explicit interval that exceeds the limit returns `400 invalid_interval_range`. |
 
 Top-level response fields:
 
@@ -2654,11 +2654,11 @@ Top-level response fields:
 | `range` | object | Applied time range, timezone, and interval. |
 | `live` | object | Recent short-window RPM, TPM, error rate, and latency. |
 | `totals` | object | Request counts, success/failure counts, tokens, amount, latency, and active subject counts. |
-| `trend` | array | Trend buckets aggregated by `interval`. |
+| `trend` | array | Contiguous trend buckets intersecting the applied half-open range at `interval`, including zero-request buckets. The first and last buckets may be partial. |
 | `cost_breakdown` | array | Empty when reliable cost splitting is unavailable; the API does not fabricate indivisible cost details. |
 | `model_efficiency` | array | Model efficiency list sorted by total tokens. |
 | `top` | object | `users`, `client_keys`, `credentials`, `providers`, `models`, `endpoints`, and `errors`. |
-| `activity` | array | Health activity series aligned with the trend buckets. |
+| `activity` | array | Health activity series aligned one-for-one with the contiguous trend buckets. `status` is `empty` for zero requests, `healthy` below 5% errors, `degraded` from 5% to below 50% errors, and `unavailable` from 50% errors. |
 
 ### GET `/usage/records`
 

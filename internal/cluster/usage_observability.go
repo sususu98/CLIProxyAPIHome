@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -20,11 +21,16 @@ const (
 	UsageObservabilityMaxRecordLimit     = 200
 	UsageObservabilityDefaultGroupLimit  = 20
 	UsageObservabilityMaxGroupLimit      = 100
+	// UsageObservabilityMaxTrendBuckets bounds each overview trend and its aligned activity series.
+	UsageObservabilityMaxTrendBuckets = 10000
 
 	UsageObservabilityCurrencyCredits     = "credits"
 	UsageObservabilityBillingBasisCharge  = "billing_charge"
 	UsageObservabilityBillingBasisUnknown = "unknown"
 )
+
+// ErrUsageObservabilityTooManyTrendBuckets indicates that the applied range and interval exceed the response limit.
+var ErrUsageObservabilityTooManyTrendBuckets = errors.New("usage overview trend bucket limit exceeded")
 
 var usageObservabilitySecretPattern = regexp.MustCompile(`(?i)(authorization|access_token|refresh_token|api_key|client_secret|cookie|set-cookie|bearer|secret)(["']?\s*[:=]\s*["']?|\s+)[^"'\s,;\]}]+`)
 
@@ -746,8 +752,11 @@ func (r *Repository) UsageObservabilityOverview(ctx context.Context, query Usage
 		return UsageObservabilityOverview{}, errTotals
 	}
 
-	interval := usageObservabilityOverviewIntervalFromBounds(query.Interval, query.From, query.To, bounds)
 	location := usageObservabilityLocation(query.Timezone)
+	interval, errInterval := usageObservabilityOverviewIntervalForBounds(query.Interval, location, query.From, query.To, bounds)
+	if errInterval != nil {
+		return UsageObservabilityOverview{}, errInterval
+	}
 	overview := UsageObservabilityOverview{
 		Range: UsageObservabilityOverviewRange{
 			From:     usageObservabilityRangeTimeFromBounds(query.From, bounds, true),
@@ -768,7 +777,10 @@ func (r *Repository) UsageObservabilityOverview(ctx context.Context, query Usage
 	if errTrend != nil {
 		return UsageObservabilityOverview{}, errTrend
 	}
-	overview.Trend = trend
+	overview.Trend, errTrend = usageObservabilityFillTrend(trend, interval, location, query.From, query.To, bounds)
+	if errTrend != nil {
+		return UsageObservabilityOverview{}, errTrend
+	}
 	overview.Activity = usageObservabilityActivity(overview.Trend)
 	modelEfficiency, errModelEfficiency := usageObservabilityAggregateItemsSQL(db, recordQuery, "model", "total_tokens", "desc", 10)
 	if errModelEfficiency != nil {
@@ -1109,6 +1121,44 @@ func usageObservabilityTrendFromBucketRows(rows []usageObservabilityTrendBucketR
 	return points
 }
 
+func usageObservabilityFillTrend(points []UsageObservabilityTrendPoint, interval string, location *time.Location, from *time.Time, to *time.Time, bounds usageObservabilityOverviewBounds) ([]UsageObservabilityTrendPoint, error) {
+	rangeStart, rangeEnd, endExclusive := usageObservabilityTrendRange(from, to, bounds)
+	lastIncluded, ok := usageObservabilityLastIncludedTime(rangeStart, rangeEnd, endExclusive)
+	if !ok {
+		return []UsageObservabilityTrendPoint{}, nil
+	}
+
+	firstBucketStart, _ := usageObservabilityBucketRange(rangeStart, interval, location)
+	lastBucketStart, _ := usageObservabilityBucketRange(lastIncluded, interval, location)
+	pointsByStart := make(map[int64]UsageObservabilityTrendPoint, len(points))
+	for _, point := range points {
+		pointsByStart[point.BucketStart.UnixNano()] = point
+	}
+
+	filled := make([]UsageObservabilityTrendPoint, 0, len(points))
+	for cursor := firstBucketStart; !cursor.After(lastBucketStart); {
+		if len(filled) >= UsageObservabilityMaxTrendBuckets {
+			return nil, fmt.Errorf("%w: maximum is %d", ErrUsageObservabilityTooManyTrendBuckets, UsageObservabilityMaxTrendBuckets)
+		}
+		bucketStart, bucketEnd := usageObservabilityBucketRange(cursor, interval, location)
+		if point, ok := pointsByStart[bucketStart.UnixNano()]; ok {
+			filled = append(filled, point)
+		} else {
+			filled = append(filled, UsageObservabilityTrendPoint{
+				BucketStart: bucketStart,
+				BucketEnd:   bucketEnd,
+			})
+		}
+
+		next := bucketEnd.Add(time.Nanosecond)
+		if !next.After(cursor) {
+			break
+		}
+		cursor = next
+	}
+	return filled, nil
+}
+
 func usageObservabilityTrendBucketUnixSQL(db *gorm.DB, interval string, location *time.Location, query UsageObservabilityRecordQuery, bounds usageObservabilityOverviewBounds) (string, []any) {
 	bucketSeconds := int64(86400)
 	subtractSeconds := int64(0)
@@ -1187,14 +1237,12 @@ type usageObservabilityTrendBucketCaseSegment struct {
 }
 
 func usageObservabilityTrendCaseRange(query UsageObservabilityRecordQuery, bounds usageObservabilityOverviewBounds) (time.Time, time.Time) {
-	start, end := usageObservabilityBoundsTimes(bounds)
-	if query.From != nil {
-		start = query.From.UTC()
+	start, end, endExclusive := usageObservabilityTrendRange(query.From, query.To, bounds)
+	lastIncluded, ok := usageObservabilityLastIncludedTime(start, end, endExclusive)
+	if !ok {
+		return time.Time{}, time.Time{}
 	}
-	if query.To != nil {
-		end = query.To.UTC()
-	}
-	return start.UTC(), end.UTC()
+	return start.UTC(), lastIncluded.UTC()
 }
 
 func usageObservabilityTimezoneOffsetChanges(location *time.Location, start time.Time, end time.Time) bool {
@@ -2005,7 +2053,7 @@ func usageObservabilityApplyRecordFilters(scope *gorm.DB, query UsageObservabili
 		scope = scope.Where(`"usage"."timestamp" >= ?`, query.From.UTC())
 	}
 	if query.To != nil {
-		scope = scope.Where(`"usage"."timestamp" <= ?`, query.To.UTC())
+		scope = scope.Where(`"usage"."timestamp" < ?`, query.To.UTC())
 	}
 	if provider := strings.ToLower(strings.TrimSpace(query.Provider)); provider != "" {
 		scope = scope.Where(`LOWER("usage"."provider") = ?`, provider)
@@ -2102,7 +2150,7 @@ func usageObservabilityApplyUsageFilters(scope *gorm.DB, query UsageObservabilit
 		scope = scope.Where(`"usage"."timestamp" >= ?`, query.From.UTC())
 	}
 	if query.To != nil {
-		scope = scope.Where(`"usage"."timestamp" <= ?`, query.To.UTC())
+		scope = scope.Where(`"usage"."timestamp" < ?`, query.To.UTC())
 	}
 	if provider := strings.ToLower(strings.TrimSpace(query.Provider)); provider != "" {
 		scope = scope.Where(`LOWER("usage"."provider") = ?`, provider)
@@ -2968,6 +3016,24 @@ func usageObservabilityOverviewIntervalFromBounds(requested string, from *time.T
 	return usageObservabilityOverviewIntervalFromTimes(requested, start, end)
 }
 
+func usageObservabilityOverviewIntervalForBounds(requested string, location *time.Location, from *time.Time, to *time.Time, bounds usageObservabilityOverviewBounds) (string, error) {
+	interval := usageObservabilityOverviewIntervalFromBounds(requested, from, to, bounds)
+	auto := strings.EqualFold(strings.TrimSpace(requested), "auto") || strings.TrimSpace(requested) == ""
+	for {
+		count := usageObservabilityTrendBucketCount(interval, location, from, to, bounds, UsageObservabilityMaxTrendBuckets)
+		if count <= UsageObservabilityMaxTrendBuckets {
+			return interval, nil
+		}
+		if auto {
+			if next := usageObservabilityCoarserInterval(interval); next != interval {
+				interval = next
+				continue
+			}
+		}
+		return "", fmt.Errorf("%w: interval %q produces more than %d buckets", ErrUsageObservabilityTooManyTrendBuckets, interval, UsageObservabilityMaxTrendBuckets)
+	}
+}
+
 func usageObservabilityOverviewIntervalFromTimes(requested string, start time.Time, end time.Time) string {
 	switch strings.ToLower(strings.TrimSpace(requested)) {
 	case "minute", "hour", "day", "week":
@@ -2980,6 +3046,73 @@ func usageObservabilityOverviewIntervalFromTimes(requested string, start time.Ti
 		return "hour"
 	}
 	return "day"
+}
+
+func usageObservabilityCoarserInterval(interval string) string {
+	switch interval {
+	case "minute":
+		return "hour"
+	case "hour":
+		return "day"
+	case "day":
+		return "week"
+	default:
+		return interval
+	}
+}
+
+func usageObservabilityTrendBucketCount(interval string, location *time.Location, from *time.Time, to *time.Time, bounds usageObservabilityOverviewBounds, limit int) int {
+	rangeStart, rangeEnd, endExclusive := usageObservabilityTrendRange(from, to, bounds)
+	lastIncluded, ok := usageObservabilityLastIncludedTime(rangeStart, rangeEnd, endExclusive)
+	if !ok {
+		return 0
+	}
+	firstBucketStart, _ := usageObservabilityBucketRange(rangeStart, interval, location)
+	lastBucketStart, _ := usageObservabilityBucketRange(lastIncluded, interval, location)
+	count := 0
+	for cursor := firstBucketStart; !cursor.After(lastBucketStart); {
+		count++
+		if limit > 0 && count > limit {
+			return count
+		}
+		_, bucketEnd := usageObservabilityBucketRange(cursor, interval, location)
+		next := bucketEnd.Add(time.Nanosecond)
+		if !next.After(cursor) {
+			break
+		}
+		cursor = next
+	}
+	return count
+}
+
+func usageObservabilityTrendRange(from *time.Time, to *time.Time, bounds usageObservabilityOverviewBounds) (time.Time, time.Time, bool) {
+	start, end := usageObservabilityBoundsTimes(bounds)
+	if from != nil {
+		start = from.UTC()
+	}
+	endExclusive := false
+	if to != nil {
+		end = to.UTC()
+		// Explicit usage query ranges are half-open: [from,to).
+		endExclusive = true
+	}
+	return start, end, endExclusive
+}
+
+func usageObservabilityLastIncludedTime(start time.Time, end time.Time, endExclusive bool) (time.Time, bool) {
+	if start.IsZero() || end.IsZero() {
+		return time.Time{}, false
+	}
+	if endExclusive {
+		if !end.After(start) {
+			return time.Time{}, false
+		}
+		return end.Add(-time.Nanosecond), true
+	}
+	if end.Before(start) {
+		return time.Time{}, false
+	}
+	return end, true
 }
 
 func usageObservabilityRangeTime(value *time.Time, rows []usageObservabilityRecordRow, first bool) string {
@@ -3100,7 +3233,7 @@ func usageObservabilityBucketRange(timestamp time.Time, interval string, locatio
 
 func usageObservabilityHealthStatus(errorRate float64, requestCount int64) string {
 	if requestCount == 0 {
-		return "unknown"
+		return "empty"
 	}
 	if errorRate >= 0.50 {
 		return "unavailable"
