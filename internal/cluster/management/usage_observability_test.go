@@ -36,6 +36,48 @@ func TestUsageRecordsRejectsInvalidRange(t *testing.T) {
 	}
 }
 
+func TestParseUsageDateOnlyRangeUsesDSTSafeExclusiveEnd(t *testing.T) {
+	t.Parallel()
+
+	location, errLocation := time.LoadLocation("America/New_York")
+	if errLocation != nil {
+		t.Fatalf("LoadLocation() error = %v", errLocation)
+	}
+	tests := []struct {
+		name     string
+		date     string
+		wantFrom time.Time
+		wantTo   time.Time
+	}{
+		{
+			name:     "spring forward",
+			date:     "2026-03-08",
+			wantFrom: time.Date(2026, time.March, 8, 5, 0, 0, 0, time.UTC),
+			wantTo:   time.Date(2026, time.March, 9, 4, 0, 0, 0, time.UTC),
+		},
+		{
+			name:     "fall back",
+			date:     "2026-11-01",
+			wantFrom: time.Date(2026, time.November, 1, 4, 0, 0, 0, time.UTC),
+			wantTo:   time.Date(2026, time.November, 2, 5, 0, 0, 0, time.UTC),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			from, to, errRange := parseUsageTimeRange(test.date, test.date, location)
+			if errRange != nil {
+				t.Fatalf("parseUsageTimeRange() error = %v", errRange)
+			}
+			if from == nil || !from.Equal(test.wantFrom) {
+				t.Fatalf("from = %v, want %v", from, test.wantFrom)
+			}
+			if to == nil || !to.Equal(test.wantTo) {
+				t.Fatalf("to = %v, want %v", to, test.wantTo)
+			}
+		})
+	}
+}
+
 func TestUsageAggregatesRejectsInvalidGroupBy(t *testing.T) {
 	handler, closeRepo := newUsageObservabilityTestHandler(t)
 	defer closeRepo()
@@ -143,6 +185,31 @@ func TestListUsageRecordsReturnsJoinedItems(t *testing.T) {
 	}
 	if _, ok := payload["sortable_fields"].([]any); !ok {
 		t.Fatalf("sortable_fields = %T, want array", payload["sortable_fields"])
+	}
+}
+
+func TestListUsageRecordsTreatsToAsExclusive(t *testing.T) {
+	handler, closeRepo := newUsageObservabilityTestHandler(t)
+	defer closeRepo()
+	seedUsageObservabilityManagementRecord(t, handler)
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/usage/records", handler.ListUsageRecords)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/usage/records?from=2026-06-10T01:00:00Z&to=2026-06-10T01:02:03Z", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want %d", resp.Code, resp.Body.String(), http.StatusOK)
+	}
+	var payload map[string]any
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &payload); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if payload["total"] != float64(0) {
+		t.Fatalf("total = %v, want 0 for record exactly at exclusive to", payload["total"])
 	}
 }
 
@@ -719,8 +786,8 @@ func TestGetUsageOverviewUsesRequestedIntervalAndTimezone(t *testing.T) {
 		t.Fatalf("range.interval = %v, want day", rangeValue["interval"])
 	}
 	trend, ok := payload["trend"].([]any)
-	if !ok || len(trend) != 1 {
-		t.Fatalf("trend = %#v, want one point", payload["trend"])
+	if !ok || len(trend) != 2 {
+		t.Fatalf("trend = %#v, want two contiguous points", payload["trend"])
 	}
 	point, ok := trend[0].(map[string]any)
 	if !ok {
@@ -728,6 +795,67 @@ func TestGetUsageOverviewUsesRequestedIntervalAndTimezone(t *testing.T) {
 	}
 	if point["bucket_start"] != "2026-06-09T16:00:00Z" {
 		t.Fatalf("bucket_start = %v, want 2026-06-09T16:00:00Z", point["bucket_start"])
+	}
+	activity, ok := payload["activity"].([]any)
+	if !ok || len(activity) != 2 {
+		t.Fatalf("activity = %#v, want two contiguous points", payload["activity"])
+	}
+	emptyPoint, ok := activity[1].(map[string]any)
+	if !ok {
+		t.Fatalf("activity[1] = %T, want object", activity[1])
+	}
+	if emptyPoint["request_count"] != float64(0) || emptyPoint["status"] != "empty" {
+		t.Fatalf("activity[1] = %#v, want empty zero-request bucket", emptyPoint)
+	}
+}
+
+func TestGetUsageOverviewTreatsToAsExclusiveBucketBoundary(t *testing.T) {
+	handler, closeRepo := newUsageObservabilityTestHandler(t)
+	defer closeRepo()
+	seedUsageObservabilityManagementRecord(t, handler)
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/usage/overview", handler.GetUsageOverview)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/usage/overview?from=2026-06-09T16:00:00Z&to=2026-06-10T16:00:00Z&timezone=Asia/Shanghai&interval=day", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want %d", resp.Code, resp.Body.String(), http.StatusOK)
+	}
+	var payload map[string]any
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &payload); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	trend, ok := payload["trend"].([]any)
+	if !ok || len(trend) != 1 {
+		t.Fatalf("trend = %#v, want one day bucket", payload["trend"])
+	}
+	activity, ok := payload["activity"].([]any)
+	if !ok || len(activity) != 1 {
+		t.Fatalf("activity = %#v, want one day bucket", payload["activity"])
+	}
+}
+
+func TestGetUsageOverviewRejectsExcessiveExplicitBucketCount(t *testing.T) {
+	handler, closeRepo := newUsageObservabilityTestHandler(t)
+	defer closeRepo()
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/usage/overview", handler.GetUsageOverview)
+
+	resp := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/usage/overview?from=2026-06-01T00:00:00Z&to=2026-06-09T00:00:00Z&interval=minute", nil)
+	engine.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s, want %d", resp.Code, resp.Body.String(), http.StatusBadRequest)
+	}
+	if !strings.Contains(resp.Body.String(), "invalid_interval_range") {
+		t.Fatalf("body = %s, want invalid_interval_range", resp.Body.String())
 	}
 }
 

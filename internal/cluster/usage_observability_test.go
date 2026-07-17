@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -726,6 +727,164 @@ func TestUsageObservabilityOverviewBuildsTrendWithSQLBuckets(t *testing.T) {
 	second := overview.Trend[1]
 	if second.RequestCount != 1 || second.SuccessCount != 0 || second.FailedCount != 1 {
 		t.Fatalf("second counts = requests:%d success:%d failed:%d, want 1/0/1", second.RequestCount, second.SuccessCount, second.FailedCount)
+	}
+}
+
+func TestUsageObservabilityOverviewFillsEmptyTrendBuckets(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	seedUsageObservabilityRecord(t, ctx, repo)
+	from := time.Date(2026, time.June, 10, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, time.June, 12, 23, 59, 59, 0, time.UTC)
+	overview, errOverview := repo.UsageObservabilityOverview(ctx, UsageObservabilityOverviewQuery{
+		From:     &from,
+		To:       &to,
+		Interval: "day",
+		Timezone: "UTC",
+	})
+	if errOverview != nil {
+		t.Fatalf("UsageObservabilityOverview() error = %v", errOverview)
+	}
+	if len(overview.Trend) != 3 {
+		t.Fatalf("trend point count = %d, want 3", len(overview.Trend))
+	}
+	if overview.Trend[0].RequestCount != 1 {
+		t.Fatalf("first request count = %d, want 1", overview.Trend[0].RequestCount)
+	}
+	for index := 1; index < len(overview.Trend); index++ {
+		if overview.Trend[index].RequestCount != 0 {
+			t.Fatalf("trend[%d] request count = %d, want 0", index, overview.Trend[index].RequestCount)
+		}
+		if overview.Activity[index].Status != "empty" {
+			t.Fatalf("activity[%d] status = %q, want empty", index, overview.Activity[index].Status)
+		}
+	}
+}
+
+func TestUsageObservabilityOverviewUsesHalfOpenEndBoundary(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	seedUsageObservabilityRecord(t, ctx, repo)
+	from := time.Date(2026, time.June, 10, 1, 0, 0, 0, time.UTC)
+	to := time.Date(2026, time.June, 10, 1, 2, 3, 0, time.UTC)
+	overview, errOverview := repo.UsageObservabilityOverview(ctx, UsageObservabilityOverviewQuery{
+		From:     &from,
+		To:       &to,
+		Interval: "hour",
+		Timezone: "UTC",
+	})
+	if errOverview != nil {
+		t.Fatalf("UsageObservabilityOverview() error = %v", errOverview)
+	}
+	if overview.Totals.RequestCount != 0 {
+		t.Fatalf("request count = %d, want 0 for record exactly at exclusive to", overview.Totals.RequestCount)
+	}
+	if len(overview.Trend) != 1 || overview.Trend[0].RequestCount != 0 {
+		t.Fatalf("trend = %+v, want one empty partial bucket", overview.Trend)
+	}
+	if len(overview.Activity) != 1 || overview.Activity[0].Status != "empty" {
+		t.Fatalf("activity = %+v, want one empty bucket", overview.Activity)
+	}
+}
+
+func TestUsageObservabilityOverviewRejectsTooManyExplicitTrendBuckets(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	from := time.Date(2026, time.June, 1, 0, 0, 0, 0, time.UTC)
+	to := from.Add(8 * 24 * time.Hour)
+	_, errOverview := repo.UsageObservabilityOverview(ctx, UsageObservabilityOverviewQuery{
+		From:     &from,
+		To:       &to,
+		Interval: "minute",
+		Timezone: "UTC",
+	})
+	if !errors.Is(errOverview, ErrUsageObservabilityTooManyTrendBuckets) {
+		t.Fatalf("UsageObservabilityOverview() error = %v, want bucket limit error", errOverview)
+	}
+}
+
+func TestUsageObservabilityOverviewAutoPromotesIntervalForBucketLimit(t *testing.T) {
+	t.Parallel()
+
+	from := time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2040, time.January, 1, 0, 0, 0, 0, time.UTC)
+	interval, errInterval := usageObservabilityOverviewIntervalForBounds("auto", time.UTC, &from, &to, usageObservabilityOverviewBounds{})
+	if errInterval != nil {
+		t.Fatalf("usageObservabilityOverviewIntervalForBounds() error = %v", errInterval)
+	}
+	if interval != "week" {
+		t.Fatalf("interval = %q, want week", interval)
+	}
+}
+
+func TestUsageObservabilityOverviewFillsEmptyRangeAcrossDST(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	from := time.Date(2026, time.March, 7, 12, 0, 0, 0, time.UTC)
+	to := time.Date(2026, time.March, 9, 12, 0, 0, 0, time.UTC)
+	overview, errOverview := repo.UsageObservabilityOverview(ctx, UsageObservabilityOverviewQuery{
+		From:     &from,
+		To:       &to,
+		Interval: "day",
+		Timezone: "America/New_York",
+	})
+	if errOverview != nil {
+		t.Fatalf("UsageObservabilityOverview() error = %v", errOverview)
+	}
+	wantStarts := []time.Time{
+		time.Date(2026, time.March, 7, 5, 0, 0, 0, time.UTC),
+		time.Date(2026, time.March, 8, 5, 0, 0, 0, time.UTC),
+		time.Date(2026, time.March, 9, 4, 0, 0, 0, time.UTC),
+	}
+	if len(overview.Trend) != len(wantStarts) {
+		t.Fatalf("trend point count = %d, want %d", len(overview.Trend), len(wantStarts))
+	}
+	for index, wantStart := range wantStarts {
+		if !overview.Trend[index].BucketStart.Equal(wantStart) {
+			t.Fatalf("trend[%d] bucket start = %v, want %v", index, overview.Trend[index].BucketStart, wantStart)
+		}
+		if overview.Activity[index].RequestCount != 0 || overview.Activity[index].Status != "empty" {
+			t.Fatalf("activity[%d] = %+v, want empty zero-request bucket", index, overview.Activity[index])
+		}
+	}
+}
+
+func TestUsageObservabilityHealthStatusContract(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		errorRate    float64
+		requestCount int64
+		want         string
+	}{
+		{name: "empty", errorRate: 0, requestCount: 0, want: "empty"},
+		{name: "healthy", errorRate: 0.049, requestCount: 10, want: "healthy"},
+		{name: "degraded", errorRate: 0.05, requestCount: 10, want: "degraded"},
+		{name: "unavailable", errorRate: 0.50, requestCount: 10, want: "unavailable"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := usageObservabilityHealthStatus(test.errorRate, test.requestCount); got != test.want {
+				t.Fatalf("usageObservabilityHealthStatus() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

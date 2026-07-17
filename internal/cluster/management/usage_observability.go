@@ -75,6 +75,10 @@ func (h *Handler) GetUsageOverview(c *gin.Context) {
 	defer cancel()
 	overview, errOverview := h.repo.UsageObservabilityOverview(ctx, usageObservabilityOverviewQueryFromHTTP(query))
 	if errOverview != nil {
+		if errors.Is(errOverview, cluster.ErrUsageObservabilityTooManyTrendBuckets) {
+			respondUsageHTTPError(c, newUsageHTTPError("invalid_interval_range", "%v", errOverview))
+			return
+		}
 		respondError(c, http.StatusInternalServerError, "usage_overview_load_failed", errOverview)
 		return
 	}
@@ -966,7 +970,7 @@ func parseUsageTimeRange(rawFrom string, rawTo string, location *time.Location) 
 	return from, to, nil
 }
 
-func optionalUsageTime(raw string, endOfDay bool, location *time.Location) (*time.Time, *usageHTTPError) {
+func optionalUsageTime(raw string, exclusiveDayEnd bool, location *time.Location) (*time.Time, *usageHTTPError) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return nil, nil
@@ -983,8 +987,8 @@ func optionalUsageTime(raw string, endOfDay bool, location *time.Location) (*tim
 	}
 	if parsedDay, errDay := time.ParseInLocation("2006-01-02", value, location); errDay == nil {
 		parsed := parsedDay
-		if endOfDay {
-			parsed = parsed.Add(24*time.Hour - time.Nanosecond)
+		if exclusiveDayEnd {
+			parsed = parsed.AddDate(0, 0, 1)
 		}
 		parsed = parsed.UTC()
 		return &parsed, nil

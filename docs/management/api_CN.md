@@ -2574,12 +2574,12 @@ collector 直接读取 DB 凭证，不接受 HMC 提交 URL。探测前会重新
 
 这些接口读取持久化 `usage`、`billing_charge`、`api_key`、`user` 和 `auth` 数据。响应不会返回 raw client access key、provider API key、OAuth token、cookie、authorization header、完整 payload 或完整失败 body。允许返回 `api_key_masked`、脱敏 `body_preview` 和 payload summary。
 
-汇总范围参数适用于 `/usage/overview`、`/usage/aggregates`、`/usage/realtime`、`/usage/health/providers`、`/usage/health/credentials`，也作为 `/usage/records` 和 `/usage/export` 的基础范围。`/usage/overview` 和 `/usage/aggregates` 在缺少 `from` 或 `to` 时会自动补齐最近 24 小时窗口；`/usage/records` 和 `/usage/export` 不自动补齐时间范围。
+汇总范围参数适用于 `/usage/overview`、`/usage/aggregates`、`/usage/realtime`、`/usage/health/providers`、`/usage/health/credentials`，也作为 `/usage/records` 和 `/usage/export` 的基础范围。所有 usage 范围统一采用半开区间 `[from,to)`：包含 `from`，不包含 `to`。仅日期形式的 `to` 会归一化为下一个本地午夜，因此即使跨越 DST，也会完整包含所选日历日。`/usage/overview` 和 `/usage/aggregates` 在缺少 `from` 或 `to` 时会自动补齐最近 24 小时窗口；`/usage/records` 和 `/usage/export` 不自动补齐时间范围。
 
 | Query | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `from` | string | `/usage/overview` 和 `/usage/aggregates` 默认为 `to - 24h`；其他接口无 | 起始时间，支持 `YYYY-MM-DD`、RFC3339 或 Unix 秒；只有日期时按 `timezone` 解释为当天 00:00:00。 |
-| `to` | string | `/usage/overview` 和 `/usage/aggregates` 默认为当前时间；其他接口无 | 结束时间，支持 `YYYY-MM-DD`、RFC3339 或 Unix 秒；只有日期时按 `timezone` 解释并包含当天完整一天。 |
+| `to` | string | `/usage/overview` 和 `/usage/aggregates` 默认为当前时间；其他接口无 | 不包含的结束时间，支持 `YYYY-MM-DD`、RFC3339 或 Unix 秒；只有日期时使用下一个本地午夜作为排他边界，从而按 `timezone` 完整包含当天。 |
 | `timezone` | string | `UTC` | 用于日期型 `from`/`to` 和 `day`/`week` 趋势桶的统计时区。 |
 | `provider` | string | 无 | Provider 精确筛选。 |
 | `model` | string | 无 | 模型模糊筛选。 |
@@ -2615,7 +2615,7 @@ Query 参数除汇总范围参数外还支持：
 
 | Query | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `interval` | string | `auto` | `minute`、`hour`、`day`、`week` 或 `auto`。`day` 和 `week` 会按 `timezone` 切桶，响应时间仍为 UTC RFC3339。 |
+| `interval` | string | `auto` | `minute`、`hour`、`day`、`week` 或 `auto`。`day` 和 `week` 会按 `timezone` 切桶，响应时间仍为 UTC RFC3339。响应最多包含 10,000 个趋势桶；`auto` 会在需要时自动提升粒度，显式 interval 超出限制时返回 `400 invalid_interval_range`。 |
 
 输出顶层字段：
 
@@ -2624,11 +2624,11 @@ Query 参数除汇总范围参数外还支持：
 | `range` | object | 应用后的时间范围、timezone 和 interval。 |
 | `live` | object | 最近短窗口 RPM、TPM、错误率和延迟。 |
 | `totals` | object | 请求数、成功/失败数、token、金额、延迟和活跃主体数量。 |
-| `trend` | array | 按 `interval` 聚合的趋势桶。 |
+| `trend` | array | 与已应用半开区间相交的连续 `interval` 趋势桶，包含请求数为零的时间桶；首尾桶可能是不完整桶。 |
 | `cost_breakdown` | array | 当前不伪造不可拆分的费用明细，无法可靠拆分时为空数组。 |
 | `model_efficiency` | array | 按总 token 排序的模型效率列表。 |
 | `top` | object | `users`、`client_keys`、`credentials`、`providers`、`models`、`endpoints` 和 `errors`。 |
-| `activity` | array | 与趋势桶一致的健康活动序列。 |
+| `activity` | array | 与连续趋势桶一一对齐的健康活动序列。请求数为零时 `status` 为 `empty`；错误率低于 5% 为 `healthy`；5%（含）至 50%（不含）为 `degraded`；达到 50% 为 `unavailable`。 |
 
 ### GET `/usage/records`
 
