@@ -1,15 +1,20 @@
 package respserver
 
 import (
-	"bufio"
 	"fmt"
+	"io"
 	"strconv"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver/dispatch"
 )
 
+type respWriter interface {
+	io.Writer
+	io.StringWriter
+}
+
 // writeDispatchReply writes a dispatch reply.
-func writeDispatchReply(writer *bufio.Writer, reply dispatch.Reply) error {
+func writeDispatchReply(writer respWriter, reply dispatch.Reply) error {
 	// Build the candidate view before applying availability rules.
 	switch reply.Kind {
 	case dispatch.ReplyKindSimpleString:

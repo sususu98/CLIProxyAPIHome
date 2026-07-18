@@ -9,5 +9,6 @@ func Register(reg *dispatch.Registry) {
 	}
 	_ = reg.RegisterDirect("GET", "config", handleConfig)
 	_ = reg.RegisterDirect("GET", "plugin-tasks", handlePluginTasks)
+	_ = reg.RegisterDirect("GET", "plugin-sync", handlePluginSync)
 	_ = reg.SetDirectDefault("GET", handleDefault)
 }

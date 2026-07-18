@@ -54,7 +54,6 @@ type pluginStoreListEntry struct {
 	Repository       string                `json:"repository"`
 	InstallType      string                `json:"install_type"`
 	AuthRequired     bool                  `json:"auth_required"`
-	AuthConfigured   bool                  `json:"auth_configured"`
 	Platforms        []pluginStorePlatform `json:"platforms,omitempty"`
 	Logo             string                `json:"logo,omitempty"`
 	Homepage         string                `json:"homepage,omitempty"`
@@ -156,6 +155,12 @@ func (h *Handler) UninstallPluginFromStore(c *gin.Context) {
 func (h *Handler) ListPluginStore(c *gin.Context) {
 	ctx, cancel := h.pluginStoreRequestContext(c)
 	defer cancel()
+	auth, errAuth := h.pluginStoreAuth.Resolved(ctx)
+	if errAuth != nil {
+		respondError(c, http.StatusInternalServerError, "plugin_store_auth_resolve_failed", errAuth)
+		return
+	}
+	defer pluginstore.ClearResolvedAuthConfigs(auth)
 
 	cfg, _, errConfig := h.currentConfig(ctx)
 	if errConfig != nil {
@@ -167,7 +172,7 @@ func (h *Handler) ListPluginStore(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "plugin_store_source_invalid", errSources)
 		return
 	}
-	plugins, sourceErrors := h.fetchSourcedPlugins(ctx, cfg, sources)
+	plugins, sourceErrors := h.fetchSourcedPlugins(ctx, cfg, sources, auth)
 	if len(plugins) == 0 && len(sourceErrors) > 0 {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "plugin_store_registry_failed", "message": sourceErrors[0].Message})
 		return
@@ -201,7 +206,6 @@ func (h *Handler) ListPluginStore(c *gin.Context) {
 			Repository:       trimString(item.plugin.Repository),
 			InstallType:      trimString(pluginstore.PluginInstallType(item.plugin)),
 			AuthRequired:     item.plugin.AuthRequired,
-			AuthConfigured:   pluginAuthConfigured(item.source, item.plugin, cfg),
 			Platforms:        sanitizePluginStorePlatforms(pluginstore.PluginPlatforms(item.plugin)),
 			Logo:             trimString(item.plugin.Logo),
 			Homepage:         trimString(item.plugin.Homepage),
@@ -238,6 +242,12 @@ func (h *Handler) InstallPluginFromStore(c *gin.Context) {
 	}
 	ctx, cancel := h.pluginStoreRequestContext(c)
 	defer cancel()
+	auth, errAuth := h.pluginStoreAuth.Resolved(ctx)
+	if errAuth != nil {
+		respondError(c, http.StatusInternalServerError, "plugin_store_auth_resolve_failed", errAuth)
+		return
+	}
+	defer pluginstore.ClearResolvedAuthConfigs(auth)
 
 	cfg, root, errConfig := h.currentConfig(ctx)
 	if errConfig != nil {
@@ -249,7 +259,7 @@ func (h *Handler) InstallPluginFromStore(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "plugin_store_source_invalid", errSources)
 		return
 	}
-	source, plugin, client, okPlugin := h.findPluginStoreInstallTarget(ctx, cfg, sources, id, c.Query("source"), c)
+	source, plugin, client, okPlugin := h.findPluginStoreInstallTarget(ctx, cfg, sources, id, c.Query("source"), auth, c)
 	if !okPlugin {
 		return
 	}
@@ -406,14 +416,14 @@ func (h *Handler) pluginStoreRequestContext(c *gin.Context) (context.Context, co
 	return context.WithTimeout(ctx, pluginStoreRequestTimeout)
 }
 
-func (h *Handler) findPluginStoreInstallTarget(ctx context.Context, cfg *appconfig.Config, sources []pluginstore.Source, id string, requestedSourceID string, c *gin.Context) (pluginstore.Source, pluginstore.Plugin, pluginstore.Client, bool) {
+func (h *Handler) findPluginStoreInstallTarget(ctx context.Context, cfg *appconfig.Config, sources []pluginstore.Source, id string, requestedSourceID string, auth []pluginstore.ResolvedAuthConfig, c *gin.Context) (pluginstore.Source, pluginstore.Plugin, pluginstore.Client, bool) {
 	requestedSourceID = strings.TrimSpace(requestedSourceID)
 	if requestedSourceID != "" {
 		for _, source := range sources {
 			if source.ID != requestedSourceID {
 				continue
 			}
-			client := h.newPluginStoreClient(cfg, source.URL)
+			client := h.newPluginStoreClient(cfg, source.URL, auth)
 			registry, errRegistry := client.FetchRegistry(ctx)
 			if errRegistry != nil {
 				c.JSON(http.StatusBadGateway, gin.H{"error": "plugin_store_registry_failed", "message": errRegistry.Error()})
@@ -430,7 +440,7 @@ func (h *Handler) findPluginStoreInstallTarget(ctx context.Context, cfg *appconf
 		return pluginstore.Source{}, pluginstore.Plugin{}, pluginstore.Client{}, false
 	}
 
-	plugins, sourceErrors := h.fetchSourcedPlugins(ctx, cfg, sources)
+	plugins, sourceErrors := h.fetchSourcedPlugins(ctx, cfg, sources, auth)
 	matches := make([]sourcedPlugin, 0)
 	for _, item := range plugins {
 		if item.plugin.ID == id {
@@ -454,7 +464,7 @@ func (h *Handler) findPluginStoreInstallTarget(ctx context.Context, cfg *appconf
 		return pluginstore.Source{}, pluginstore.Plugin{}, pluginstore.Client{}, false
 	}
 	match := matches[0]
-	return match.source, match.plugin, h.newPluginStoreClient(cfg, match.source.URL), true
+	return match.source, match.plugin, h.newPluginStoreClient(cfg, match.source.URL, auth), true
 }
 
 func pluginStoreSources(cfg *appconfig.Config) ([]pluginstore.Source, error) {
@@ -464,7 +474,7 @@ func pluginStoreSources(cfg *appconfig.Config) ([]pluginstore.Source, error) {
 	return pluginstore.NormalizeSources(cfg.Plugins.StoreSources)
 }
 
-func (h *Handler) newPluginStoreClient(cfg *appconfig.Config, registryURL string) pluginstore.Client {
+func (h *Handler) newPluginStoreClient(cfg *appconfig.Config, registryURL string, auth []pluginstore.ResolvedAuthConfig) pluginstore.Client {
 	var httpClient pluginstore.HTTPDoer
 	if h != nil {
 		httpClient = h.pluginStoreHTTPClient
@@ -476,18 +486,14 @@ func (h *Handler) newPluginStoreClient(cfg *appconfig.Config, registryURL string
 		}
 		httpClient = client
 	}
-	var storeAuth []pluginstore.AuthConfig
-	if cfg != nil {
-		storeAuth = cfg.Plugins.StoreAuth
-	}
-	return pluginstore.NewClientWithAuth(httpClient, registryURL, storeAuth)
+	return pluginstore.NewClientWithResolvedAuth(httpClient, registryURL, auth)
 }
 
-func (h *Handler) fetchSourcedPlugins(ctx context.Context, cfg *appconfig.Config, sources []pluginstore.Source) ([]sourcedPlugin, []pluginStoreSourceErr) {
+func (h *Handler) fetchSourcedPlugins(ctx context.Context, cfg *appconfig.Config, sources []pluginstore.Source, auth []pluginstore.ResolvedAuthConfig) ([]sourcedPlugin, []pluginStoreSourceErr) {
 	plugins := make([]sourcedPlugin, 0)
 	sourceErrors := make([]pluginStoreSourceErr, 0)
 	for _, source := range sources {
-		client := h.newPluginStoreClient(cfg, source.URL)
+		client := h.newPluginStoreClient(cfg, source.URL, auth)
 		registry, errRegistry := client.FetchRegistry(ctx)
 		if errRegistry != nil {
 			sourceErrors = append(sourceErrors, pluginStoreSourceErr{
@@ -743,13 +749,6 @@ func sanitizePluginStorePlatforms(platforms []pluginstore.Platform) []pluginStor
 		})
 	}
 	return out
-}
-
-func pluginAuthConfigured(source pluginstore.Source, plugin pluginstore.Plugin, cfg *appconfig.Config) bool {
-	if cfg == nil {
-		return false
-	}
-	return pluginstore.PluginAuthConfigured(source, plugin, cfg.Plugins.StoreAuth)
 }
 
 func trimString(value string) string {

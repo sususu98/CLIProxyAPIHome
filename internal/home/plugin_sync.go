@@ -81,8 +81,13 @@ func (r *Runtime) syncPluginStoreManifests(ctx context.Context, cfg *config.Conf
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	auth, errAuth := r.resolvePluginStoreAuth(ctx)
+	if errAuth != nil {
+		return fmt.Errorf("home plugins: resolve store auth: %w", errAuth)
+	}
+	defer pluginstore.ClearResolvedAuthConfigs(auth)
 	platform := CurrentPluginPlatform()
-	client := newPluginStoreClient(cfg)
+	client := newPluginStoreClient(cfg, auth)
 	root := strings.TrimSpace(cfg.Plugins.Dir)
 	if root == "" {
 		root = "plugins"
@@ -660,16 +665,12 @@ func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
-var newPluginStoreClient = func(cfg *config.Config) pluginstore.Client {
+var newPluginStoreClient = func(cfg *config.Config, auth []pluginstore.ResolvedAuthConfig) pluginstore.Client {
 	client := &http.Client{}
-	var storeAuth []pluginstore.AuthConfig
 	if cfg != nil && strings.TrimSpace(cfg.ProxyURL) != "" {
 		util.SetProxy(&config.SDKConfig{ProxyURL: strings.TrimSpace(cfg.ProxyURL)}, client)
 	}
-	if cfg != nil {
-		storeAuth = cfg.Plugins.StoreAuth
-	}
-	return pluginstore.NewClientWithAuth(client, "", storeAuth)
+	return pluginstore.NewClientWithResolvedAuth(client, "", auth)
 }
 
 func pluginExtension(goos string) string {

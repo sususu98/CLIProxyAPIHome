@@ -33,6 +33,8 @@ const (
 	UpsertResultRestored  UpsertResult = "restored"
 )
 
+const clusterEventAdvisoryLockKey int64 = 749327842680272317
+
 type APIKeyUpsertStats struct {
 	Created   int
 	Updated   int
@@ -1116,7 +1118,9 @@ func (r *Repository) AppendEvent(ctx context.Context, scope, op, entity string, 
 	if errDB != nil {
 		return errDB
 	}
-	return appendEvent(db.WithContext(contextOrBackground(ctx)), scope, op, entity, version)
+	return db.WithContext(contextOrBackground(ctx)).Transaction(func(tx *gorm.DB) error {
+		return appendEvent(tx, scope, op, entity, version)
+	})
 }
 
 // MaxEventID handles a max event id.
@@ -1148,6 +1152,9 @@ func appendEvent(db *gorm.DB, scope, op, entity string, version int64) error {
 	if db == nil {
 		return fmt.Errorf("database connection is nil")
 	}
+	if errLock := lockClusterEventTransaction(db); errLock != nil {
+		return errLock
+	}
 	event := ClusterEventRecord{
 		Scope:      scope,
 		Op:         op,
@@ -1156,6 +1163,17 @@ func appendEvent(db *gorm.DB, scope, op, entity string, version int64) error {
 		CreatedAt:  time.Now().UTC(),
 	}
 	return db.Create(&event).Error
+}
+
+func lockClusterEventTransaction(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	if db.Dialector == nil || db.Dialector.Name() != "postgres" {
+		return nil
+	}
+	// Keep event ID allocation serialized until commit so watchers cannot skip a later-committing lower ID.
+	return db.Exec("SELECT pg_advisory_xact_lock(?)", clusterEventAdvisoryLockKey).Error
 }
 
 // contextOrBackground handles a context or background.

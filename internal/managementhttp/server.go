@@ -162,6 +162,11 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodGet, "/plugin-store", handler.ListPluginStore)
 	r.Set(http.MethodPost, "/plugin-store/:id/install", handler.InstallPluginFromStore)
 	r.Set(http.MethodPost, "/plugin-store/:id/uninstall", handler.UninstallPluginFromStore)
+	r.Set(http.MethodGet, "/plugin-store-auth", handler.ListPluginStoreAuth)
+	r.Set(http.MethodPost, "/plugin-store-auth", handler.CreatePluginStoreAuth)
+	r.Set(http.MethodGet, "/plugin-store-auth/:id", handler.GetPluginStoreAuth)
+	r.Set(http.MethodPatch, "/plugin-store-auth/:id", handler.UpdatePluginStoreAuth)
+	r.Set(http.MethodDelete, "/plugin-store-auth/:id", handler.DeletePluginStoreAuth)
 
 	r.Set(http.MethodGet, "/debug", handler.GetDebug)
 	r.Set(http.MethodPut, "/debug", handler.PutDebug)

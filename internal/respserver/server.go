@@ -3,7 +3,9 @@ package respserver
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -168,6 +170,19 @@ func peerCertificateNodeID(conn net.Conn) string {
 	return strings.TrimSpace(state.PeerCertificates[0].Subject.CommonName)
 }
 
+func peerCertificateFingerprint(conn net.Conn) string {
+	stater, ok := conn.(interface{ ConnectionState() tls.ConnectionState })
+	if !ok {
+		return ""
+	}
+	state := stater.ConnectionState()
+	if len(state.PeerCertificates) == 0 || state.PeerCertificates[0] == nil || len(state.PeerCertificates[0].Raw) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(state.PeerCertificates[0].Raw)
+	return hex.EncodeToString(sum[:])
+}
+
 func subscriptionMessage(channel string, payload []byte) dispatch.Reply {
 	return dispatch.Array(
 		dispatch.BulkString([]byte("message")),
@@ -208,12 +223,14 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 	}
 	authSource := respAuthSourceNone
 	clientNodeID := ""
+	clientCertificateFingerprint := ""
 	if isMTLSAuthenticated(conn) {
 		authSource = respAuthSourceMTLS
 		clientNodeID = peerCertificateNodeID(conn)
+		clientCertificateFingerprint = peerCertificateFingerprint(conn)
 	}
 	reader := bufio.NewReader(conn)
-	writer := newSafeWriter(bufio.NewWriter(conn))
+	writer := newSafeWriter(conn)
 	connectedAt := time.Now()
 	addedNode := false
 	var unsubscribeConfig func()
@@ -238,6 +255,8 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 	}()
 
 	for {
+		var pendingConfigSubscriptionReady chan struct{}
+		var pendingConfigSubscriptionAborted chan struct{}
 		args, errRead := readRESPArray(reader)
 		if errRead != nil {
 			if !errors.Is(errRead, io.EOF) {
@@ -331,9 +350,10 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 		reply := dispatch.Err("registry not ready")
 		if s.registry != nil {
 			reply = s.registry.Execute(ctx, dispatch.Env{
-				Runtime:  s.runtime,
-				ClientIP: clientIP,
-				NodeID:   clientNodeID,
+				Runtime:                      s.runtime,
+				ClientIP:                     clientIP,
+				NodeID:                       clientNodeID,
+				ClientCertificateFingerprint: clientCertificateFingerprint,
 				Conn: &dispatch.ConnEnv{
 					SubscribeConfigYAML: func() (int64, error) {
 						if s.runtime == nil {
@@ -347,10 +367,12 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 							s.syncClusterClientCount(ctx)
 							addedNode = true
 						}
-						unsubscribeConfig = s.runtime.SubscribeConfigYAML(func(payload []byte) error {
-							return writer.WriteDispatchReply(subscriptionMessage(configSubscriptionChannel, payload))
-						})
-						cancelSubscriptionUpdates = s.startSubscriptionUpdates(ctx, writer)
+						ready := make(chan struct{})
+						aborted := make(chan struct{})
+						pendingConfigSubscriptionReady = ready
+						pendingConfigSubscriptionAborted = aborted
+						delivery := newConfigSubscriptionDelivery(ctx, writer, ready, aborted)
+						unsubscribeConfig = s.runtime.SubscribeConfigYAML(delivery.Write)
 						return 1, nil
 					},
 					UnsubscribeConfigYAML: func() (int64, error) {
@@ -377,8 +399,29 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 			}, args)
 		}
 		if errWrite := writer.WriteDispatchReply(reply); errWrite != nil {
+			if pendingConfigSubscriptionReady != nil {
+				close(pendingConfigSubscriptionAborted)
+				close(pendingConfigSubscriptionReady)
+			}
 			log.Errorf("resp write reply error: %v", errWrite)
 			return
+		}
+		if pendingConfigSubscriptionReady != nil {
+			payload, errConfig := s.runtime.ReadConfigYAMLContext(ctx)
+			if errConfig != nil {
+				close(pendingConfigSubscriptionAborted)
+				close(pendingConfigSubscriptionReady)
+				log.Warnf("failed to publish initial config snapshot: %v", errConfig)
+				return
+			}
+			if errInitial := writer.WriteDispatchReply(subscriptionMessage(configSubscriptionChannel, payload)); errInitial != nil {
+				close(pendingConfigSubscriptionAborted)
+				close(pendingConfigSubscriptionReady)
+				log.Warnf("failed to publish initial config snapshot: %v", errInitial)
+				return
+			}
+			close(pendingConfigSubscriptionReady)
+			cancelSubscriptionUpdates = s.startSubscriptionUpdates(ctx, writer)
 		}
 	}
 }
@@ -463,7 +506,7 @@ func readRESPLine(reader *bufio.Reader) (string, error) {
 }
 
 // writeRedisSimpleString writes a redis simple string.
-func writeRedisSimpleString(writer *bufio.Writer, value string) error {
+func writeRedisSimpleString(writer respWriter, value string) error {
 	if writer == nil {
 		return net.ErrClosed
 	}
@@ -472,7 +515,7 @@ func writeRedisSimpleString(writer *bufio.Writer, value string) error {
 }
 
 // writeRedisError writes a redis error.
-func writeRedisError(writer *bufio.Writer, message string) error {
+func writeRedisError(writer respWriter, message string) error {
 	if writer == nil {
 		return net.ErrClosed
 	}
@@ -481,7 +524,7 @@ func writeRedisError(writer *bufio.Writer, message string) error {
 }
 
 // writeRedisNilBulkString writes a redis nil bulk string.
-func writeRedisNilBulkString(writer *bufio.Writer) error {
+func writeRedisNilBulkString(writer respWriter) error {
 	if writer == nil {
 		return net.ErrClosed
 	}
@@ -490,7 +533,7 @@ func writeRedisNilBulkString(writer *bufio.Writer) error {
 }
 
 // writeRedisBulkString writes a redis bulk string.
-func writeRedisBulkString(writer *bufio.Writer, payload []byte) error {
+func writeRedisBulkString(writer respWriter, payload []byte) error {
 	if writer == nil {
 		return net.ErrClosed
 	}
@@ -508,7 +551,7 @@ func writeRedisBulkString(writer *bufio.Writer, payload []byte) error {
 }
 
 // writeRedisInteger writes a redis integer.
-func writeRedisInteger(writer *bufio.Writer, value int64) error {
+func writeRedisInteger(writer respWriter, value int64) error {
 	if writer == nil {
 		return net.ErrClosed
 	}

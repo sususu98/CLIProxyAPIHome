@@ -12,6 +12,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/pluginauth"
 )
 
 type Handler struct {
@@ -23,11 +24,12 @@ type Handler struct {
 	forwardTLSConfig      *tls.Config
 	pluginStoreHTTPClient pluginstore.HTTPDoer
 	modelsDevHTTPClient   *http.Client
+	pluginStoreAuth       *pluginauth.Service
 }
 
 // NewHandler creates a new handler.
 func NewHandler(repo *cluster.Repository, runtime *home.Runtime, nodeIP string, nodePort int) *Handler {
-	return &Handler{repo: repo, runtime: runtime, nodeIP: strings.TrimSpace(nodeIP), nodePort: nodePort, heartbeatTimeout: cluster.DefaultHeartbeatTimeout()}
+	return &Handler{repo: repo, runtime: runtime, nodeIP: strings.TrimSpace(nodeIP), nodePort: nodePort, heartbeatTimeout: cluster.DefaultHeartbeatTimeout(), pluginStoreAuth: pluginauth.NewService(repo)}
 }
 
 // SetForwardTLSConfig sets the TLS config used for cluster HTTP forwarding.

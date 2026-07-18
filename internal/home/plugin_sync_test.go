@@ -144,6 +144,85 @@ store:
 	}
 }
 
+func TestSyncPluginStoreManifestsUsesResolvedArtifactAuth(t *testing.T) {
+	root := t.TempDir()
+	platform := CurrentPluginPlatform()
+	archiveData := makePluginStoreZip(t, map[string]string{"sample" + pluginExtension(platform.GOOS): "private-library-data"})
+	checksum := sha256.Sum256(archiveData)
+	artifactURL := "https://downloads.example/private/sample_0.4.0.zip"
+	sourceURL := "https://plugins.example/registry.json"
+	restore := replaceHomePluginStoreClientForTest(authenticatedPluginStoreHTTPDoer{
+		responses: pluginStoreHTTPDoer{
+			sourceURL: []byte(`{
+				"schema_version": 2,
+				"plugins": [{
+					"id": "sample",
+					"name": "Sample",
+					"description": "Adds sample support.",
+					"author": "owner",
+					"version": "0.4.0",
+					"install": {
+						"type": "direct",
+						"artifacts": [{
+							"goos": "` + platform.GOOS + `",
+							"goarch": "` + platform.GOARCH + `",
+							"url": "` + artifactURL + `",
+							"sha256": "` + hex.EncodeToString(checksum[:]) + `"
+						}]
+					}
+				}]
+			}`),
+			artifactURL: archiveData,
+		},
+		authorization: map[string]string{artifactURL: "Bearer artifact-token"},
+	})
+	defer restore()
+
+	rt := &Runtime{}
+	rt.SetPluginStoreAuthResolver(func(context.Context) ([]pluginstore.ResolvedAuthConfig, error) {
+		return []pluginstore.ResolvedAuthConfig{{
+			Match:   "https://downloads.example/private/",
+			ApplyTo: []string{pluginstore.RequestKindArtifact},
+			Type:    pluginstore.AuthTypeBearer,
+			Token:   pluginstore.Secret("artifact-token"),
+		}}, nil
+	})
+	cfg := &config.Config{
+		Plugins: config.PluginsConfig{
+			Enabled: true,
+			Dir:     root,
+			Configs: map[string]config.PluginInstanceConfig{
+				"sample": homePluginConfigFromYAML(t, `
+enabled: true
+load-in-home: true
+store:
+  schema-version: 2
+  id: sample
+  name: Sample
+  description: Adds sample support.
+  author: owner
+  version: 0.4.0
+  source-url: `+sourceURL+`
+  install:
+    type: direct
+`),
+			},
+		},
+	}
+
+	if errSync := rt.syncPluginStoreManifests(context.Background(), cfg); errSync != nil {
+		t.Fatalf("syncPluginStoreManifests() error = %v", errSync)
+	}
+	target := filepath.Join(root, platform.GOOS, platform.GOARCH, "sample-v0.4.0"+pluginExtension(platform.GOOS))
+	got, errRead := os.ReadFile(target)
+	if errRead != nil {
+		t.Fatalf("read target: %v", errRead)
+	}
+	if string(got) != "private-library-data" {
+		t.Fatalf("target data = %q, want private-library-data", string(got))
+	}
+}
+
 func TestSyncPluginStoreManifestsSkipsCPADistributedArtifact(t *testing.T) {
 	root := t.TempDir()
 	restore := replaceHomePluginStoreClientForTest(pluginStoreFatalHTTPDoer{t: t})
@@ -540,8 +619,8 @@ func homePluginConfigFromYAML(t *testing.T, text string) config.PluginInstanceCo
 
 func replaceHomePluginStoreClientForTest(httpClient pluginstore.HTTPDoer) func() {
 	previous := newPluginStoreClient
-	newPluginStoreClient = func(cfg *config.Config) pluginstore.Client {
-		return pluginstore.NewClient(httpClient, "")
+	newPluginStoreClient = func(cfg *config.Config, auth []pluginstore.ResolvedAuthConfig) pluginstore.Client {
+		return pluginstore.NewClientWithResolvedAuth(httpClient, "", auth)
 	}
 	return func() {
 		newPluginStoreClient = previous
@@ -596,6 +675,23 @@ func (c pluginStoreHTTPDoer) Do(req *http.Request) (*http.Response, error) {
 		Header:     make(http.Header),
 		Request:    req,
 	}, nil
+}
+
+type authenticatedPluginStoreHTTPDoer struct {
+	responses     pluginStoreHTTPDoer
+	authorization map[string]string
+}
+
+func (c authenticatedPluginStoreHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	if want := c.authorization[req.URL.String()]; want != "" && req.Header.Get("Authorization") != want {
+		return &http.Response{
+			StatusCode: http.StatusUnauthorized,
+			Body:       io.NopCloser(strings.NewReader("unauthorized")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	}
+	return c.responses.Do(req)
 }
 
 type pluginArtifactRuntimeStub struct {

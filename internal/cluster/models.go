@@ -190,6 +190,33 @@ type PluginTaskRecord struct {
 	UpdatedAt      time.Time `gorm:"column:updated_at"`
 }
 
+type PluginStoreAuthRecord struct {
+	ID                   uint   `gorm:"column:id;primaryKey;autoIncrement"`
+	Name                 string `gorm:"column:name;not null"`
+	Match                string `gorm:"column:match;not null;type:text"`
+	ApplyTo              JSONB  `gorm:"column:apply_to"`
+	AuthType             string `gorm:"column:auth_type;not null"`
+	HeaderName           string `gorm:"column:header_name"`
+	EncryptedCredentials []byte `gorm:"column:encrypted_credentials"`
+	KeyVersion           int    `gorm:"column:key_version;not null"`
+	Enabled              bool   `gorm:"column:enabled;not null;default:true"`
+	Version              int64  `gorm:"column:version;not null;default:1"`
+}
+
+func (PluginStoreAuthRecord) TableName() string {
+	return "plugin_store_auth"
+}
+
+type PluginStoreAuthKeyRecord struct {
+	ID         uint   `gorm:"column:id;primaryKey"`
+	Key        []byte `gorm:"column:key;not null"`
+	KeyVersion int    `gorm:"column:key_version;not null"`
+}
+
+func (PluginStoreAuthKeyRecord) TableName() string {
+	return "plugin_store_auth_key"
+}
+
 // TableName returns the database table name.
 func (PluginTaskRecord) TableName() string {
 	return "plugin_tasks"
@@ -344,8 +371,8 @@ func (CPANodeRecord) TableName() string {
 }
 
 type ClusterEventRecord struct {
-	ID         uint      `gorm:"column:id;primaryKey;autoIncrement"`
-	Scope      string    `gorm:"column:scope"`
+	ID         uint      `gorm:"column:id;primaryKey;autoIncrement;index:idx_cluster_events_scope_id,priority:2"`
+	Scope      string    `gorm:"column:scope;index:idx_cluster_events_scope_id,priority:1"`
 	Op         string    `gorm:"column:op"`
 	EntityUUID string    `gorm:"column:entity_uuid"`
 	Version    int64     `gorm:"column:version"`

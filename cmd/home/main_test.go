@@ -6,7 +6,45 @@ import (
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/config"
 )
+
+func TestLoadInitialRuntimeConfigReadsEventHighWaterBeforeSnapshot(t *testing.T) {
+	wantConfig := &config.Config{Debug: true}
+	repo := &startupConfigRepositoryStub{cfg: wantConfig, maxEventID: 41}
+
+	highWater, gotConfig, errLoad := loadInitialRuntimeConfig(context.Background(), repo)
+	if errLoad != nil {
+		t.Fatalf("loadInitialRuntimeConfig() error = %v", errLoad)
+	}
+	if highWater != 41 {
+		t.Fatalf("high-water = %d, want 41", highWater)
+	}
+	if gotConfig != wantConfig {
+		t.Fatalf("config = %p, want %p", gotConfig, wantConfig)
+	}
+	wantActions := []string{"max-event-id", "load-config"}
+	if strings.Join(repo.actions, ",") != strings.Join(wantActions, ",") {
+		t.Fatalf("repository actions = %#v, want %#v", repo.actions, wantActions)
+	}
+}
+
+type startupConfigRepositoryStub struct {
+	cfg        *config.Config
+	payload    []byte
+	maxEventID int64
+	actions    []string
+}
+
+func (s *startupConfigRepositoryStub) LoadConfigAsRuntimeConfig(context.Context) (*config.Config, []byte, error) {
+	s.actions = append(s.actions, "load-config")
+	return s.cfg, append([]byte(nil), s.payload...), nil
+}
+
+func (s *startupConfigRepositoryStub) MaxEventID(context.Context) (int64, error) {
+	s.actions = append(s.actions, "max-event-id")
+	return s.maxEventID, nil
+}
 
 func TestResolveClusterAdvertisedPortUsesExternalPort(t *testing.T) {
 	t.Parallel()

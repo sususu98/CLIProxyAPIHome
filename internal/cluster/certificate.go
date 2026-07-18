@@ -347,6 +347,26 @@ func (r *Repository) peerCertificateFingerprintAllowed(ctx context.Context, cert
 	return count > 0, nil
 }
 
+func (r *Repository) ClientCertificateFingerprintActive(ctx context.Context, certificateID string, fingerprint string) (bool, error) {
+	certificateID = strings.TrimSpace(certificateID)
+	fingerprint = strings.ToLower(strings.TrimSpace(fingerprint))
+	if certificateID == "" || fingerprint == "" {
+		return false, nil
+	}
+	db, errDB := r.database()
+	if errDB != nil {
+		return false, errDB
+	}
+	now := time.Now().UTC()
+	var count int64
+	if errCount := db.WithContext(contextOrBackground(ctx)).Model(&CertificateRecord{}).
+		Where("id = ? AND certificate_fingerprint = ? AND is_client = ? AND certificate_pem <> ? AND not_before <= ? AND not_after > ?", certificateID, fingerprint, true, "", now, now).
+		Count(&count).Error; errCount != nil {
+		return false, errCount
+	}
+	return count > 0, nil
+}
+
 func (r *Repository) ensureCARecord(ctx context.Context, db *gorm.DB) (*CertificateRecord, error) {
 	ca, errCA := firstCARecord(ctx, db)
 	if errCA != nil {
