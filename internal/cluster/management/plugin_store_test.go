@@ -14,6 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/node"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/pluginauth"
 )
 
 func TestInstallPluginFromStoreWritesManifestConfig(t *testing.T) {
@@ -299,6 +300,23 @@ func (c fakePluginStoreHTTPClient) Do(req *http.Request) (*http.Response, error)
 		Header:     make(http.Header),
 		Request:    req,
 	}, nil
+}
+
+type authenticatedPluginStoreHTTPClient struct {
+	responses     fakePluginStoreHTTPClient
+	authorization map[string]string
+}
+
+func (c authenticatedPluginStoreHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	if want := c.authorization[req.URL.String()]; want != "" && req.Header.Get("Authorization") != want {
+		return &http.Response{
+			StatusCode: http.StatusUnauthorized,
+			Body:       io.NopCloser(strings.NewReader("unauthorized")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	}
+	return c.responses.Do(req)
 }
 
 func directRegistryJSON(artifactURL string, checksum string) []byte {
@@ -614,6 +632,64 @@ func TestListPluginStoreReportsGitHubReleaseMetadata(t *testing.T) {
 	entry := body.Plugins[0]
 	if entry.InstallType != pluginstore.InstallTypeGitHubRelease || !entry.AuthRequired {
 		t.Fatalf("plugin entry = %+v, want github-release metadata", entry)
+	}
+}
+
+func TestListPluginStoreUsesDatabaseAuthForPrivateRegistry(t *testing.T) {
+	db, cleanup := openManagementLogTestDB(t)
+	defer cleanup()
+
+	repo := cluster.NewRepository(db)
+	privateRegistryURL := "https://plugins.example/private/registry.json"
+	if errReplace := repo.ReplaceConfigSnapshot(context.Background(), map[string]any{
+		"plugins": map[string]any{
+			"enabled":       true,
+			"store-sources": []string{privateRegistryURL},
+		},
+	}); errReplace != nil {
+		t.Fatalf("ReplaceConfigSnapshot() error = %v", errReplace)
+	}
+	if _, errCreate := pluginauth.NewService(repo).Create(context.Background(), pluginauth.CreateInput{
+		Name:     "private registry",
+		Match:    "https://plugins.example/private/",
+		ApplyTo:  []string{pluginstore.RequestKindRegistry},
+		AuthType: pluginstore.AuthTypeBearer,
+		Token:    pluginstore.Secret("registry-token"),
+	}); errCreate != nil {
+		t.Fatalf("Create() error = %v", errCreate)
+	}
+
+	handler := NewHandler(repo, nil, "127.0.0.1", 0)
+	handler.SetPluginStoreHTTPClient(authenticatedPluginStoreHTTPClient{
+		responses: fakePluginStoreHTTPClient{
+			pluginstore.DefaultRegistryURL: []byte(`{"schema_version":1,"plugins":[]}`),
+			privateRegistryURL: []byte(`{
+				"schema_version": 1,
+				"plugins": [{
+					"id": "private-provider",
+					"name": "Private Provider",
+					"description": "Private plugin.",
+					"author": "owner",
+					"repository": "https://github.com/owner/private-provider"
+				}]
+			}`),
+		},
+		authorization: map[string]string{privateRegistryURL: "Bearer registry-token"},
+	})
+	engine := gin.New()
+	engine.GET("/plugin-store", handler.ListPluginStore)
+
+	resp := httptest.NewRecorder()
+	engine.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/plugin-store", nil))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
+	}
+	var body pluginStoreListResponse
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	if len(body.Plugins) != 1 || body.Plugins[0].ID != "private-provider" {
+		t.Fatalf("plugins = %+v, want private-provider", body.Plugins)
 	}
 }
 
