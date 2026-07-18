@@ -115,6 +115,7 @@ func TestClusterManagementAPIKeyUsageRouteRegistered(t *testing.T) {
 
 	for _, route := range []RouteKey{
 		{Method: http.MethodGet, Path: "/api-key-usage"},
+		{Method: http.MethodPost, Path: "/api-keys"},
 		{Method: http.MethodGet, Path: "/xai-api-key"},
 		{Method: http.MethodPut, Path: "/xai-api-key"},
 		{Method: http.MethodPatch, Path: "/xai-api-key"},
