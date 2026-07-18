@@ -194,6 +194,55 @@ func TestDecodePluginStoreAuthJSONClearsRawAndDecodedSecrets(t *testing.T) {
 	}
 }
 
+func TestDecodePluginStoreAuthJSONRejectsUnknownAndTrailingData(t *testing.T) {
+	for _, body := range []string{
+		`{"name":"test","unknown":"value"}`,
+		`{"name":"test"} {"name":"second"}`,
+		`null`,
+		`[]`,
+	} {
+		raw := []byte(body)
+		rawBacking := raw
+		var request createPluginStoreAuthRequest
+		if errDecode := decodePluginStoreAuthJSON(raw, &request); errDecode == nil {
+			t.Fatalf("decodePluginStoreAuthJSON(%q) error = nil", body)
+		}
+		request.Clear()
+		assertClearedPluginStoreAuthBytes(t, "invalid request", rawBacking)
+	}
+}
+
+func TestDecodePluginStoreAuthRequestRejectsOversizedBody(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/plugin-store-auth", strings.NewReader(strings.Repeat(" ", int(pluginStoreAuthMaxRequestBodySize)+1)))
+	var request createPluginStoreAuthRequest
+	errDecode := decodePluginStoreAuthRequest(ctx, &request)
+	if errDecode == nil {
+		t.Fatal("decodePluginStoreAuthRequest() error = nil")
+	}
+	var maxBytesError *http.MaxBytesError
+	if !errors.As(errDecode, &maxBytesError) {
+		t.Fatalf("decodePluginStoreAuthRequest() error = %v, want MaxBytesError", errDecode)
+	}
+	respondPluginStoreAuthRequestError(ctx, errDecode)
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
+func TestPluginStoreAuthIDRejectsOverflow(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: "18446744073709551615"}}
+	if _, okID := pluginStoreAuthID(ctx); okID {
+		t.Fatal("pluginStoreAuthID() ok = true for overflow")
+	}
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
 func TestDecodePluginStoreAuthRequestClearsPartialBodyOnReadError(t *testing.T) {
 	reader := &pluginStoreAuthReadErrorReader{payload: []byte(`{"token":"partial-secret"}`)}
 	recorder := httptest.NewRecorder()

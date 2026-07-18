@@ -17,6 +17,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const pluginStoreAuthMaxRequestBodySize int64 = 64 << 10
+
 type pluginStoreAuthRequestSecret struct {
 	value pluginstore.Secret
 }
@@ -227,7 +229,7 @@ func (h *Handler) DeletePluginStoreAuth(c *gin.Context) {
 
 func pluginStoreAuthID(c *gin.Context) (uint, bool) {
 	value := strings.TrimSpace(c.Param("id"))
-	parsed, errParse := strconv.ParseUint(value, 10, 64)
+	parsed, errParse := strconv.ParseUint(value, 10, strconv.IntSize-1)
 	if errParse != nil || parsed == 0 {
 		respondError(c, http.StatusBadRequest, "invalid_plugin_store_auth_id", fmt.Errorf("plugin store auth id is invalid"))
 		return 0, false
@@ -249,13 +251,19 @@ func respondPluginStoreAuthError(c *gin.Context, code string, err error) {
 }
 
 func respondPluginStoreAuthRequestError(c *gin.Context, err error) {
-	respondError(c, http.StatusBadRequest, "invalid_request", err)
+	status := http.StatusBadRequest
+	var maxBytesError *http.MaxBytesError
+	if errors.As(err, &maxBytesError) {
+		status = http.StatusRequestEntityTooLarge
+	}
+	respondError(c, status, "invalid_request", err)
 }
 
 func decodePluginStoreAuthRequest(c *gin.Context, target any) error {
 	if c == nil || c.Request == nil || c.Request.Body == nil {
 		return fmt.Errorf("plugin store auth request body is unavailable")
 	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, pluginStoreAuthMaxRequestBodySize)
 	raw, errRead := io.ReadAll(c.Request.Body)
 	if errRead != nil {
 		clearPluginStoreAuthBytes(raw)
@@ -266,7 +274,20 @@ func decodePluginStoreAuthRequest(c *gin.Context, target any) error {
 
 func decodePluginStoreAuthJSON(raw []byte, target any) error {
 	defer clearPluginStoreAuthBytes(raw)
-	return json.Unmarshal(raw, target)
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return fmt.Errorf("plugin store auth request must be a JSON object")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if errDecode := decoder.Decode(target); errDecode != nil {
+		return errDecode
+	}
+	offset := decoder.InputOffset()
+	if offset < 0 || offset > int64(len(raw)) || len(bytes.TrimSpace(raw[offset:])) != 0 {
+		return fmt.Errorf("plugin store auth request must contain one JSON value")
+	}
+	return nil
 }
 
 func clearPluginStoreAuthBytes(value []byte) {

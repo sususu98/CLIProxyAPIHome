@@ -158,11 +158,12 @@ func (b *pluginSyncJSONBuilder) appendString(value string) {
 	if b == nil || b.err != nil {
 		return
 	}
-	if b.countOnly {
-		b.addSize(len(strconv.AppendQuote(nil, value)))
+	quoted, errMarshal := json.Marshal(value)
+	if errMarshal != nil {
+		b.err = errMarshal
 		return
 	}
-	b.data = strconv.AppendQuote(b.data, value)
+	b.appendBytes(quoted)
 }
 
 func (b *pluginSyncJSONBuilder) appendSecret(value pluginstore.Secret) {

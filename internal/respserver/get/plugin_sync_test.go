@@ -92,6 +92,26 @@ func TestMarshalPluginSyncResponseUsesOneClearableBacking(t *testing.T) {
 	}
 }
 
+func TestMarshalPluginSyncResponseEscapesControlCharactersAsJSON(t *testing.T) {
+	response := pluginstore.PluginSyncResponse{
+		SchemaVersion: pluginstore.PluginSyncSchemaVersion,
+		ExpiresAt:     time.Now().UTC().Add(time.Minute),
+		Items: []pluginstore.PluginSyncItem{{Auth: []pluginstore.ResolvedAuthConfig{{
+			Match: "https://downloads.example/", Type: pluginstore.AuthTypeHeader,
+			HeaderName: "X\x01Y", HeaderValue: pluginstore.Secret("secret"),
+		}}}},
+	}
+	defer response.Clear()
+	raw, errMarshal := marshalPluginSyncResponse(response)
+	if errMarshal != nil {
+		t.Fatalf("marshalPluginSyncResponse() error = %v", errMarshal)
+	}
+	defer clearPluginSyncJSON(raw)
+	if !json.Valid(raw) {
+		t.Fatalf("marshalPluginSyncResponse() emitted invalid JSON: %q", raw)
+	}
+}
+
 func pluginSyncTestRuntime(t *testing.T) *home.Runtime {
 	t.Helper()
 	cfg := &config.Config{AuthDir: filepath.Join(t.TempDir(), "auths")}

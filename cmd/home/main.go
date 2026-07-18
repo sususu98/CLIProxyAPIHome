@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/buildinfo"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/cluster"
@@ -179,7 +180,13 @@ func run() int {
 		return 1
 	}
 	pluginAuthService := pluginauth.NewService(repo)
-	rt.SetPluginStoreAuthResolver(pluginAuthService.Resolved)
+	rt.SetPluginStoreAuthResolver(func(ctx context.Context) ([]pluginstore.ResolvedAuthConfig, error) {
+		legacy, errLegacy := repo.LoadLegacyPluginStoreAuth(ctx)
+		if errLegacy != nil {
+			return nil, errLegacy
+		}
+		return pluginAuthService.ResolvedWithLegacy(ctx, legacy)
+	})
 	rt.SetPluginSyncConfigLoader(func(ctx context.Context) (*config.Config, error) {
 		current, _, errConfig := repo.LoadConfigAsRuntimeConfig(ctx)
 		return current, errConfig
