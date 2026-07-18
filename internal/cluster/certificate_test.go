@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -118,6 +119,16 @@ func TestClusterTLSRejectsDeletedClientCertificate(t *testing.T) {
 	if errSign != nil {
 		t.Fatalf("SignClientCertificateRequest() error = %v", errSign)
 	}
+	fingerprint, errFingerprint := certificateFingerprintPEM(clientCertPEM)
+	if errFingerprint != nil {
+		t.Fatalf("certificateFingerprintPEM() error = %v", errFingerprint)
+	}
+	if active, errActive := repo.ClientCertificateFingerprintActive(ctx, certificateID, fingerprint); errActive != nil || !active {
+		t.Fatalf("ClientCertificateFingerprintActive(issued) = %v, %v", active, errActive)
+	}
+	if active, errActive := repo.ClientCertificateFingerprintActive(ctx, certificateID, strings.Repeat("0", 64)); errActive != nil || active {
+		t.Fatalf("ClientCertificateFingerprintActive(mismatch) = %v, %v", active, errActive)
+	}
 	clientTLS := clientTLSConfig(t, clientCertPEM, encodeRSAPrivateKeyPEM(clientKey), caPEM)
 
 	if errHandshake := runTLSHandshake(t, serverTLS, clientTLS); errHandshake != nil {
@@ -125,6 +136,9 @@ func TestClusterTLSRejectsDeletedClientCertificate(t *testing.T) {
 	}
 	if errDelete := db.Where("id = ?", certificateID).Delete(&CertificateRecord{}).Error; errDelete != nil {
 		t.Fatalf("delete client certificate record error = %v", errDelete)
+	}
+	if active, errActive := repo.ClientCertificateFingerprintActive(ctx, certificateID, fingerprint); errActive != nil || active {
+		t.Fatalf("ClientCertificateFingerprintActive(deleted) = %v, %v", active, errActive)
 	}
 	if errHandshake := runTLSHandshake(t, serverTLS, clientTLS); errHandshake == nil {
 		t.Fatal("handshake with deleted certificate error = nil, want failure")

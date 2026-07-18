@@ -662,14 +662,10 @@ func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
 
 var newPluginStoreClient = func(cfg *config.Config) pluginstore.Client {
 	client := &http.Client{}
-	var storeAuth []pluginstore.AuthConfig
 	if cfg != nil && strings.TrimSpace(cfg.ProxyURL) != "" {
 		util.SetProxy(&config.SDKConfig{ProxyURL: strings.TrimSpace(cfg.ProxyURL)}, client)
 	}
-	if cfg != nil {
-		storeAuth = cfg.Plugins.StoreAuth
-	}
-	return pluginstore.NewClientWithAuth(client, "", storeAuth)
+	return pluginstore.NewClient(client, "")
 }
 
 func pluginExtension(goos string) string {

@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
@@ -23,6 +24,13 @@ func (r *Repository) LoadConfigAsRuntimeConfig(ctx context.Context) (*appconfig.
 	secretChanged, errSecret := normalizeConfigRootSecrets(root)
 	if errSecret != nil {
 		return nil, nil, errSecret
+	}
+	authRevision, errAuthRevision := r.PluginStoreAuthRevision(ctx)
+	if errAuthRevision != nil {
+		return nil, nil, errAuthRevision
+	}
+	if errProject := projectPluginAuthConfig(root, authRevision); errProject != nil {
+		return nil, nil, errProject
 	}
 	cfg, payload, errConfig := RuntimeConfigFromRoot(root)
 	if errConfig != nil {
@@ -91,6 +99,38 @@ func RuntimeConfigFromRoot(root map[string]any) (*appconfig.Config, []byte, erro
 	}
 	appconfig.ForceDownstreamHomeModeConfig(cfg)
 	return cfg, data, nil
+}
+
+func projectPluginAuthConfig(root map[string]any, authRevision int64) error {
+	if root == nil {
+		return nil
+	}
+	var plugins map[string]any
+	if rawPlugins, exists := root["plugins"]; exists && rawPlugins != nil {
+		current, okPlugins := rawPlugins.(map[string]any)
+		if !okPlugins {
+			return fmt.Errorf("plugins config must be a mapping")
+		}
+		plugins = make(map[string]any, len(current))
+		for key, value := range current {
+			plugins[key] = value
+		}
+	}
+	if plugins == nil && authRevision <= 0 {
+		return nil
+	}
+	if plugins == nil {
+		plugins = map[string]any{}
+	}
+	delete(plugins, "store-auth")
+	delete(plugins, "sync-revision")
+	if authRevision > 0 {
+		plugins["auth-revision"] = authRevision
+	} else {
+		delete(plugins, "auth-revision")
+	}
+	root["plugins"] = plugins
+	return nil
 }
 
 // normalizeConfigRootSecrets normalizes a config root secrets.

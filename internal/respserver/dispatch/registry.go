@@ -20,6 +20,9 @@ type Env struct {
 	// NodeID is the mTLS client certificate common name when available.
 	// It can be empty in unit tests or unauthenticated contexts.
 	NodeID string
+
+	// ClientCertificateFingerprint is the SHA-256 fingerprint of the mTLS leaf certificate.
+	ClientCertificateFingerprint string
 }
 
 type ConnEnv struct {
@@ -46,6 +49,26 @@ type Reply struct {
 	RedisError   string
 	Integer      int64
 	Array        []Reply
+	Sensitive    bool
+}
+
+func SensitiveBulkString(payload []byte) Reply {
+	return Reply{Kind: ReplyKindBulkString, BulkString: payload, Sensitive: true}
+}
+
+func (r *Reply) ClearSensitive() {
+	if r == nil {
+		return
+	}
+	if r.Sensitive {
+		for index := range r.BulkString {
+			r.BulkString[index] = 0
+		}
+		r.BulkString = nil
+	}
+	for index := range r.Array {
+		r.Array[index].ClearSensitive()
+	}
 }
 
 // SimpleString builds a dispatch reply.

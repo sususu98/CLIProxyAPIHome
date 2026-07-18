@@ -215,8 +215,8 @@ func TestInstallPluginFromStoreWritesDirectManifestConfig(t *testing.T) {
 	if manifest.SourceURL != pluginstore.DefaultRegistryURL {
 		t.Fatalf("manifest source-url = %q, want default registry", manifest.SourceURL)
 	}
-	if len(manifest.Install.Artifacts) != 0 {
-		t.Fatalf("manifest artifacts = %+v, want source-backed direct manifest", manifest.Install.Artifacts)
+	if len(manifest.Install.Artifacts) != 1 || manifest.Install.Artifacts[0].URL != "https://downloads.example/sample-provider.zip" {
+		t.Fatalf("manifest artifacts = %+v, want fixed direct artifact", manifest.Install.Artifacts)
 	}
 }
 
@@ -276,8 +276,8 @@ func TestInstallPluginFromStoreWritesDirectManifestVersionFromVersions(t *testin
 	if manifest.Version != "0.3.0" || manifest.InstallType() != pluginstore.InstallTypeDirect {
 		t.Fatalf("manifest = %+v, want direct 0.3.0", manifest)
 	}
-	if len(manifest.Install.Artifacts) != 0 {
-		t.Fatalf("manifest artifacts = %+v, want source-backed direct manifest", manifest.Install.Artifacts)
+	if len(manifest.Install.Artifacts) != 1 || manifest.Install.Artifacts[0].URL != "https://downloads.example/sample-provider-0.3.0.zip" {
+		t.Fatalf("manifest artifacts = %+v, want fixed version artifact", manifest.Install.Artifacts)
 	}
 }
 
@@ -525,9 +525,7 @@ func TestListPluginStoreReportsManifestStatus(t *testing.T) {
 	}
 }
 
-func TestListPluginStoreReportsDirectMetadataAndAuth(t *testing.T) {
-	t.Setenv("PLUGIN_STORE_TOKEN", "secret-token")
-
+func TestListPluginStoreReportsDirectMetadata(t *testing.T) {
 	db, cleanup := openManagementLogTestDB(t)
 	defer cleanup()
 
@@ -535,14 +533,6 @@ func TestListPluginStoreReportsDirectMetadataAndAuth(t *testing.T) {
 	if errReplace := repo.ReplaceConfigSnapshot(context.Background(), map[string]any{
 		"plugins": map[string]any{
 			"enabled": true,
-			"store-auth": []any{
-				map[string]any{
-					"match":     pluginstore.DefaultRegistryURL,
-					"apply-to":  []any{pluginstore.RequestKindRegistry},
-					"type":      pluginstore.AuthTypeBearer,
-					"token-env": "PLUGIN_STORE_TOKEN",
-				},
-			},
 		},
 	}); errReplace != nil {
 		t.Fatalf("ReplaceConfigSnapshot() error = %v", errReplace)
@@ -565,37 +555,28 @@ func TestListPluginStoreReportsDirectMetadataAndAuth(t *testing.T) {
 	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
 		t.Fatalf("decode response: %v", errDecode)
 	}
+	if strings.Contains(resp.Body.String(), "auth_configured") {
+		t.Fatalf("response retained removed auth_configured field: %s", resp.Body.String())
+	}
 	if len(body.Plugins) != 1 {
 		t.Fatalf("plugins len = %d, want 1", len(body.Plugins))
 	}
 	entry := body.Plugins[0]
-	if entry.InstallType != pluginstore.InstallTypeDirect || !entry.AuthRequired || !entry.AuthConfigured {
-		t.Fatalf("plugin entry = %+v, want direct auth metadata", entry)
+	if entry.InstallType != pluginstore.InstallTypeDirect || !entry.AuthRequired {
+		t.Fatalf("plugin entry = %+v, want direct metadata", entry)
 	}
 	if len(entry.Platforms) != 1 || entry.Platforms[0].GOOS != "linux" || entry.Platforms[0].GOARCH != "amd64" {
 		t.Fatalf("platforms = %+v, want linux/amd64", entry.Platforms)
 	}
 }
 
-func TestListPluginStoreReportsGitHubReleaseMetadataAuth(t *testing.T) {
-	t.Setenv("PLUGIN_STORE_TOKEN", "secret-token")
-
+func TestListPluginStoreReportsGitHubReleaseMetadata(t *testing.T) {
 	db, cleanup := openManagementLogTestDB(t)
 	defer cleanup()
 
 	repo := cluster.NewRepository(db)
 	if errReplace := repo.ReplaceConfigSnapshot(context.Background(), map[string]any{
-		"plugins": map[string]any{
-			"enabled": true,
-			"store-auth": []any{
-				map[string]any{
-					"match":     "https://api.github.com/repos/author-name/sample-provider/releases/",
-					"apply-to":  []any{pluginstore.RequestKindMetadata},
-					"type":      pluginstore.AuthTypeBearer,
-					"token-env": "PLUGIN_STORE_TOKEN",
-				},
-			},
-		},
+		"plugins": map[string]any{"enabled": true},
 	}); errReplace != nil {
 		t.Fatalf("ReplaceConfigSnapshot() error = %v", errReplace)
 	}
@@ -631,61 +612,8 @@ func TestListPluginStoreReportsGitHubReleaseMetadataAuth(t *testing.T) {
 		t.Fatalf("plugins len = %d, want 1", len(body.Plugins))
 	}
 	entry := body.Plugins[0]
-	if entry.InstallType != pluginstore.InstallTypeGitHubRelease || !entry.AuthRequired || !entry.AuthConfigured {
-		t.Fatalf("plugin entry = %+v, want github-release metadata auth", entry)
-	}
-}
-
-func TestListPluginStoreReportsVersionArtifactAuth(t *testing.T) {
-	t.Setenv("PLUGIN_STORE_TOKEN", "secret-token")
-
-	db, cleanup := openManagementLogTestDB(t)
-	defer cleanup()
-
-	repo := cluster.NewRepository(db)
-	if errReplace := repo.ReplaceConfigSnapshot(context.Background(), map[string]any{
-		"plugins": map[string]any{
-			"enabled": true,
-			"store-auth": []any{
-				map[string]any{
-					"match":     "https://versioned.example/",
-					"apply-to":  []any{pluginstore.RequestKindArtifact},
-					"type":      pluginstore.AuthTypeBearer,
-					"token-env": "PLUGIN_STORE_TOKEN",
-				},
-			},
-		},
-	}); errReplace != nil {
-		t.Fatalf("ReplaceConfigSnapshot() error = %v", errReplace)
-	}
-
-	handler := NewHandler(repo, nil, "127.0.0.1", 0)
-	handler.SetPluginStoreHTTPClient(fakePluginStoreHTTPClient{
-		pluginstore.DefaultRegistryURL: directRegistryJSONWithVersions(
-			"https://downloads.example/sample-provider-0.4.0.zip",
-			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-			"https://versioned.example/sample-provider-0.3.0.zip",
-			"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-		),
-	})
-	engine := gin.New()
-	engine.GET("/plugin-store", handler.ListPluginStore)
-
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/plugin-store", nil)
-	engine.ServeHTTP(resp, req)
-	if resp.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", resp.Code, resp.Body.String())
-	}
-	var body pluginStoreListResponse
-	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
-		t.Fatalf("decode response: %v", errDecode)
-	}
-	if len(body.Plugins) != 1 {
-		t.Fatalf("plugins len = %d, want 1", len(body.Plugins))
-	}
-	if !body.Plugins[0].AuthConfigured {
-		t.Fatalf("auth_configured = false, want true for version artifact auth")
+	if entry.InstallType != pluginstore.InstallTypeGitHubRelease || !entry.AuthRequired {
+		t.Fatalf("plugin entry = %+v, want github-release metadata", entry)
 	}
 }
 

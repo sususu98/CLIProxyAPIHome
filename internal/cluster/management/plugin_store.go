@@ -54,7 +54,6 @@ type pluginStoreListEntry struct {
 	Repository       string                `json:"repository"`
 	InstallType      string                `json:"install_type"`
 	AuthRequired     bool                  `json:"auth_required"`
-	AuthConfigured   bool                  `json:"auth_configured"`
 	Platforms        []pluginStorePlatform `json:"platforms,omitempty"`
 	Logo             string                `json:"logo,omitempty"`
 	Homepage         string                `json:"homepage,omitempty"`
@@ -201,7 +200,6 @@ func (h *Handler) ListPluginStore(c *gin.Context) {
 			Repository:       trimString(item.plugin.Repository),
 			InstallType:      trimString(pluginstore.PluginInstallType(item.plugin)),
 			AuthRequired:     item.plugin.AuthRequired,
-			AuthConfigured:   pluginAuthConfigured(item.source, item.plugin, cfg),
 			Platforms:        sanitizePluginStorePlatforms(pluginstore.PluginPlatforms(item.plugin)),
 			Logo:             trimString(item.plugin.Logo),
 			Homepage:         trimString(item.plugin.Homepage),
@@ -476,11 +474,7 @@ func (h *Handler) newPluginStoreClient(cfg *appconfig.Config, registryURL string
 		}
 		httpClient = client
 	}
-	var storeAuth []pluginstore.AuthConfig
-	if cfg != nil {
-		storeAuth = cfg.Plugins.StoreAuth
-	}
-	return pluginstore.NewClientWithAuth(httpClient, registryURL, storeAuth)
+	return pluginstore.NewClient(httpClient, registryURL)
 }
 
 func (h *Handler) fetchSourcedPlugins(ctx context.Context, cfg *appconfig.Config, sources []pluginstore.Source) ([]sourcedPlugin, []pluginStoreSourceErr) {
@@ -743,13 +737,6 @@ func sanitizePluginStorePlatforms(platforms []pluginstore.Platform) []pluginStor
 		})
 	}
 	return out
-}
-
-func pluginAuthConfigured(source pluginstore.Source, plugin pluginstore.Plugin, cfg *appconfig.Config) bool {
-	if cfg == nil {
-		return false
-	}
-	return pluginstore.PluginAuthConfigured(source, plugin, cfg.Plugins.StoreAuth)
 }
 
 func trimString(value string) string {

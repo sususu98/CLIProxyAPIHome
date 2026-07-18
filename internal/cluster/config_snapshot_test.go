@@ -1,6 +1,8 @@
 package cluster
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -40,6 +42,56 @@ func TestRuntimeConfigFromRootAppliesHomeModeScalarsAndPreservesRemoteManagement
 	}
 	if cfg.RemoteManagement.DisableControlPanel {
 		t.Fatal("RemoteManagement.DisableControlPanel = true, want preserved false")
+	}
+}
+
+func TestLoadConfigAsRuntimeConfigProjectsPluginAuthRevisionWithoutStoreAuth(t *testing.T) {
+	db, errOpen := OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "home.db"))
+	if errOpen != nil {
+		t.Fatalf("OpenSQLite() error = %v", errOpen)
+	}
+	sqlDB, _ := db.DB()
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if errMigrate := AutoMigrate(db); errMigrate != nil {
+		t.Fatalf("AutoMigrate() error = %v", errMigrate)
+	}
+	repo := NewRepository(db)
+	root := map[string]any{
+		"plugins": map[string]any{
+			"enabled":       true,
+			"sync-revision": int64(999),
+			"store-auth": []any{map[string]any{
+				"match": "https://downloads.example/", "token-env": "SHOULD_NOT_LEAK",
+			}},
+			"configs": map[string]any{},
+		},
+	}
+	if errReplace := repo.ReplaceConfigSnapshot(context.Background(), root); errReplace != nil {
+		t.Fatalf("ReplaceConfigSnapshot() error = %v", errReplace)
+	}
+	if errEvent := repo.AppendEvent(context.Background(), pluginStoreAuthEventScope, "update", "1", 1); errEvent != nil {
+		t.Fatalf("AppendEvent() error = %v", errEvent)
+	}
+	_, payload, errLoad := repo.LoadConfigAsRuntimeConfig(context.Background())
+	if errLoad != nil {
+		t.Fatalf("LoadConfigAsRuntimeConfig() error = %v", errLoad)
+	}
+	var projected struct {
+		Plugins struct {
+			AuthRevision int64 `yaml:"auth-revision"`
+		} `yaml:"plugins"`
+	}
+	if errUnmarshal := yaml.Unmarshal(payload, &projected); errUnmarshal != nil {
+		t.Fatalf("unmarshal runtime payload: %v", errUnmarshal)
+	}
+	if projected.Plugins.AuthRevision == 0 {
+		t.Fatal("runtime payload plugins.auth-revision = 0, want event revision")
+	}
+	if strings.Contains(string(payload), "sync-revision") {
+		t.Fatalf("runtime config retained legacy plugins.sync-revision: %s", payload)
+	}
+	if strings.Contains(string(payload), "store-auth") || strings.Contains(string(payload), "SHOULD_NOT_LEAK") {
+		t.Fatalf("runtime config leaked plugin store auth: %s", payload)
 	}
 }
 

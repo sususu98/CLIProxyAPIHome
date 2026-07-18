@@ -239,6 +239,11 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `GET` | `/plugin-store` |
 | `POST` | `/plugin-store/:id/install` |
 | `POST` | `/plugin-store/:id/uninstall` |
+| `GET` | `/plugin-store-auth` |
+| `POST` | `/plugin-store-auth` |
+| `GET` | `/plugin-store-auth/:id` |
+| `PATCH` | `/plugin-store-auth/:id` |
+| `DELETE` | `/plugin-store-auth/:id` |
 | `DELETE` | `/proxy-url` |
 | `GET` | `/proxy-url` |
 | `PATCH` | `/proxy-url` |
@@ -831,7 +836,6 @@ openai-compatibility
       "repository": "https://github.com/author-name/sample-provider",
       "install_type": "github-release",
       "auth_required": false,
-      "auth_configured": false,
       "installed": true,
       "installed_version": "0.2.0",
       "configured": true,
@@ -852,7 +856,6 @@ openai-compatibility
 | `source_errors` | array | 部分 registry 查询失败时的来源级错误。 |
 | `plugins[].install_type` | string | registry 安装类型，目前为 `github-release` 或 `direct`。 |
 | `plugins[].auth_required` | boolean | registry 声明该插件来源可能需要认证。 |
-| `plugins[].auth_configured` | boolean | `plugins.store-auth` 存在匹配规则且引用的环境变量已设置时为 true。 |
 | `plugins[].platforms` | array | direct registry 条目声明的可用平台；GitHub release 条目为空。 |
 | `plugins[].installed` | boolean | 当前配置中是否存在该插件的 store manifest。 |
 | `plugins[].installed_version` | string | 当前配置 manifest 固定的版本。 |
@@ -943,6 +946,33 @@ Query：
 { "error": "plugin_task_create_failed", "message": "detail" }
 { "error": "invalid_config", "message": "detail" }
 ```
+
+### 插件商店凭证接口
+
+Home 将插件商店凭证加密保存在共享数据库中。Secret 为只写字段：任何响应都不会返回明文凭证或密文。创建、实际更新或删除规则会记录集群事件，供后续下游同步使用。规则按数据库创建顺序匹配，第一条匹配规则生效。`match` 必须是无 userinfo、query 和 fragment 的绝对 HTTPS URL。
+
+接口：
+
+- `GET /plugin-store-auth`：列出规则。
+- `POST /plugin-store-auth`：创建规则。
+- `GET /plugin-store-auth/:id`：读取单条规则。
+- `PATCH /plugin-store-auth/:id`：部分更新；未提交的 secret 字段保留原值。
+- `DELETE /plugin-store-auth/:id`：删除规则。
+
+创建示例：
+
+```json
+{
+  "name": "Private artifacts",
+  "match": "https://downloads.example/private/",
+  "apply_to": ["artifact"],
+  "auth_type": "bearer",
+  "token": "write-only-token",
+  "enabled": true
+}
+```
+
+响应字段包括 `id`、`name`、`match`、`apply_to`、`auth_type`、`header_name`、`enabled`、`version` 和 `credentials_configured`。支持的 `auth_type` 为 `none`、`bearer`、`basic`、`header`、`github-token`。
 
 ### POST `/certificates/clients`
 
@@ -3559,7 +3589,6 @@ DELETE query：
 | `plugins.enabled` | boolean | 在 Home 和下游 CPA 节点启用受信任的进程内插件。 |
 | `plugins.dir` | string | 每个节点本地插件产物目录。 |
 | `plugins.store-sources` | array of string | 额外插件商店 registry URL；内置官方 registry 始终包含。 |
-| `plugins.store-auth` | array | 插件商店 `registry`、`metadata`、`artifact` 请求的可选认证规则。规则只引用环境变量名；token 值不会写入 manifest。 |
 | `plugins.configs` | object | 以插件 ID 为 key 的单插件配置。插件商店安装会在插件条目下写入固定 `store` manifest；Home-mode CPA 节点根据该 manifest 下载产物，Home 仅在显式设置 `load-in-home: true` 时下载并加载。 |
 | `usage-statistics-enabled` | boolean | 启用内存 usage aggregation。Home 会向下游 CPA 强制为 `true`，并拒绝通过 Management API 关闭。 |
 | `redis-usage-queue-retention-seconds` | integer | Usage queue 保留窗口；默认 `60`，最大 `3600`。 |

@@ -239,6 +239,11 @@ The table below is extracted from the final Home route registry built by `intern
 | `GET` | `/plugin-store` |
 | `POST` | `/plugin-store/:id/install` |
 | `POST` | `/plugin-store/:id/uninstall` |
+| `GET` | `/plugin-store-auth` |
+| `POST` | `/plugin-store-auth` |
+| `GET` | `/plugin-store-auth/:id` |
+| `PATCH` | `/plugin-store-auth/:id` |
+| `DELETE` | `/plugin-store-auth/:id` |
 | `DELETE` | `/proxy-url` |
 | `GET` | `/proxy-url` |
 | `PATCH` | `/proxy-url` |
@@ -831,7 +836,6 @@ Example response:
       "repository": "https://github.com/author-name/sample-provider",
       "install_type": "github-release",
       "auth_required": false,
-      "auth_configured": false,
       "installed": true,
       "installed_version": "0.2.0",
       "configured": true,
@@ -852,7 +856,6 @@ Example response:
 | `source_errors` | array | Per-source registry fetch errors when some sources fail. |
 | `plugins[].install_type` | string | Registry install type, currently `github-release` or `direct`. |
 | `plugins[].auth_required` | boolean | Registry-declared hint that this plugin source may need authentication. |
-| `plugins[].auth_configured` | boolean | True when `plugins.store-auth` has a matching rule whose referenced environment variables are present. |
 | `plugins[].platforms` | array | Platforms declared by a direct registry entry. Empty for GitHub-release entries. |
 | `plugins[].installed` | boolean | True when config contains a store manifest for this plugin ID. |
 | `plugins[].installed_version` | string | Version pinned in the configured manifest. |
@@ -943,6 +946,33 @@ Common errors:
 { "error": "plugin_task_create_failed", "message": "detail" }
 { "error": "invalid_config", "message": "detail" }
 ```
+
+### Plugin store credential routes
+
+Home stores plugin store credentials encrypted in the shared database. Secrets are write-only: responses never include plaintext credentials or encrypted payloads. Creating, materially updating, or deleting a rule records a cluster event for downstream synchronization. Rules are evaluated in database creation order; the first matching rule wins. Matches must be absolute HTTPS URLs without user information, query, or fragment.
+
+Routes:
+
+- `GET /plugin-store-auth` lists rules.
+- `POST /plugin-store-auth` creates a rule.
+- `GET /plugin-store-auth/:id` returns one rule.
+- `PATCH /plugin-store-auth/:id` partially updates a rule. Omitted secret fields retain their current value.
+- `DELETE /plugin-store-auth/:id` deletes a rule.
+
+Create example:
+
+```json
+{
+  "name": "Private artifacts",
+  "match": "https://downloads.example/private/",
+  "apply_to": ["artifact"],
+  "auth_type": "bearer",
+  "token": "write-only-token",
+  "enabled": true
+}
+```
+
+Response fields include `id`, `name`, `match`, `apply_to`, `auth_type`, `header_name`, `enabled`, `version`, and `credentials_configured`. Supported `auth_type` values are `none`, `bearer`, `basic`, `header`, and `github-token`.
 
 ### POST `/certificates/clients`
 
@@ -3589,7 +3619,6 @@ These fields are accepted by Home YAML config. `PUT /config.yaml` accepts non-cr
 | `plugins.enabled` | boolean | Enables trusted in-process plugins on Home and downstream CPA nodes. |
 | `plugins.dir` | string | Local plugin artifact directory used by each node. |
 | `plugins.store-sources` | array of string | Additional plugin store registry URLs. The built-in official registry is always included. |
-| `plugins.store-auth` | array | Optional auth rules for plugin store `registry`, `metadata`, and `artifact` requests. Rules reference environment variable names only; token values are never stored in manifests. |
 | `plugins.configs` | object | Per-plugin config keyed by plugin ID. Store installs write a pinned `store` manifest under each plugin entry. Home-mode CPA nodes download store entries from that manifest; Home downloads and loads them only when `load-in-home: true` is explicitly set. |
 | `usage-statistics-enabled` | boolean | Enables in-memory usage aggregation. Home forces this to `true` for downstream CPA nodes and rejects disabling it through Management API updates. |
 | `redis-usage-queue-retention-seconds` | integer | Usage queue retention window. Default `60`, max `3600`. |

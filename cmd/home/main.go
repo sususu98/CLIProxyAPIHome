@@ -23,6 +23,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPIHome/internal/home"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/logging"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/managementhttp"
+	"github.com/router-for-me/CLIProxyAPIHome/internal/pluginauth"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/protocolmux"
 	quotacollector "github.com/router-for-me/CLIProxyAPIHome/internal/quota"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/respserver"
@@ -159,7 +160,7 @@ func run() int {
 		log.Errorf("database config is empty; run with -import first")
 		return 1
 	}
-	runtimeCfg, _, errRuntimeConfig := repo.LoadConfigAsRuntimeConfig(runCtx)
+	lastSeenID, runtimeCfg, errRuntimeConfig := loadInitialRuntimeConfig(runCtx, repo)
 	if errRuntimeConfig != nil {
 		log.Errorf("failed to load database runtime config: %v", errRuntimeConfig)
 		return 1
@@ -177,6 +178,13 @@ func run() int {
 		log.Errorf("failed to init runtime")
 		return 1
 	}
+	pluginAuthService := pluginauth.NewService(repo)
+	rt.SetPluginStoreAuthResolver(pluginAuthService.Resolved)
+	rt.SetPluginSyncConfigLoader(func(ctx context.Context) (*config.Config, error) {
+		current, _, errConfig := repo.LoadConfigAsRuntimeConfig(ctx)
+		return current, errConfig
+	})
+	rt.SetPluginSyncNodeActive(repo.ClientCertificateFingerprintActive)
 
 	clusterClientAddr, errClusterClientAddr := resolveDatabaseNodeIP(runCtx, clusterDB, dbBackend, clusterCfg, clusterExists)
 	if errClusterClientAddr != nil {
@@ -193,13 +201,17 @@ func run() int {
 	clusterAdapter = adapter
 	rt.SetClusterAdapter(adapter)
 	nodeCfg := resolveDatabaseNodeConfig(clusterCfg, clusterExists)
-	lastSeenID, errMaxEventID := repo.MaxEventID(runCtx)
-	if errMaxEventID != nil {
-		log.Errorf("failed to get database max event id: %v", errMaxEventID)
-		return 1
-	}
 	eventWatcher = cluster.NewEventWatcherFrom(repo, nodeCfg.EventPollInterval, lastSeenID, func(eventCtx context.Context, event cluster.ClusterEventRecord) error {
-		if strings.EqualFold(strings.TrimSpace(event.Scope), "config") {
+		scope := strings.TrimSpace(event.Scope)
+		if strings.EqualFold(scope, "plugin-store-auth") {
+			_, payload, errConfig := repo.LoadConfigAsRuntimeConfig(eventCtx)
+			if errConfig != nil {
+				return errConfig
+			}
+			rt.PublishConfigYAML(payload)
+			return nil
+		}
+		if strings.EqualFold(scope, "config") {
 			nextConfig, payload, errConfig := repo.LoadConfigAsRuntimeConfig(eventCtx)
 			if errConfig != nil {
 				return errConfig
@@ -213,7 +225,7 @@ func run() int {
 			rt.PublishConfigYAML(payload)
 			return nil
 		}
-		if strings.EqualFold(strings.TrimSpace(event.Scope), "plugin-task") {
+		if strings.EqualFold(scope, "plugin-task") {
 			_, payload, errConfig := repo.LoadConfigAsRuntimeConfig(eventCtx)
 			if errConfig != nil {
 				return errConfig

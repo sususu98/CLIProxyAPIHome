@@ -14,6 +14,7 @@ import (
 	"time"
 
 	sdkpluginhost "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginhost"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
 	"github.com/router-for-me/CLIProxyAPIHome/internal/access"
 	configaccess "github.com/router-for-me/CLIProxyAPIHome/internal/access/config_access"
 	coreauth "github.com/router-for-me/CLIProxyAPIHome/internal/cliproxy/auth"
@@ -40,14 +41,18 @@ type Runtime struct {
 	nextConfigSubID uint64
 	configSubs      map[uint64]func(payload []byte) error
 
-	accessManager   *access.Manager
-	coreManager     *coreauth.Manager
-	pluginHost      *sdkpluginhost.Host
-	pluginSyncMu    sync.Mutex
-	pluginStoreSync map[string]pluginStoreSyncState
-	clusterAdapter  ClusterAdapter
-	clusterRefresh  func(context.Context, string) ([]byte, error)
-	originalStore   coreauth.Store
+	accessManager           *access.Manager
+	coreManager             *coreauth.Manager
+	pluginHost              *sdkpluginhost.Host
+	pluginSyncMu            sync.Mutex
+	pluginStoreSync         map[string]pluginStoreSyncState
+	pluginStoreAuthResolver func(context.Context) ([]pluginstore.ResolvedAuthConfig, error)
+	pluginSyncConfigLoader  func(context.Context) (*config.Config, error)
+	pluginSyncNodeActive    func(context.Context, string, string) (bool, error)
+	pluginSyncHTTPClient    pluginstore.HTTPDoer
+	clusterAdapter          ClusterAdapter
+	clusterRefresh          func(context.Context, string) ([]byte, error)
+	originalStore           coreauth.Store
 
 	clusterUsageQueueMu sync.Mutex
 	clusterUsageQueue   *usagePayloadQueue
@@ -55,6 +60,51 @@ type Runtime struct {
 	cancel context.CancelFunc
 
 	fileWatcher interface{ Stop() error }
+}
+
+func (r *Runtime) SetPluginStoreAuthResolver(resolver func(context.Context) ([]pluginstore.ResolvedAuthConfig, error)) {
+	if r == nil {
+		return
+	}
+	r.pluginStoreAuthResolver = resolver
+}
+
+func (r *Runtime) resolvePluginStoreAuth(ctx context.Context) ([]pluginstore.ResolvedAuthConfig, error) {
+	if r == nil || r.pluginStoreAuthResolver == nil {
+		return nil, nil
+	}
+	return r.pluginStoreAuthResolver(ctx)
+}
+
+func (r *Runtime) SetPluginSyncConfigLoader(loader func(context.Context) (*config.Config, error)) {
+	if r == nil {
+		return
+	}
+	r.pluginSyncConfigLoader = loader
+}
+
+func (r *Runtime) pluginSyncConfig(ctx context.Context) (*config.Config, error) {
+	if r == nil {
+		return nil, nil
+	}
+	if r.pluginSyncConfigLoader != nil {
+		return r.pluginSyncConfigLoader(ctx)
+	}
+	return r.Config(), nil
+}
+
+func (r *Runtime) SetPluginSyncNodeActive(check func(context.Context, string, string) (bool, error)) {
+	if r == nil {
+		return
+	}
+	r.pluginSyncNodeActive = check
+}
+
+func (r *Runtime) PluginSyncNodeActive(ctx context.Context, nodeID string, fingerprint string) (bool, error) {
+	if r == nil || r.pluginSyncNodeActive == nil {
+		return false, nil
+	}
+	return r.pluginSyncNodeActive(ctx, strings.TrimSpace(nodeID), strings.TrimSpace(fingerprint))
 }
 
 type ClusterAdapter interface {
