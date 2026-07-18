@@ -434,6 +434,11 @@ func (h *Handler) GetAPIKeys(c *gin.Context) {
 	c.JSON(http.StatusOK, apiKeyEntriesResponse(entries))
 }
 
+// PostAPIKeys creates one API key.
+func (h *Handler) PostAPIKeys(c *gin.Context) {
+	h.createAPIKeyEntry(c)
+}
+
 // PutAPIKeys replaces an api keys.
 func (h *Handler) PutAPIKeys(c *gin.Context) {
 	data, errData := c.GetRawData()
@@ -449,6 +454,10 @@ func (h *Handler) PutAPIKeys(c *gin.Context) {
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 	if _, errReplace := h.repo.ReplaceAPIKeyEntries(ctx, entries); errReplace != nil {
+		if cluster.IsAPIKeyConflictError(errReplace) {
+			respondError(c, http.StatusConflict, "api_key_exists", errReplace)
+			return
+		}
 		if errors.Is(errReplace, cluster.ErrUserNotFound) {
 			respondError(c, http.StatusNotFound, "user_not_found", errReplace)
 			return

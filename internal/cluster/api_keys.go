@@ -16,7 +16,11 @@ import (
 // ErrAPIKeyExists indicates that an API key value is already owned by another record.
 var ErrAPIKeyExists = errors.New("api key already exists")
 
+// ErrAPIKeySelectorMismatch indicates that multiple selectors do not identify the same API key.
+var ErrAPIKeySelectorMismatch = errors.New("api key selector mismatch")
+
 type APIKeyEntry struct {
+	ID          uint
 	APIKey      string
 	UserID      *uint
 	Channels    []uint
@@ -24,6 +28,7 @@ type APIKeyEntry struct {
 }
 
 type APIKeyEntryUpdate struct {
+	ID          uint
 	APIKey      string
 	UserID      *uint
 	Channels    *[]uint
@@ -34,6 +39,32 @@ type APIKeyUserUpdate struct {
 	APIKey      *string
 	Channels    *[]uint
 	ModelGroups *[]uint
+}
+
+type APIKeySelector struct {
+	ID     uint
+	APIKey string
+	Index  *int
+}
+
+type APIKeyAdminUpdate struct {
+	APIKey      *string
+	UserID      *uint
+	Channels    *[]uint
+	ModelGroups *[]uint
+}
+
+// IsAPIKeyConflictError reports whether an error is an API key uniqueness conflict.
+func IsAPIKeyConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrAPIKeyExists) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unique constraint") ||
+		strings.Contains(message, "duplicate key")
 }
 
 // ListAPIKeyEntries returns API key rows with group bindings.
@@ -84,6 +115,214 @@ func (r *Repository) ReplaceAPIKeyEntries(ctx context.Context, entries []APIKeyE
 		return appendEvent(tx, "config", "upsert", configAPIKeysRootKey, time.Now().UTC().UnixNano())
 	})
 	return stats, errTransaction
+}
+
+// CreateAPIKey creates or restores one API key without replacing the full key list.
+func (r *Repository) CreateAPIKey(ctx context.Context, update APIKeyEntryUpdate) (*APIKeyRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	key := strings.TrimSpace(update.APIKey)
+	if key == "" {
+		return nil, fmt.Errorf("api key is required")
+	}
+
+	userID := normalizeOptionalUserID(update.UserID)
+	channelsJSON := emptyAPIKeyChannelsJSON()
+	if update.Channels != nil {
+		var errChannels error
+		channelsJSON, errChannels = apiKeyChannelsJSON(*update.Channels)
+		if errChannels != nil {
+			return nil, errChannels
+		}
+	}
+	modelGroupsJSON := emptyAPIKeyModelGroupsJSON()
+	if update.ModelGroups != nil {
+		var errModelGroups error
+		modelGroupsJSON, errModelGroups = apiKeyModelGroupsJSON(*update.ModelGroups)
+		if errModelGroups != nil {
+			return nil, errModelGroups
+		}
+	}
+
+	record := &APIKeyRecord{}
+	ctx = contextOrBackground(ctx)
+	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if userID != nil {
+			if errUser := ensureUserExists(ctx, tx, *userID); errUser != nil {
+				return errUser
+			}
+		}
+
+		existing := &APIKeyRecord{}
+		errFirst := tx.WithContext(ctx).Unscoped().Where("api_key = ?", key).First(existing).Error
+		switch {
+		case errors.Is(errFirst, gorm.ErrRecordNotFound):
+			record.APIKey = key
+			record.UserID = userID
+			record.Channels = channelsJSON
+			record.ModelGroups = modelGroupsJSON
+			if errCreate := tx.WithContext(ctx).Create(record).Error; errCreate != nil {
+				if IsAPIKeyConflictError(errCreate) {
+					return ErrAPIKeyExists
+				}
+				return errCreate
+			}
+		case errFirst != nil:
+			return errFirst
+		case existing.DeletedAt.Valid:
+			if errRestore := tx.WithContext(ctx).Unscoped().
+				Model(&APIKeyRecord{}).
+				Where("id = ?", existing.ID).
+				Updates(map[string]any{
+					"user_id":      userID,
+					"channels":     channelsJSON,
+					"model_groups": modelGroupsJSON,
+					"deleted_at":   nil,
+				}).Error; errRestore != nil {
+				return errRestore
+			}
+			if errReload := tx.WithContext(ctx).Where("id = ?", existing.ID).First(record).Error; errReload != nil {
+				return errReload
+			}
+		default:
+			return ErrAPIKeyExists
+		}
+
+		return appendEvent(tx, "config", "upsert", configAPIKeysRootKey, time.Now().UTC().UnixNano())
+	})
+	if errTransaction != nil {
+		return nil, errTransaction
+	}
+	return record, nil
+}
+
+// UpdateAPIKey updates one API key selected by stable ID or a legacy selector.
+func (r *Repository) UpdateAPIKey(ctx context.Context, selector APIKeySelector, update APIKeyAdminUpdate) (*APIKeyRecord, error) {
+	db, errDB := r.database()
+	if errDB != nil {
+		return nil, errDB
+	}
+	if errSelector := validateAPIKeySelector(selector); errSelector != nil {
+		return nil, errSelector
+	}
+
+	record := &APIKeyRecord{}
+	ctx = contextOrBackground(ctx)
+	errTransaction := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if errFind := findAPIKeyRecord(ctx, tx, selector, record); errFind != nil {
+			return errFind
+		}
+		if update.APIKey != nil {
+			nextKey := strings.TrimSpace(*update.APIKey)
+			if nextKey == "" {
+				return fmt.Errorf("api key is required")
+			}
+			if nextKey != strings.TrimSpace(record.APIKey) {
+				if errAvailable := ensureAPIKeyValueAvailable(ctx, tx, nextKey, record.ID); errAvailable != nil {
+					return errAvailable
+				}
+			}
+			record.APIKey = nextKey
+		}
+		if update.UserID != nil {
+			nextUserID := normalizeOptionalUserID(update.UserID)
+			if nextUserID != nil {
+				if errUser := ensureUserExists(ctx, tx, *nextUserID); errUser != nil {
+					return errUser
+				}
+			}
+			record.UserID = nextUserID
+		}
+		if update.Channels != nil {
+			channelsJSON, errChannels := apiKeyChannelsJSON(*update.Channels)
+			if errChannels != nil {
+				return errChannels
+			}
+			record.Channels = channelsJSON
+		}
+		if update.ModelGroups != nil {
+			modelGroupsJSON, errModelGroups := apiKeyModelGroupsJSON(*update.ModelGroups)
+			if errModelGroups != nil {
+				return errModelGroups
+			}
+			record.ModelGroups = modelGroupsJSON
+		}
+		if errSave := tx.WithContext(ctx).Save(record).Error; errSave != nil {
+			if IsAPIKeyConflictError(errSave) {
+				return ErrAPIKeyExists
+			}
+			return errSave
+		}
+		return appendEvent(tx, "config", "upsert", configAPIKeysRootKey, time.Now().UTC().UnixNano())
+	})
+	if errTransaction != nil {
+		return nil, errTransaction
+	}
+	return record, nil
+}
+
+// DeleteAPIKey deletes one API key selected by stable ID or a legacy selector.
+func (r *Repository) DeleteAPIKey(ctx context.Context, selector APIKeySelector) error {
+	db, errDB := r.database()
+	if errDB != nil {
+		return errDB
+	}
+	if errSelector := validateAPIKeySelector(selector); errSelector != nil {
+		return errSelector
+	}
+
+	ctx = contextOrBackground(ctx)
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		record := &APIKeyRecord{}
+		if errFind := findAPIKeyRecord(ctx, tx, selector, record); errFind != nil {
+			return errFind
+		}
+		if errDelete := tx.WithContext(ctx).Delete(record).Error; errDelete != nil {
+			return errDelete
+		}
+		return appendEvent(tx, "config", "upsert", configAPIKeysRootKey, time.Now().UTC().UnixNano())
+	})
+}
+
+func validateAPIKeySelector(selector APIKeySelector) error {
+	if selector.ID > 0 && selector.Index != nil {
+		return ErrAPIKeySelectorMismatch
+	}
+	if selector.Index != nil && *selector.Index < 0 {
+		return fmt.Errorf("invalid api key index")
+	}
+	if selector.ID == 0 && selector.Index == nil && strings.TrimSpace(selector.APIKey) == "" {
+		return fmt.Errorf("api key selector is required")
+	}
+	return nil
+}
+
+func findAPIKeyRecord(ctx context.Context, tx *gorm.DB, selector APIKeySelector, record *APIKeyRecord) error {
+	if tx == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	if record == nil {
+		return fmt.Errorf("api key record is nil")
+	}
+
+	query := tx.WithContext(contextOrBackground(ctx))
+	switch {
+	case selector.ID > 0:
+		query = query.Where("id = ?", selector.ID)
+	case selector.Index != nil:
+		query = query.Order("id").Offset(*selector.Index)
+	default:
+		query = query.Where("api_key = ?", strings.TrimSpace(selector.APIKey))
+	}
+	if errFirst := query.First(record).Error; errFirst != nil {
+		return errFirst
+	}
+	if selector.ID > 0 && strings.TrimSpace(selector.APIKey) != "" && strings.TrimSpace(record.APIKey) != strings.TrimSpace(selector.APIKey) {
+		return ErrAPIKeySelectorMismatch
+	}
+	return nil
 }
 
 // UpdateAPIKeyBindings updates user and group bindings for one API key.
@@ -565,9 +804,11 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 	}
 
 	stats := APIKeyUpsertStats{}
+	existingByID := make(map[uint]*APIKeyRecord, len(existing))
 	existingByKey := make(map[string]*APIKeyRecord, len(existing))
 	for i := range existing {
 		record := &existing[i]
+		existingByID[record.ID] = record
 		key := strings.TrimSpace(record.APIKey)
 		if key == "" {
 			continue
@@ -575,13 +816,12 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 		existingByKey[key] = record
 	}
 
-	keep := make(map[string]struct{}, len(entries))
+	keepIDs := make(map[uint]struct{}, len(entries))
 	for _, entry := range entries {
 		key := strings.TrimSpace(entry.APIKey)
 		if key == "" {
 			continue
 		}
-		keep[key] = struct{}{}
 		userID := normalizeOptionalUserID(entry.UserID)
 		if userID != nil {
 			if errUser := ensureUserExists(ctx, tx, *userID); errUser != nil {
@@ -605,18 +845,30 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 			}
 		}
 
-		if record := existingByKey[key]; record != nil {
+		record := existingByID[entry.ID]
+		if record == nil {
+			record = existingByKey[key]
+		}
+		if record != nil {
+			if duplicate := existingByKey[key]; duplicate != nil && duplicate.ID != record.ID {
+				return APIKeyUpsertStats{}, ErrAPIKeyExists
+			}
+			keepIDs[record.ID] = struct{}{}
 			updates := make(map[string]any)
-			updatedBindings := false
+			updatedEntry := false
 			if record.DeletedAt.Valid {
 				updates["deleted_at"] = nil
 				stats.Restored++
 			} else {
 				stats.Unchanged++
 			}
+			if strings.TrimSpace(record.APIKey) != key {
+				updates["api_key"] = key
+				updatedEntry = true
+			}
 			if !sameOptionalUint(record.UserID, userID) {
 				updates["user_id"] = userID
-				updatedBindings = true
+				updatedEntry = true
 			}
 			if entry.Channels != nil {
 				currentChannels, errCurrent := apiKeyChannelsFromJSON(record.Channels)
@@ -625,7 +877,7 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 				}
 				if !reflect.DeepEqual(currentChannels, normalizeChannelGroupIDs(*entry.Channels)) {
 					updates["channels"] = channelsJSON
-					updatedBindings = true
+					updatedEntry = true
 				}
 			}
 			if entry.ModelGroups != nil {
@@ -635,10 +887,10 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 				}
 				if !reflect.DeepEqual(currentModelGroups, normalizeModelGroupIDs(*entry.ModelGroups)) {
 					updates["model_groups"] = modelGroupsJSON
-					updatedBindings = true
+					updatedEntry = true
 				}
 			}
-			if updatedBindings && !record.DeletedAt.Valid {
+			if updatedEntry && !record.DeletedAt.Valid {
 				stats.Updated++
 				stats.Unchanged--
 			}
@@ -653,23 +905,21 @@ func replaceAPIKeyEntriesTxWithStats(ctx context.Context, tx *gorm.DB, entries [
 			continue
 		}
 
-		if errCreate := tx.WithContext(contextOrBackground(ctx)).Create(&APIKeyRecord{
+		created := APIKeyRecord{
 			APIKey:      key,
 			UserID:      userID,
 			Channels:    channelsJSON,
 			ModelGroups: modelGroupsJSON,
-		}).Error; errCreate != nil {
+		}
+		if errCreate := tx.WithContext(contextOrBackground(ctx)).Create(&created).Error; errCreate != nil {
 			return APIKeyUpsertStats{}, errCreate
 		}
+		keepIDs[created.ID] = struct{}{}
 		stats.Created++
 	}
 
 	for _, record := range existing {
-		key := strings.TrimSpace(record.APIKey)
-		if key == "" {
-			continue
-		}
-		if _, ok := keep[key]; ok {
+		if _, ok := keepIDs[record.ID]; ok {
 			continue
 		}
 		if record.DeletedAt.Valid {
@@ -698,7 +948,7 @@ func normalizeAPIKeyEntryUpdates(entries []APIKeyEntryUpdate) []APIKeyEntryUpdat
 			continue
 		}
 		seen[key] = struct{}{}
-		next := APIKeyEntryUpdate{APIKey: key}
+		next := APIKeyEntryUpdate{ID: entry.ID, APIKey: key}
 		next.UserID = normalizeOptionalUserID(entry.UserID)
 		if entry.Channels != nil {
 			channels := normalizeChannelGroupIDs(*entry.Channels)
@@ -726,6 +976,7 @@ func apiKeyEntryFromRecord(record *APIKeyRecord) (APIKeyEntry, error) {
 		return APIKeyEntry{}, errModelGroups
 	}
 	return APIKeyEntry{
+		ID:          record.ID,
 		APIKey:      strings.TrimSpace(record.APIKey),
 		UserID:      normalizeOptionalUserID(record.UserID),
 		Channels:    channels,

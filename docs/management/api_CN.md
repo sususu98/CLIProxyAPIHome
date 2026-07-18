@@ -110,6 +110,7 @@ DB-backed handler 通常同时返回机器可读 `error` 和可读 `message`：
 | `DELETE` | `/api-keys` |
 | `GET` | `/api-keys` |
 | `PATCH` | `/api-keys` |
+| `POST` | `/api-keys` |
 | `PUT` | `/api-keys` |
 | `GET` | `/billing/overview` |
 | `GET` | `/billing/charges` |
@@ -1182,6 +1183,8 @@ Path 参数：
   "api-keys": ["client-key-1"],
   "items": [
     {
+      "id": 1,
+      "api_key_id": 1,
       "api-key": "client-key-1",
       "api_key": "client-key-1",
       "user-id": 1,
@@ -1192,6 +1195,8 @@ Path 参数：
   ],
   "api_key_entries": [
     {
+      "id": 1,
+      "api_key_id": 1,
       "api-key": "client-key-1",
       "api_key": "client-key-1",
       "user-id": 1,
@@ -1210,12 +1215,48 @@ Path 参数：
 | `api-keys` | array of string | 兼容旧客户端的原始 key 列表。 |
 | `items` | array of `APIKeyEntry` | 结构化 API key records。 |
 | `api_key_entries` | array of `APIKeyEntry` | `items` 的 alias。 |
+| `APIKeyEntry.id` | integer | API key 的稳定数据库主键。 |
+| `APIKeyEntry.api_key_id` | integer | `id` 的 alias。 |
 | `APIKeyEntry.api-key` | string | 客户端 API key。 |
 | `APIKeyEntry.api_key` | string | `api-key` 的 alias。 |
 | `APIKeyEntry.user-id` | integer or null | 绑定的 `user.id`；`null` 表示未绑定。 |
 | `APIKeyEntry.user_id` | integer or null | `user-id` 的 alias。 |
 | `APIKeyEntry.channels` | array of integer | 绑定的 channel group IDs；空数组表示不限制。 |
 | `APIKeyEntry.model_groups` | array of integer | 绑定的 model group IDs；空数组表示不限制。 |
+
+### POST `/api-keys`
+
+原子创建一个客户端 API key，不替换现有列表。
+
+```json
+{
+  "api_key": "client-key-1",
+  "user_id": 1,
+  "channels": [1],
+  "model_groups": [2]
+}
+```
+
+密钥字段也接受 `api-key`、`key` 或 `value`；`user-id` 和 `model-groups` 作为别名。
+
+新的密钥值会获得新的稳定标识。如果重新添加与历史软删除记录完全相同的密钥值，则恢复原记录并复用原标识。创建已存在的活跃密钥会返回 `409 api_key_exists`。
+
+成功输出：
+
+```json
+{
+  "api_key": {
+    "id": 1,
+    "api_key_id": 1,
+    "api-key": "client-key-1",
+    "api_key": "client-key-1",
+    "user-id": 1,
+    "user_id": 1,
+    "channels": [1],
+    "model_groups": [2]
+  }
+}
+```
 
 ### PUT `/api-keys`
 
@@ -1259,6 +1300,8 @@ Entry 字段：
 
 如果 `user_id` 引用不存在的用户，接口返回 `404 user_not_found`。
 
+`PUT` 是显式的完整列表替换操作，采用 last-write-wins 语义。对于此操作，`id` 和 `api_key_id` 仅用于响应，在结构化输入中会被忽略。未改变的密钥值保留原标识，被移除的值会软删除，新值会获得新标识；如果新值恢复了完全相同的软删除记录，则复用原标识。
+
 成功输出：
 
 ```json
@@ -1267,7 +1310,27 @@ Entry 字段：
 
 ### PATCH `/api-keys`
 
-按下标或旧值更新客户端 API key。使用 `old/new` 时，如果旧值不存在，会追加 `new`。此接口还可以更新已有 API key 的 `user_id`、`channels` 和 `model_groups`。
+更新一个客户端 API key。优先使用稳定的 `id` / `api_key_id` 定位。旧的 `index`、`old/new` 和原始 key selector 继续作为兼容方式，后端会先将其解析到一条数据库记录，再执行定向更新。使用 `old/new` 时，如果旧值不存在，会原子创建 `new`。此接口还可以更新已有 API key 的 `user_id`、`channels` 和 `model_groups`。
+
+按 ID 更新：
+
+```json
+{
+  "id": 1,
+  "value": {
+    "api_key": "new-key",
+    "user_id": 1,
+    "channels": [1],
+    "model_groups": [2]
+  }
+}
+```
+
+仅更新绑定时，可以按 ID 定位而不重复发送密钥值：
+
+```json
+{ "api_key_id": 1, "channels": [1] }
+```
 
 按下标更新：
 
@@ -1302,26 +1365,23 @@ Entry 字段：
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
+| `id` | integer | 条件必填 | 推荐使用的稳定 API key 标识；别名：`api_key_id`、`api-key-id`。 |
 | `index` | integer | 条件必填 | 从 0 开始的下标。 |
-| `value` | string or `APIKeyEntry` | 条件必填 | 和 `index` 配套的新值；支持结构化 entry。 |
+| `value` | string or `APIKeyEntry` | 条件必填 | 和 `id` 或 `index` 配套的新值；支持结构化 entry。 |
 | `old` | string | 条件必填 | 要查找的旧 key。 |
 | `new` | string | 条件必填 | 新 key；旧值不存在时追加。 |
-| `api_key` | string | 条件必填 | 直接修改绑定时的目标 key；也接受 `api-key`、`key`。 |
+| `api_key` | string | 条件必填 | 旧版原始 key selector；和 `id` 同时提交时必须匹配该记录；也接受 `api-key`、`key`。 |
 | `user_id` | integer | 否 | 绑定的 `user.id`；也接受 `user-id`；传 `0` 清空绑定。 |
 | `channels` | array of integer | 否 | Channel group IDs。 |
 | `model_groups` | array of integer | 否 | Model group IDs；也接受 `model-groups`。 |
 
-常规输出：
-
-```json
-{ "status": "ok" }
-```
-
-直接修改绑定时输出：
+成功输出：
 
 ```json
 {
   "api_key": {
+    "id": 1,
+    "api_key_id": 1,
     "api-key": "client-key-1",
     "api_key": "client-key-1",
     "user-id": 1,
@@ -1334,12 +1394,13 @@ Entry 字段：
 
 ### DELETE `/api-keys`
 
-按下标或值删除客户端 API key。
+删除一个客户端 API key。优先使用稳定 ID；下标和值 selector 继续作为兼容方式。
 
 Query 参数：
 
 | Query | 类型 | 说明 |
 | --- | --- | --- |
+| `id` | integer | 推荐使用的稳定 API key 标识；别名：`api_key_id`、`api-key-id`。 |
 | `index` | integer | 删除指定从 0 开始下标的 key。 |
 | `value` | string | 删除 trim 后匹配的 key。 |
 | `api_key` | string | `value` 的 alias。 |
@@ -1351,6 +1412,8 @@ Query 参数：
 ```json
 { "status": "ok" }
 ```
+
+未知 ID 返回 `404 api_key_not_found`。如果同时提交的 ID 和 key selector 指向不同记录，接口返回 `400 invalid_api_key_selector`。
 
 ## Billing
 

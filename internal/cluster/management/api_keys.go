@@ -26,6 +26,9 @@ type apiKeyEntryBody struct {
 }
 
 type apiKeyPatchBody struct {
+	ID              *uint           `json:"id"`
+	APIKeyID        *uint           `json:"api_key_id"`
+	APIKeyIDDash    *uint           `json:"api-key-id"`
 	Old             *string         `json:"old"`
 	New             *string         `json:"new"`
 	Index           *int            `json:"index"`
@@ -58,6 +61,8 @@ func apiKeyEntriesResponse(entries []cluster.APIKeyEntry) gin.H {
 		}
 		keys = append(keys, key)
 		items = append(items, gin.H{
+			"id":           entry.ID,
+			"api_key_id":   entry.ID,
 			"api-key":      key,
 			"api_key":      key,
 			"user-id":      optionalUserIDValue(entry.UserID),
@@ -158,69 +163,58 @@ func (b apiKeyEntryBody) userID() *uint {
 	return b.UserIDDash
 }
 
+func (h *Handler) createAPIKeyEntry(c *gin.Context) {
+	data, errData := c.GetRawData()
+	if errData != nil {
+		respondError(c, http.StatusBadRequest, "invalid_body", errData)
+		return
+	}
+	entry, errEntry := decodeAPIKeyEntry(data)
+	if errEntry != nil || strings.TrimSpace(entry.APIKey) == "" {
+		respondError(c, http.StatusBadRequest, "invalid_body", errEntry)
+		return
+	}
+
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	record, errCreate := h.repo.CreateAPIKey(ctx, entry)
+	if errCreate != nil {
+		respondAPIKeyMutationError(c, errCreate)
+		return
+	}
+	if errRefresh := h.refreshConfig(ctx); errRefresh != nil {
+		respondError(c, http.StatusInternalServerError, "reload_failed", errRefresh)
+		return
+	}
+	responseEntry, errResponseEntry := clusterAPIKeyEntryFromRecord(record)
+	if errResponseEntry != nil {
+		respondError(c, http.StatusInternalServerError, "api_key_load_failed", errResponseEntry)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"api_key": apiKeyEntryToMap(responseEntry)})
+}
+
 func (h *Handler) patchAPIKeyEntries(c *gin.Context) error {
 	var body apiKeyPatchBody
 	if errBindJSON := c.ShouldBindJSON(&body); errBindJSON != nil {
 		return fmt.Errorf("invalid body")
 	}
+	if body.id() != nil && (body.Index != nil || body.Old != nil) {
+		return fmt.Errorf("invalid api key selector")
+	}
 
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
 
-	userID := body.userID()
-	modelGroups := body.modelGroups()
-	if userID != nil || body.Channels != nil || modelGroups != nil {
-		key := body.apiKey()
-		if key == "" && len(body.Value) > 0 {
-			if entry, errEntry := decodeAPIKeyEntry(body.Value); errEntry == nil {
-				key = strings.TrimSpace(entry.APIKey)
-				if userID == nil {
-					userID = entry.UserID
-				}
-				if body.Channels == nil {
-					body.Channels = entry.Channels
-				}
-				if modelGroups == nil {
-					modelGroups = entry.ModelGroups
-				}
-			}
-		}
-		if key == "" {
-			return fmt.Errorf("missing api_key")
-		}
-		record, errUpdate := h.repo.UpdateAPIKeyBindings(ctx, key, userID, body.Channels, modelGroups)
-		if errUpdate != nil {
-			if errors.Is(errUpdate, cluster.ErrUserNotFound) {
-				respondError(c, http.StatusNotFound, "user_not_found", errUpdate)
-				return nil
-			}
-			if errors.Is(errUpdate, gorm.ErrRecordNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "api key not found"})
-				return nil
-			}
-			respondError(c, http.StatusInternalServerError, "write_failed", errUpdate)
-			return nil
-		}
-		entry, errEntry := clusterAPIKeyEntryFromRecord(record)
-		if errEntry != nil {
-			respondError(c, http.StatusInternalServerError, "api_key_load_failed", errEntry)
-			return nil
-		}
-		c.JSON(http.StatusOK, gin.H{"api_key": apiKeyEntryToMap(entry)})
-		return nil
-	}
+	selector := cluster.APIKeySelector{}
+	update := cluster.APIKeyAdminUpdate{}
+	appendIfMissing := false
 
-	entries, errEntries := h.repo.ListAPIKeyEntries(ctx)
-	if errEntries != nil {
-		respondError(c, http.StatusInternalServerError, "api_keys_load_failed", errEntries)
-		return nil
-	}
-
-	changed := false
 	if body.Index != nil && len(body.Value) > 0 {
-		if *body.Index < 0 || *body.Index >= len(entries) {
+		if *body.Index < 0 {
 			return fmt.Errorf("invalid index")
 		}
+		selector.Index = body.Index
 		next, errEntry := decodeAPIKeyEntry(body.Value)
 		if errEntry != nil {
 			return fmt.Errorf("invalid value")
@@ -228,53 +222,107 @@ func (h *Handler) patchAPIKeyEntries(c *gin.Context) error {
 		if strings.TrimSpace(next.APIKey) == "" {
 			return fmt.Errorf("invalid value")
 		}
-		if next.Channels == nil {
-			channels := append([]uint(nil), entries[*body.Index].Channels...)
-			next.Channels = &channels
-		}
-		if next.ModelGroups == nil {
-			modelGroups := append([]uint(nil), entries[*body.Index].ModelGroups...)
-			next.ModelGroups = &modelGroups
-		}
-		if next.UserID == nil {
-			next.UserID = entries[*body.Index].UserID
-		}
-		entries[*body.Index] = cluster.APIKeyEntry{
-			APIKey:      strings.TrimSpace(next.APIKey),
-			UserID:      normalizeAPIKeyEntryUserID(next.UserID),
-			Channels:    uintsOrEmpty(next.Channels),
-			ModelGroups: uintsOrEmpty(next.ModelGroups),
-		}
-		changed = true
+		applyAPIKeyEntryUpdate(&update, next)
 	} else if body.Old != nil && body.New != nil {
 		oldKey := strings.TrimSpace(*body.Old)
 		newKey := strings.TrimSpace(*body.New)
 		if oldKey == "" || newKey == "" {
 			return fmt.Errorf("missing fields")
 		}
-		for i := range entries {
-			if strings.TrimSpace(entries[i].APIKey) != oldKey {
-				continue
+		selector.APIKey = oldKey
+		update.APIKey = &newKey
+		appendIfMissing = true
+	} else {
+		if id := body.id(); id != nil {
+			if *id == 0 {
+				return fmt.Errorf("invalid id")
 			}
-			entries[i].APIKey = newKey
-			changed = true
-			break
+			selector.ID = *id
+			selector.APIKey = body.apiKey()
+		} else {
+			selector.APIKey = body.apiKey()
 		}
-		if !changed {
-			entries = append(entries, cluster.APIKeyEntry{APIKey: newKey})
-			changed = true
+		if len(body.Value) > 0 {
+			next, errEntry := decodeAPIKeyEntry(body.Value)
+			if errEntry != nil {
+				return fmt.Errorf("invalid value")
+			}
+			applyAPIKeyEntryUpdate(&update, next)
 		}
-	}
-	if !changed {
-		return fmt.Errorf("missing fields")
+		if body.New != nil {
+			newKey := strings.TrimSpace(*body.New)
+			if newKey == "" {
+				return fmt.Errorf("invalid new value")
+			}
+			update.APIKey = &newKey
+		}
+		if userID := body.userID(); userID != nil {
+			update.UserID = userID
+		}
+		if body.Channels != nil {
+			update.Channels = body.Channels
+		}
+		if modelGroups := body.modelGroups(); modelGroups != nil {
+			update.ModelGroups = modelGroups
+		}
 	}
 
-	if _, errReplace := h.repo.ReplaceAPIKeyEntries(ctx, apiKeyEntryUpdatesFromEntries(entries)); errReplace != nil {
-		if errors.Is(errReplace, cluster.ErrUserNotFound) {
-			respondError(c, http.StatusNotFound, "user_not_found", errReplace)
-			return nil
+	if update.APIKey == nil && update.UserID == nil && update.Channels == nil && update.ModelGroups == nil {
+		return fmt.Errorf("missing fields")
+	}
+	if selector.ID == 0 && selector.Index == nil && strings.TrimSpace(selector.APIKey) == "" {
+		return fmt.Errorf("missing api key selector")
+	}
+
+	record, errUpdate := h.repo.UpdateAPIKey(ctx, selector, update)
+	if errUpdate != nil && appendIfMissing && errors.Is(errUpdate, gorm.ErrRecordNotFound) {
+		record, errUpdate = h.repo.CreateAPIKey(ctx, cluster.APIKeyEntryUpdate{APIKey: *update.APIKey})
+	}
+	if errUpdate != nil {
+		respondAPIKeyMutationError(c, errUpdate)
+		return nil
+	}
+	if errRefresh := h.refreshConfig(ctx); errRefresh != nil {
+		respondError(c, http.StatusInternalServerError, "reload_failed", errRefresh)
+		return nil
+	}
+	responseEntry, errResponseEntry := clusterAPIKeyEntryFromRecord(record)
+	if errResponseEntry != nil {
+		respondError(c, http.StatusInternalServerError, "api_key_load_failed", errResponseEntry)
+		return nil
+	}
+	c.JSON(http.StatusOK, gin.H{"api_key": apiKeyEntryToMap(responseEntry)})
+	return nil
+}
+
+func (h *Handler) deleteAPIKeyEntry(c *gin.Context) error {
+	selector := cluster.APIKeySelector{}
+	if idRaw := firstNonEmptyQuery(c, "id", "api_key_id", "api-key-id"); idRaw != "" {
+		id, errID := strconv.ParseUint(idRaw, 10, 64)
+		if errID != nil || id == 0 {
+			return fmt.Errorf("invalid id")
 		}
-		respondError(c, http.StatusInternalServerError, "write_failed", errReplace)
+		selector.ID = uint(id)
+		selector.APIKey = firstNonEmptyQuery(c, "value", "api_key", "api-key", "key")
+	}
+	if idxRaw := c.Query("index"); idxRaw != "" {
+		index, errIndex := strconv.Atoi(idxRaw)
+		if errIndex != nil || index < 0 {
+			return fmt.Errorf("invalid index")
+		}
+		selector.Index = &index
+	}
+	if selector.ID == 0 && selector.Index == nil {
+		selector.APIKey = firstNonEmptyQuery(c, "value", "api_key", "api-key", "key")
+	}
+	if selector.ID == 0 && selector.Index == nil && strings.TrimSpace(selector.APIKey) == "" {
+		return fmt.Errorf("missing id, index, or value")
+	}
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+
+	if errDelete := h.repo.DeleteAPIKey(ctx, selector); errDelete != nil {
+		respondAPIKeyMutationError(c, errDelete)
 		return nil
 	}
 	if errRefresh := h.refreshConfig(ctx); errRefresh != nil {
@@ -285,52 +333,37 @@ func (h *Handler) patchAPIKeyEntries(c *gin.Context) error {
 	return nil
 }
 
-func (h *Handler) deleteAPIKeyEntry(c *gin.Context) error {
-	ctx, cancel := h.requestContext(c)
-	defer cancel()
+func applyAPIKeyEntryUpdate(update *cluster.APIKeyAdminUpdate, entry cluster.APIKeyEntryUpdate) {
+	if update == nil {
+		return
+	}
+	if key := strings.TrimSpace(entry.APIKey); key != "" {
+		update.APIKey = &key
+	}
+	if entry.UserID != nil {
+		update.UserID = entry.UserID
+	}
+	if entry.Channels != nil {
+		update.Channels = entry.Channels
+	}
+	if entry.ModelGroups != nil {
+		update.ModelGroups = entry.ModelGroups
+	}
+}
 
-	entries, errEntries := h.repo.ListAPIKeyEntries(ctx)
-	if errEntries != nil {
-		respondError(c, http.StatusInternalServerError, "api_keys_load_failed", errEntries)
-		return nil
+func respondAPIKeyMutationError(c *gin.Context, err error) {
+	switch {
+	case cluster.IsAPIKeyConflictError(err):
+		respondError(c, http.StatusConflict, "api_key_exists", err)
+	case errors.Is(err, cluster.ErrUserNotFound):
+		respondError(c, http.StatusNotFound, "user_not_found", err)
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		respondError(c, http.StatusNotFound, "api_key_not_found", err)
+	case errors.Is(err, cluster.ErrAPIKeySelectorMismatch):
+		respondError(c, http.StatusBadRequest, "invalid_api_key_selector", err)
+	default:
+		respondError(c, http.StatusInternalServerError, "write_failed", err)
 	}
-
-	deleted := false
-	if idxRaw := c.Query("index"); idxRaw != "" {
-		index, errIndex := strconv.Atoi(idxRaw)
-		if errIndex == nil && index >= 0 && index < len(entries) {
-			entries = append(entries[:index], entries[index+1:]...)
-			deleted = true
-		}
-	}
-	if !deleted {
-		key := firstNonEmptyQuery(c, "value", "api_key", "api-key", "key")
-		if key != "" {
-			next := make([]cluster.APIKeyEntry, 0, len(entries))
-			for _, entry := range entries {
-				if strings.TrimSpace(entry.APIKey) == key {
-					deleted = true
-					continue
-				}
-				next = append(next, entry)
-			}
-			entries = next
-		}
-	}
-	if !deleted {
-		return fmt.Errorf("missing index or value")
-	}
-
-	if _, errReplace := h.repo.ReplaceAPIKeyEntries(ctx, apiKeyEntryUpdatesFromEntries(entries)); errReplace != nil {
-		respondError(c, http.StatusInternalServerError, "write_failed", errReplace)
-		return nil
-	}
-	if errRefresh := h.refreshConfig(ctx); errRefresh != nil {
-		respondError(c, http.StatusInternalServerError, "reload_failed", errRefresh)
-		return nil
-	}
-	respondOK(c)
-	return nil
 }
 
 func (b apiKeyPatchBody) apiKey() string {
@@ -343,32 +376,6 @@ func (b apiKeyPatchBody) apiKey() string {
 		}
 	}
 	return ""
-}
-
-func apiKeyEntryUpdatesFromEntries(entries []cluster.APIKeyEntry) []cluster.APIKeyEntryUpdate {
-	updates := make([]cluster.APIKeyEntryUpdate, 0, len(entries))
-	for _, entry := range entries {
-		key := strings.TrimSpace(entry.APIKey)
-		if key == "" {
-			continue
-		}
-		channels := append([]uint(nil), entry.Channels...)
-		modelGroups := append([]uint(nil), entry.ModelGroups...)
-		updates = append(updates, cluster.APIKeyEntryUpdate{
-			APIKey:      key,
-			UserID:      normalizeAPIKeyEntryUserID(entry.UserID),
-			Channels:    &channels,
-			ModelGroups: &modelGroups,
-		})
-	}
-	return updates
-}
-
-func uintsOrEmpty(values *[]uint) []uint {
-	if values == nil {
-		return nil
-	}
-	return append([]uint(nil), *values...)
 }
 
 func clusterAPIKeyEntryFromRecord(record *cluster.APIKeyRecord) (cluster.APIKeyEntry, error) {
@@ -385,6 +392,8 @@ func apiKeyEntryToMap(entry cluster.APIKeyEntry) gin.H {
 		modelGroups = []uint{}
 	}
 	return gin.H{
+		"id":           entry.ID,
+		"api_key_id":   entry.ID,
 		"api-key":      strings.TrimSpace(entry.APIKey),
 		"api_key":      strings.TrimSpace(entry.APIKey),
 		"user-id":      optionalUserIDValue(entry.UserID),
@@ -406,6 +415,15 @@ func (b apiKeyPatchBody) userID() *uint {
 		return b.UserID
 	}
 	return b.UserIDDash
+}
+
+func (b apiKeyPatchBody) id() *uint {
+	for _, value := range []*uint{b.ID, b.APIKeyID, b.APIKeyIDDash} {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 func normalizeAPIKeyEntryUserID(userID *uint) *uint {

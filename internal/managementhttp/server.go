@@ -192,6 +192,7 @@ func registerClusterManagementRoutes(r *RouteRegistry, handler *clustermanagemen
 	r.Set(http.MethodPatch, "/quota-exceeded/switch-preview-model", handler.PutSwitchPreviewModel)
 
 	r.Set(http.MethodGet, "/api-keys", handler.GetAPIKeys)
+	r.Set(http.MethodPost, "/api-keys", handler.PostAPIKeys)
 	r.Set(http.MethodPut, "/api-keys", handler.PutAPIKeys)
 	r.Set(http.MethodPatch, "/api-keys", handler.PatchAPIKeys)
 	r.Set(http.MethodDelete, "/api-keys", handler.DeleteAPIKeys)

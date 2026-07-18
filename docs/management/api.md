@@ -110,6 +110,7 @@ The table below is extracted from the final Home route registry built by `intern
 | `DELETE` | `/api-keys` |
 | `GET` | `/api-keys` |
 | `PATCH` | `/api-keys` |
+| `POST` | `/api-keys` |
 | `PUT` | `/api-keys` |
 | `GET` | `/billing/overview` |
 | `GET` | `/billing/charges` |
@@ -1182,6 +1183,8 @@ Example response:
   "api-keys": ["client-key-1"],
   "items": [
     {
+      "id": 1,
+      "api_key_id": 1,
       "api-key": "client-key-1",
       "api_key": "client-key-1",
       "user-id": 1,
@@ -1192,6 +1195,8 @@ Example response:
   ],
   "api_key_entries": [
     {
+      "id": 1,
+      "api_key_id": 1,
       "api-key": "client-key-1",
       "api_key": "client-key-1",
       "user-id": 1,
@@ -1210,12 +1215,48 @@ Fields:
 | `api-keys` | array of string | Compatibility list of raw client keys. |
 | `items` | array of `APIKeyEntry` | Structured API key records. |
 | `api_key_entries` | array of `APIKeyEntry` | Alias of `items`. |
+| `APIKeyEntry.id` | integer | Stable database primary key of the API key. |
+| `APIKeyEntry.api_key_id` | integer | Alias of `id`. |
 | `APIKeyEntry.api-key` | string | Client API key. |
 | `APIKeyEntry.api_key` | string | Alias of `api-key`. |
 | `APIKeyEntry.user-id` | integer or null | Bound `user.id`; `null` means unbound. |
 | `APIKeyEntry.user_id` | integer or null | Alias of `user-id`. |
 | `APIKeyEntry.channels` | array of integer | Bound channel group IDs. An empty array is non-restrictive. |
 | `APIKeyEntry.model_groups` | array of integer | Bound model group IDs. An empty array is non-restrictive. |
+
+### POST `/api-keys`
+
+Atomically creates one client API key without replacing the existing list.
+
+```json
+{
+  "api_key": "client-key-1",
+  "user_id": 1,
+  "channels": [1],
+  "model_groups": [2]
+}
+```
+
+The request also accepts `api-key`, `key`, or `value` as the key field. `user-id` and `model-groups` are accepted as aliases.
+
+A new key value receives a new stable identifier. Re-adding an identical soft-deleted key restores the previous record and reuses its identifier. Creating an active duplicate returns `409 api_key_exists`.
+
+Successful response:
+
+```json
+{
+  "api_key": {
+    "id": 1,
+    "api_key_id": 1,
+    "api-key": "client-key-1",
+    "api_key": "client-key-1",
+    "user-id": 1,
+    "user_id": 1,
+    "channels": [1],
+    "model_groups": [2]
+  }
+}
+```
 
 ### PUT `/api-keys`
 
@@ -1259,6 +1300,8 @@ Entry fields:
 
 If `user_id` references a missing user, the API returns `404 user_not_found`.
 
+`PUT` is an explicit complete-list replacement operation with last-write-wins semantics. `id` and `api_key_id` are response-only for this operation and are ignored in structured input. Unchanged key values preserve their identifiers, removed values are soft-deleted, and new values receive new identifiers unless they restore an identical soft-deleted value.
+
 Successful response:
 
 ```json
@@ -1267,7 +1310,27 @@ Successful response:
 
 ### PATCH `/api-keys`
 
-Updates one client API key by index or by old value. When `old/new` is used and the old value does not exist, `new` is appended. This route can also update `user_id`, `channels`, and `model_groups` for an existing API key.
+Updates one client API key. Stable `id` / `api_key_id` selection is preferred. Legacy `index`, `old/new`, and raw-key selectors remain available for compatibility and are resolved to one database record before the update is applied. When `old/new` is used and the old value does not exist, `new` is created atomically. This route can also update `user_id`, `channels`, and `model_groups` for an existing API key.
+
+ID update:
+
+```json
+{
+  "id": 1,
+  "value": {
+    "api_key": "new-key",
+    "user_id": 1,
+    "channels": [1],
+    "model_groups": [2]
+  }
+}
+```
+
+Binding-only updates can select the record by ID without resending the key value:
+
+```json
+{ "api_key_id": 1, "channels": [1] }
+```
 
 Index update:
 
@@ -1302,26 +1365,23 @@ Fields:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
+| `id` | integer | conditionally | Preferred stable API key identifier. Alias: `api_key_id`, `api-key-id`. |
 | `index` | integer | conditionally | Zero-based index. |
-| `value` | string or `APIKeyEntry` | conditionally | New value paired with `index`. Structured entries are accepted. |
+| `value` | string or `APIKeyEntry` | conditionally | New value paired with `id` or `index`. Structured entries are accepted. |
 | `old` | string | conditionally | Old key to find. |
 | `new` | string | conditionally | New key; appended when `old` is not found. |
-| `api_key` | string | conditionally | Direct-binding target. Aliases: `api-key`, `key`. |
+| `api_key` | string | conditionally | Legacy raw-key target. When supplied with `id`, it must match the selected record. Aliases: `api-key`, `key`. |
 | `user_id` | integer | no | Bound `user.id`. Alias: `user-id`; `0` clears the binding. |
 | `channels` | array of integer | no | Channel group IDs. |
 | `model_groups` | array of integer | no | Model group IDs. Alias: `model-groups`. |
 
-Normal response:
-
-```json
-{ "status": "ok" }
-```
-
-Direct binding update response:
+Successful response:
 
 ```json
 {
   "api_key": {
+    "id": 1,
+    "api_key_id": 1,
     "api-key": "client-key-1",
     "api_key": "client-key-1",
     "user-id": 1,
@@ -1334,12 +1394,13 @@ Direct binding update response:
 
 ### DELETE `/api-keys`
 
-Deletes a client API key by index or value.
+Deletes one client API key. Stable ID selection is preferred; index and value selectors remain available for compatibility.
 
 Query parameters:
 
 | Query | Type | Description |
 | --- | --- | --- |
+| `id` | integer | Preferred stable API key identifier. Aliases: `api_key_id`, `api-key-id`. |
 | `index` | integer | Delete the key at this zero-based index. |
 | `value` | string | Delete the key whose trimmed value matches. |
 | `api_key` | string | Alias of `value`. |
@@ -1351,6 +1412,8 @@ Example response:
 ```json
 { "status": "ok" }
 ```
+
+Unknown IDs return `404 api_key_not_found`. If an ID and key selector are both supplied but identify different records, the API returns `400 invalid_api_key_selector`.
 
 ## Billing
 
