@@ -146,7 +146,7 @@ func TestCollectorSupportsClaudeAntigravityKimiAndXAI(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{"models":{"pro":{"displayName":"Pro","quotaInfo":{"remainingFraction":0.4,"remaining":12,"resetTime":"2026-07-16T11:00:00Z"}}}}`))
 		case "/kimi":
-			_, _ = w.Write([]byte(`{"usage":{"used":3,"limit":10,"remaining":7,"reset_at":"2026-07-17T00:00:00Z"},"limits":[{"name":"daily","title":"Daily","scope":"request","used":3,"limit":10,"remaining":7,"window":{"duration":1,"timeUnit":"day"},"resetAt":"2026-07-17T00:00:00Z"}]}`))
+			_, _ = w.Write([]byte(`{"user":{"userId":"user-1","region":"REGION_OVERSEA"},"usage":{"limit":"100","used":"44","remaining":"56","resetTime":"2026-07-21T13:09:11Z"},"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"100","used":"10","remaining":"90","resetTime":"2026-07-19T14:09:11Z"}}],"totalQuota":{"limit":"100","remaining":"99"}}`))
 		case "/xai":
 			_, _ = w.Write([]byte(`{"config":{"monthlyLimit":{"val":20000},"used":{"val":167},"billingPeriodEnd":"2026-08-01T00:00:00Z"}}`))
 		default:
@@ -174,7 +174,25 @@ func TestCollectorSupportsClaudeAntigravityKimiAndXAI(t *testing.T) {
 	}{
 		{id: "claude-probe", provider: "claude", status: "healthy", windows: 3},
 		{id: "antigravity-probe", provider: "antigravity", status: "healthy", windows: 1},
-		{id: "kimi-probe", provider: "kimi", status: "healthy", windows: 1},
+		{id: "kimi-probe", provider: "kimi", status: "healthy", windows: 2, assert: func(t *testing.T, item *cluster.QuotaCredentialSnapshot) {
+			summary := item.Windows[0]
+			if summary.ID != "kimi-usage" || summary.Used == nil || *summary.Used != 44 || summary.Limit == nil || *summary.Limit != 100 || summary.Remaining == nil || *summary.Remaining != 56 {
+				t.Fatalf("unexpected kimi summary window: %+v", summary)
+			}
+			if summary.ResetAt == nil || !summary.ResetAt.Equal(time.Date(2026, 7, 21, 13, 9, 11, 0, time.UTC)) {
+				t.Fatalf("unexpected kimi summary reset time: %+v", summary.ResetAt)
+			}
+			limit := item.Windows[1]
+			if limit.ID != "kimi-limit-1" || limit.Used == nil || *limit.Used != 10 || limit.Limit == nil || *limit.Limit != 100 || limit.Remaining == nil || *limit.Remaining != 90 {
+				t.Fatalf("unexpected kimi limit window: %+v", limit)
+			}
+			if limit.PeriodUnit != "minute" || limit.PeriodValue == nil || *limit.PeriodValue != 300 || limit.WindowSeconds == nil || *limit.WindowSeconds != 18000 {
+				t.Fatalf("unexpected kimi limit period: %+v", limit)
+			}
+			if limit.ResetAt == nil || !limit.ResetAt.Equal(time.Date(2026, 7, 19, 14, 9, 11, 0, time.UTC)) {
+				t.Fatalf("unexpected kimi limit reset time: %+v", limit.ResetAt)
+			}
+		}},
 		{id: "xai-probe", provider: "xai", status: "healthy", windows: 1, assert: func(t *testing.T, item *cluster.QuotaCredentialSnapshot) {
 			window := item.Windows[0]
 			if window.Unit != "currency" || window.Currency == nil || *window.Currency != "USD" || window.Limit == nil || *window.Limit != 200 {
@@ -417,6 +435,36 @@ func TestProviderWindowNormalizationReconcilesContradictoryValues(t *testing.T) 
 	antigravity, errAntigravity := parseAntigravityWindows([]byte(`{"models":{"zero":{"quotaInfo":{"remaining":0}}}}`), now)
 	if errAntigravity != nil || len(antigravity) != 1 || antigravity[0].Status != "exhausted" {
 		t.Fatalf("remaining-only zero window = %+v, %v", antigravity, errAntigravity)
+	}
+}
+
+func TestParseKimiUsageWindowsAcceptsFlexibleNumericAndResetFields(t *testing.T) {
+	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
+	windows, errParse := parseKimiUsageWindows([]byte(`{"usage":{"limit":"100","used":"44","remaining":"56","reset_time":"2026-07-21T13:09:11.699501Z"},"limits":[{"window":{"duration":"300","timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":100,"used":"10","remaining":90,"reset_in":"120"}}]}`), now)
+	if errParse != nil || len(windows) != 2 {
+		t.Fatalf("parseKimiUsageWindows() = %+v, %v", windows, errParse)
+	}
+	summary := windows[0]
+	if summary.Used == nil || *summary.Used != 44 || summary.Limit == nil || *summary.Limit != 100 || summary.Remaining == nil || *summary.Remaining != 56 {
+		t.Fatalf("unexpected kimi summary window: %+v", summary)
+	}
+	if summary.ResetAt == nil || !summary.ResetAt.Equal(time.Date(2026, 7, 21, 13, 9, 11, 699501000, time.UTC)) {
+		t.Fatalf("unexpected kimi summary reset time: %+v", summary.ResetAt)
+	}
+	limit := windows[1]
+	if limit.PeriodUnit != "minute" || limit.PeriodValue == nil || *limit.PeriodValue != 300 || limit.WindowSeconds == nil || *limit.WindowSeconds != 18000 {
+		t.Fatalf("unexpected kimi string duration: %+v", limit)
+	}
+	if limit.ResetAt == nil || !limit.ResetAt.Equal(now.Add(2*time.Minute)) {
+		t.Fatalf("unexpected kimi relative reset time: %+v", limit.ResetAt)
+	}
+}
+
+func TestParseKimiUsageWindowsRejectsNonFiniteNumbers(t *testing.T) {
+	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
+	windows, errParse := parseKimiUsageWindows([]byte(`{"usage":{"limit":"NaN","used":"Infinity","remaining":"-Inf"},"limits":[{"window":{"duration":"300","timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"NaN","used":"Inf","remaining":"Infinity"}}]}`), now)
+	if errParse != nil || len(windows) != 0 {
+		t.Fatalf("parseKimiUsageWindows() = %+v, %v, want no usable windows", windows, errParse)
 	}
 }
 
