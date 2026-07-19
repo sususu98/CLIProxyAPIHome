@@ -483,8 +483,9 @@ func billingOverviewResponse(overview cluster.BillingOverview) gin.H {
 	}
 	return gin.H{
 		"range": gin.H{
-			"from": overview.Range.From,
-			"to":   overview.Range.To,
+			"from":     overview.Range.From,
+			"to":       overview.Range.To,
+			"timezone": overview.Range.Timezone,
 		},
 		"total_charge_amount":   overview.TotalChargeAmount,
 		"total_recharge_amount": overview.TotalRechargeAmount,
@@ -533,7 +534,7 @@ func billingBalanceRecordResponse(record *cluster.BillingBalanceRecord) gin.H {
 }
 
 func billingOverviewQueryFromRequest(c *gin.Context) (cluster.BillingOverviewQuery, bool) {
-	from, to, ok := billingRangeQueryFromRequest(c)
+	from, to, timezone, ok := billingRangeQueryFromRequest(c)
 	if !ok {
 		return cluster.BillingOverviewQuery{}, false
 	}
@@ -544,6 +545,7 @@ func billingOverviewQueryFromRequest(c *gin.Context) (cluster.BillingOverviewQue
 	return cluster.BillingOverviewQuery{
 		From:     from,
 		To:       to,
+		Timezone: timezone,
 		UserText: firstNonEmptyQuery(c, "user", "user_text", "username"),
 		UserID:   userID,
 		Provider: firstNonEmptyQuery(c, "provider"),
@@ -552,7 +554,7 @@ func billingOverviewQueryFromRequest(c *gin.Context) (cluster.BillingOverviewQue
 }
 
 func billingChargeQueryFromRequest(c *gin.Context) (cluster.BillingChargeQuery, bool) {
-	from, to, ok := billingRangeQueryFromRequest(c)
+	from, to, _, ok := billingRangeQueryFromRequest(c)
 	if !ok {
 		return cluster.BillingChargeQuery{}, false
 	}
@@ -577,7 +579,7 @@ func billingChargeQueryFromRequest(c *gin.Context) (cluster.BillingChargeQuery, 
 }
 
 func billingBalanceQueryFromRequest(c *gin.Context) (cluster.BillingBalanceQuery, bool) {
-	from, to, ok := billingRangeQueryFromRequest(c)
+	from, to, _, ok := billingRangeQueryFromRequest(c)
 	if !ok {
 		return cluster.BillingBalanceQuery{}, false
 	}
@@ -612,28 +614,37 @@ func clusterBillingPagination(limit int, offset int) (int, int) {
 	return limit, offset
 }
 
-func billingRangeQueryFromRequest(c *gin.Context) (*time.Time, *time.Time, bool) {
-	from, _, ok := billingTimeQuery(c, "from")
-	if !ok {
-		return nil, nil, false
+func billingRangeQueryFromRequest(c *gin.Context) (*time.Time, *time.Time, string, bool) {
+	location, timezone, errTimezone := parseUsageTimezone(c.Query("timezone"))
+	if errTimezone != nil {
+		respondUsageHTTPError(c, errTimezone)
+		return nil, nil, "", false
 	}
-	to, toDateOnly, ok := billingTimeQuery(c, "to")
+	from, _, ok := billingTimeQuery(c, "from", location)
 	if !ok {
-		return nil, nil, false
+		return nil, nil, "", false
+	}
+	to, toDateOnly, ok := billingTimeQuery(c, "to", location)
+	if !ok {
+		return nil, nil, "", false
 	}
 	if to != nil && toDateOnly {
-		normalized := endOfBillingDate(*to)
+		normalized := endOfBillingDate(*to, location)
 		to = &normalized
 	}
-	return from, to, true
+	if from != nil && to != nil && from.After(*to) {
+		respondError(c, http.StatusBadRequest, "invalid_time_range", fmt.Errorf("from must not be after to"))
+		return nil, nil, "", false
+	}
+	return from, to, timezone, true
 }
 
-func billingTimeQuery(c *gin.Context, key string) (*time.Time, bool, bool) {
+func billingTimeQuery(c *gin.Context, key string, location *time.Location) (*time.Time, bool, bool) {
 	raw := strings.TrimSpace(c.Query(key))
 	if raw == "" {
 		return nil, false, true
 	}
-	parsed, dateOnly, errParse := parseBillingTime(raw)
+	parsed, dateOnly, errParse := parseBillingTime(raw, location)
 	if errParse != nil {
 		respondError(c, http.StatusBadRequest, "invalid_"+key, errParse)
 		return nil, false, false
@@ -641,9 +652,12 @@ func billingTimeQuery(c *gin.Context, key string) (*time.Time, bool, bool) {
 	return &parsed, dateOnly, true
 }
 
-func parseBillingTime(raw string) (time.Time, bool, error) {
+func parseBillingTime(raw string, location *time.Location) (time.Time, bool, error) {
 	raw = strings.TrimSpace(raw)
-	if parsed, errDate := time.ParseInLocation("2006-01-02", raw, time.UTC); errDate == nil {
+	if location == nil {
+		location = time.UTC
+	}
+	if parsed, errDate := time.ParseInLocation("2006-01-02", raw, location); errDate == nil {
 		return parsed.UTC(), true, nil
 	}
 	if parsed, errRFC3339 := time.Parse(time.RFC3339Nano, raw); errRFC3339 == nil {
@@ -656,9 +670,12 @@ func parseBillingTime(raw string) (time.Time, bool, error) {
 	return time.Time{}, false, fmt.Errorf("time must be YYYY-MM-DD, RFC3339, or unix seconds")
 }
 
-func endOfBillingDate(value time.Time) time.Time {
-	utc := value.UTC()
-	return time.Date(utc.Year(), utc.Month(), utc.Day(), 23, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
+func endOfBillingDate(value time.Time, location *time.Location) time.Time {
+	if location == nil {
+		location = time.UTC
+	}
+	local := value.In(location)
+	return time.Date(local.Year(), local.Month(), local.Day(), 23, 59, 59, int(time.Second-time.Nanosecond), location).UTC()
 }
 
 func billingPaginationQuery(c *gin.Context) (int, int, bool) {

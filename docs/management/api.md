@@ -1464,7 +1464,9 @@ Unknown IDs return `404 api_key_not_found`. If an ID and key selector are both s
 
 All paths in this section are relative to the Management API base URL, for example `/v0/management/billing/overview` or `/v0/management/proxy/proxy-pools`. They are not `/user` routes and require the management key.
 
-Only `/billing/overview`, `/billing/charges`, and `/billing/balance-records` parse `from` and `to` as `YYYY-MM-DD`, RFC3339, or Unix seconds. Date-only values use UTC calendar dates, and a date-only `to` includes the whole ending UTC day. Explicit timestamp `to` values are inclusive exact instants and are not expanded. Clients that need a full natural day outside UTC should send RFC3339 boundaries with the intended timezone offset through the final nanosecond. Pagination with `limit` and `offset` applies only to `/billing/charges` and `/billing/balance-records`; those routes use `limit` default `50`, max `200`, and normalize negative `offset` values to `0`. `/billing/model-prices` supports only `provider`, `model`, and `enabled` query parameters. `/proxy/proxy-pools` currently does not parse query parameters.
+Only `/billing/overview`, `/billing/charges`, and `/billing/balance-records` parse `from` and `to` as `YYYY-MM-DD`, RFC3339, or Unix seconds. The optional `timezone` parameter defaults to `UTC` and must be an IANA timezone name. Date-only values use calendar dates in `timezone`, and a date-only `to` includes the whole ending day in that timezone. Explicit timestamps are exact instants and are not shifted or expanded by `timezone`. `/billing/overview` also uses `timezone` for `range` calendar dates and `daily_trend` buckets, so one natural day is not split at UTC midnight. Pagination with `limit` and `offset` applies only to `/billing/charges` and `/billing/balance-records`; those routes use `limit` default `50`, max `200`, and normalize negative `offset` values to `0`. `/billing/model-prices` supports only `provider`, `model`, and `enabled` query parameters. `/proxy/proxy-pools` currently does not parse query parameters.
+
+Unsupported timezone names return `400 invalid_timezone`. A `from` value after `to` returns `400 invalid_time_range`.
 
 ### GET `/billing/overview`
 
@@ -1475,7 +1477,8 @@ Query parameters:
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `from` | string | Optional start time: `YYYY-MM-DD`, RFC3339, or Unix seconds. |
-| `to` | string | Optional end time. Date-only values include the full UTC day. |
+| `to` | string | Optional inclusive end time. Date-only values include the full ending day in `timezone`. |
+| `timezone` | string | IANA timezone for date-only boundaries, response range dates, and daily trend buckets. Default `UTC`. |
 | `user` | string | Optional username, user text, or user ID filter. Aliases: `user_text`, `username`. |
 | `user_id` | integer | Optional exact user ID filter. Alias: `uid`. |
 | `provider` | string | Optional provider filter. |
@@ -1485,7 +1488,7 @@ Response fields:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `range` | object | Applied `from` and `to` range. |
+| `range` | object | Applied calendar `from`, `to`, and `timezone` range. |
 | `total_charge_amount` | number | Total charged amount. |
 | `total_recharge_amount` | number | Total recharge amount. |
 | `total_deduct_amount` | number | Total manual deduction amount. |
@@ -1495,7 +1498,7 @@ Response fields:
 | `output_tokens` | integer | Total output tokens. |
 | `cache_tokens` | integer | Total cache tokens. |
 | `active_user_count` | integer | Number of users with charges in the range. |
-| `daily_trend[]` | array | Daily charge amount and request count. |
+| `daily_trend[]` | array | Daily charge amount and request count grouped in `range.timezone`. |
 | `top_users[]` | array | Top users with `id`, `label`, `amount`, and `request_count`. |
 | `top_models[]` | array | Top models with `id`, `label`, `amount`, and `request_count`. |
 | `top_providers[]` | array | Top providers with `id`, `label`, `amount`, and `request_count`. |
@@ -1509,7 +1512,8 @@ Query parameters:
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `from` | string | Optional start time: `YYYY-MM-DD`, RFC3339, or Unix seconds. |
-| `to` | string | Optional end time. Date-only values include the full UTC day. |
+| `to` | string | Optional inclusive end time. Date-only values include the full ending day in `timezone`. |
+| `timezone` | string | IANA timezone for date-only boundaries. Default `UTC`. |
 | `user` | string | Optional username, user text, or user ID filter. Aliases: `user_text`, `username`. |
 | `user_id` | integer | Optional exact user ID filter. Alias: `uid`. |
 | `provider` | string | Optional provider filter. |
@@ -1559,7 +1563,8 @@ Query parameters:
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `from` | string | Optional start time: `YYYY-MM-DD`, RFC3339, or Unix seconds. |
-| `to` | string | Optional end time. Date-only values include the full UTC day. |
+| `to` | string | Optional inclusive end time. Date-only values include the full ending day in `timezone`. |
+| `timezone` | string | IANA timezone for date-only boundaries. Default `UTC`. |
 | `user` | string | Optional username, user text, or user ID filter. Aliases: `user_text`, `username`. |
 | `user_id` | integer | Optional exact user ID filter. Alias: `uid`. |
 | `limit` | integer | Optional page size. Default `50`, max `200`. |

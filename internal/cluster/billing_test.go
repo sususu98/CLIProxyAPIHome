@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -1069,6 +1070,9 @@ func TestBillingOverviewAggregatesChargesAndBalances(t *testing.T) {
 	if overview.Range.To != "2026-12-31" {
 		t.Fatalf("range to = %q, want 2026-12-31", overview.Range.To)
 	}
+	if overview.Range.Timezone != "UTC" {
+		t.Fatalf("range timezone = %q, want UTC", overview.Range.Timezone)
+	}
 	if overview.TotalRechargeAmount != 50 {
 		t.Fatalf("total recharge = %v, want 50", overview.TotalRechargeAmount)
 	}
@@ -1101,6 +1105,102 @@ func TestBillingOverviewAggregatesChargesAndBalances(t *testing.T) {
 	}
 	if overview.TopProviders[0].ID != "openai" || overview.TopProviders[0].Label != "openai" || overview.TopProviders[0].Amount != 2 || overview.TopProviders[0].RequestCount != 1 {
 		t.Fatalf("top provider = %#v, want openai amount 2 request count 1", overview.TopProviders[0])
+	}
+}
+
+func TestBillingOverviewGroupsDailyTrendByTimezone(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repo, closeRepo := newBillingTestRepository(t, ctx)
+	defer closeRepo()
+
+	username := "timezone@example.com"
+	credits := 100.0
+	user, errCreateUser := repo.CreateUser(ctx, UserUpdate{Username: &username, Credits: &credits})
+	if errCreateUser != nil {
+		t.Fatalf("CreateUser() error = %v", errCreateUser)
+	}
+	key := "timezone-client-key"
+	if _, errKey := repo.CreateAPIKeyForUser(ctx, user.ID, APIKeyUserUpdate{APIKey: &key}); errKey != nil {
+		t.Fatalf("CreateAPIKeyForUser() error = %v", errKey)
+	}
+	if _, errPrice := repo.CreateBillingModelPrice(ctx, BillingModelPriceUpdate{Provider: "openai", Model: "gpt-4.1-mini", RequestPrice: 1, Enabled: true}); errPrice != nil {
+		t.Fatalf("CreateBillingModelPrice() error = %v", errPrice)
+	}
+
+	payloads := []string{
+		`{"timestamp":"2026-06-09T17:00:00Z","provider":"openai","model":"gpt-4.1-mini","api_key":"timezone-client-key","request_id":"req-local-morning","tokens":{"input_tokens":1,"total_tokens":1}}`,
+		`{"timestamp":"2026-06-10T09:00:00Z","provider":"openai","model":"gpt-4.1-mini","api_key":"timezone-client-key","request_id":"req-local-evening","tokens":{"input_tokens":1,"total_tokens":1}}`,
+		`{"timestamp":"2026-03-08T09:00:00Z","provider":"openai","model":"gpt-4.1-mini","api_key":"timezone-client-key","request_id":"req-dst-before","tokens":{"input_tokens":1,"total_tokens":1}}`,
+		`{"timestamp":"2026-03-08T10:30:00Z","provider":"openai","model":"gpt-4.1-mini","api_key":"timezone-client-key","request_id":"req-dst-after","tokens":{"input_tokens":1,"total_tokens":1}}`,
+	}
+	for _, payload := range payloads {
+		if _, errUsage := repo.AppendUsage(ctx, payload, "192.0.2.10"); errUsage != nil {
+			t.Fatalf("AppendUsage() error = %v", errUsage)
+		}
+	}
+
+	from := time.Date(2026, time.June, 9, 16, 0, 0, 0, time.UTC)
+	to := time.Date(2026, time.June, 10, 15, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
+	overview, errOverview := repo.BillingOverview(ctx, BillingOverviewQuery{From: &from, To: &to, Timezone: "Asia/Shanghai"})
+	if errOverview != nil {
+		t.Fatalf("BillingOverview(Asia/Shanghai) error = %v", errOverview)
+	}
+	if overview.RequestCount != 2 || overview.TotalChargeAmount != 2 {
+		t.Fatalf("overview totals = requests %d amount %v, want 2 and 2", overview.RequestCount, overview.TotalChargeAmount)
+	}
+	if overview.Range.From != "2026-06-10" || overview.Range.To != "2026-06-10" || overview.Range.Timezone != "Asia/Shanghai" {
+		t.Fatalf("overview range = %#v, want 2026-06-10 in Asia/Shanghai", overview.Range)
+	}
+	if len(overview.DailyTrend) != 1 {
+		t.Fatalf("daily trend count = %d, want 1; trend = %#v", len(overview.DailyTrend), overview.DailyTrend)
+	}
+	if overview.DailyTrend[0].Date != "2026-06-10" || overview.DailyTrend[0].ChargeAmount != 2 || overview.DailyTrend[0].RequestCount != 2 {
+		t.Fatalf("daily trend = %#v, want 2026-06-10 amount 2 request count 2", overview.DailyTrend[0])
+	}
+
+	utcOverview, errUTCOverview := repo.BillingOverview(ctx, BillingOverviewQuery{From: &from, To: &to})
+	if errUTCOverview != nil {
+		t.Fatalf("BillingOverview(UTC) error = %v", errUTCOverview)
+	}
+	if len(utcOverview.DailyTrend) != 2 {
+		t.Fatalf("UTC daily trend count = %d, want 2; trend = %#v", len(utcOverview.DailyTrend), utcOverview.DailyTrend)
+	}
+	if utcOverview.DailyTrend[0].Date != "2026-06-09" || utcOverview.DailyTrend[1].Date != "2026-06-10" {
+		t.Fatalf("UTC daily trend = %#v, want June 9 and June 10", utcOverview.DailyTrend)
+	}
+
+	dstFrom := time.Date(2026, time.March, 8, 8, 0, 0, 0, time.UTC)
+	dstTo := time.Date(2026, time.March, 9, 6, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
+	dstOverview, errDSTOverview := repo.BillingOverview(ctx, BillingOverviewQuery{From: &dstFrom, To: &dstTo, Timezone: "America/Los_Angeles"})
+	if errDSTOverview != nil {
+		t.Fatalf("BillingOverview(America/Los_Angeles) error = %v", errDSTOverview)
+	}
+	if dstOverview.RequestCount != 2 || len(dstOverview.DailyTrend) != 1 {
+		t.Fatalf("DST overview = requests %d trend %#v, want 2 requests in one day", dstOverview.RequestCount, dstOverview.DailyTrend)
+	}
+	if dstOverview.Range.From != "2026-03-08" || dstOverview.Range.To != "2026-03-08" || dstOverview.DailyTrend[0].Date != "2026-03-08" {
+		t.Fatalf("DST range/trend = range %#v trend %#v, want March 8", dstOverview.Range, dstOverview.DailyTrend)
+	}
+}
+
+func TestBillingDateExpressionUsesPostgresTimezone(t *testing.T) {
+	t.Parallel()
+
+	db, errOpen := gorm.Open(postgres.New(postgres.Config{
+		DSN:                  "host=127.0.0.1 user=cliproxy dbname=cliproxy_home sslmode=disable",
+		PreferSimpleProtocol: true,
+	}), &gorm.Config{DisableAutomaticPing: true})
+	if errOpen != nil {
+		t.Fatalf("open postgres dry-run db: %v", errOpen)
+	}
+	expression, args := billingDateExpression(db, `"billing_charge"."created_at"`, "Asia/Shanghai", billingTrendBounds{})
+	if expression != `TO_CHAR(timezone(?, "billing_charge"."created_at"), 'YYYY-MM-DD')` {
+		t.Fatalf("expression = %q", expression)
+	}
+	if len(args) != 1 || args[0] != "Asia/Shanghai" {
+		t.Fatalf("args = %#v, want Asia/Shanghai", args)
 	}
 }
 
