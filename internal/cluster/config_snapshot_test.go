@@ -79,7 +79,6 @@ func TestLoadConfigAsRuntimeConfigProjectsPluginAuthRevisionWithoutStoreAuth(t *
 	var projected struct {
 		Plugins struct {
 			AuthRevision int64 `yaml:"auth-revision"`
-			SyncRevision int64 `yaml:"sync-revision"`
 		} `yaml:"plugins"`
 	}
 	if errUnmarshal := yaml.Unmarshal(payload, &projected); errUnmarshal != nil {
@@ -88,18 +87,11 @@ func TestLoadConfigAsRuntimeConfigProjectsPluginAuthRevisionWithoutStoreAuth(t *
 	if projected.Plugins.AuthRevision == 0 {
 		t.Fatal("runtime payload plugins.auth-revision = 0, want event revision")
 	}
-	if projected.Plugins.SyncRevision != projected.Plugins.AuthRevision {
-		t.Fatalf("runtime payload plugins.sync-revision = %d, want auth revision %d", projected.Plugins.SyncRevision, projected.Plugins.AuthRevision)
+	if strings.Contains(string(payload), "sync-revision") {
+		t.Fatalf("runtime config retained legacy plugins.sync-revision: %s", payload)
 	}
 	if strings.Contains(string(payload), "store-auth") || strings.Contains(string(payload), "SHOULD_NOT_LEAK") {
 		t.Fatalf("runtime config leaked plugin store auth: %s", payload)
-	}
-	legacy, errLegacy := repo.LoadLegacyPluginStoreAuth(context.Background())
-	if errLegacy != nil {
-		t.Fatalf("LoadLegacyPluginStoreAuth() error = %v", errLegacy)
-	}
-	if len(legacy) != 1 || legacy[0].TokenEnv != "SHOULD_NOT_LEAK" {
-		t.Fatalf("legacy plugin store auth = %#v, want preserved environment rule", legacy)
 	}
 }
 

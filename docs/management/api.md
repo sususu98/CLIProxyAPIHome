@@ -837,7 +837,6 @@ Example response:
       "repository": "https://github.com/author-name/sample-provider",
       "install_type": "github-release",
       "auth_required": false,
-      "auth_configured": false,
       "installed": true,
       "installed_version": "0.2.0",
       "configured": true,
@@ -858,7 +857,6 @@ Example response:
 | `source_errors` | array | Per-source registry fetch errors when some sources fail. |
 | `plugins[].install_type` | string | Registry install type, currently `github-release` or `direct`. |
 | `plugins[].auth_required` | boolean | Registry-declared hint that this plugin source may need authentication. |
-| `plugins[].auth_configured` | boolean | True when an enabled database rule or deprecated environment-backed rule matches this plugin's registry, metadata, or artifact request. |
 | `plugins[].platforms` | array | Platforms declared by a direct registry entry. Empty for GitHub-release entries. |
 | `plugins[].installed` | boolean | True when config contains a store manifest for this plugin ID. |
 | `plugins[].installed_version` | string | Version pinned in the configured manifest. |
@@ -952,7 +950,7 @@ Common errors:
 
 ### Plugin store credential routes
 
-Home stores plugin store credentials encrypted in the shared database. Secrets are write-only: responses never include plaintext credentials or encrypted payloads. Creating, materially updating, or deleting a rule records a cluster event for downstream synchronization. Rules are evaluated in database creation order; the first matching rule wins. Database rules take precedence over deprecated `plugins.store-auth` environment rules during migration. Matches must be absolute HTTPS URLs without user information, query, or fragment. Legacy `allow-insecure` rules are rejected with a migration error and must move their source to HTTPS.
+Home stores plugin store credentials encrypted in the shared database. Secrets are write-only: responses never include plaintext credentials or encrypted payloads. Creating, materially updating, or deleting a rule records a cluster event for downstream synchronization. Rules are evaluated in database creation order; the first matching rule wins. Matches must be absolute HTTPS URLs without user information, query, or fragment.
 
 Request bodies are limited to 64 KiB, must contain exactly one JSON object, and reject unknown fields. Oversized bodies return `413`; malformed bodies return `400`.
 
@@ -3702,7 +3700,6 @@ These fields are accepted by Home YAML config. `PUT /config.yaml` accepts non-cr
 | `plugins.enabled` | boolean | Enables trusted in-process plugins on Home and downstream CPA nodes. |
 | `plugins.dir` | string | Local plugin artifact directory used by each node. |
 | `plugins.store-sources` | array of string | Additional plugin store registry URLs. The built-in official registry is always included. |
-| `plugins.store-auth` | array | Deprecated environment-backed HTTPS auth rules retained for migration compatibility. New credentials should use `/plugin-store-auth`; legacy rules are resolved by Home and are not sent to CPA nodes. `allow-insecure` is no longer supported. |
 | `plugins.configs` | object | Per-plugin config keyed by plugin ID. Store installs write a pinned `store` manifest under each plugin entry. Home-mode CPA nodes download store entries from that manifest; Home downloads and loads them only when `load-in-home: true` is explicitly set. |
 | `usage-statistics-enabled` | boolean | Enables in-memory usage aggregation. Home forces this to `true` for downstream CPA nodes and rejects disabling it through Management API updates. |
 | `redis-usage-queue-retention-seconds` | integer | Usage queue retention window. Default `60`, max `3600`. |

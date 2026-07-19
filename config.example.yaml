@@ -70,13 +70,6 @@ plugins:
   # Additional plugin store registries. The built-in official registry is always included.
   # store-sources:
   #   - "https://example.com/cliproxy-plugins/registry.json"
-  # Deprecated HTTPS-only compatibility rules. New credentials should be managed
-  # through the /plugin-store-auth Management API and stored in the database.
-  # store-auth:
-  #   - match: "https://example.com/cliproxy-plugins/"
-  #     apply-to: ["registry", "artifact"]
-  #     type: bearer
-  #     token-env: "CLIPROXY_PLUGIN_STORE_TOKEN"
   configs:
     example:
       enabled: true

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
@@ -156,69 +155,6 @@ func TestServiceResolvedRejectsInvalidStoredHeaderName(t *testing.T) {
 	}
 	if _, errResolved := service.Resolved(context.Background()); errResolved == nil {
 		t.Fatal("Resolved() error = nil for invalid stored header name")
-	}
-}
-
-func TestServiceResolvedWithLegacyKeepsDatabasePrecedence(t *testing.T) {
-	t.Setenv("LEGACY_PLUGIN_TOKEN", "legacy-token")
-	service, _ := newTestService(t)
-	if _, errCreate := service.Create(context.Background(), CreateInput{
-		Name: "database", Match: "https://downloads.example/private/", AuthType: pluginstore.AuthTypeBearer,
-		Token: pluginstore.Secret("database-token"),
-	}); errCreate != nil {
-		t.Fatalf("Create() error = %v", errCreate)
-	}
-	resolved, errResolved := service.ResolvedWithLegacy(context.Background(), []pluginstore.AuthConfig{{
-		Match: "https://downloads.example/private/", Type: pluginstore.AuthTypeBearer, TokenEnv: "LEGACY_PLUGIN_TOKEN",
-	}})
-	if errResolved != nil {
-		t.Fatalf("ResolvedWithLegacy() error = %v", errResolved)
-	}
-	defer pluginstore.ClearResolvedAuthConfigs(resolved)
-	if len(resolved) != 2 || string(resolved[0].Token) != "database-token" || string(resolved[1].Token) != "legacy-token" {
-		t.Fatalf("resolved rules = %#v, want database rule before legacy rule", resolved)
-	}
-	matched, okMatched := pluginstore.ResolvedAuthForRequest(resolved, "https://downloads.example/private/plugin.zip", pluginstore.RequestKindArtifact)
-	if !okMatched {
-		t.Fatal("ResolvedAuthForRequest() matched = false")
-	}
-	defer matched.Clear()
-	if string(matched.Token) != "database-token" {
-		t.Fatalf("matched token = %q, want database-token", matched.Token)
-	}
-}
-
-func TestResolveLegacyAuthMissingEnvironmentSecretBlocksFallback(t *testing.T) {
-	t.Setenv("MISSING_PLUGIN_TOKEN", "")
-	t.Setenv("FALLBACK_PLUGIN_TOKEN", "fallback-token")
-	resolved, errResolved := resolveLegacyAuth([]pluginstore.AuthConfig{
-		{Match: "https://downloads.example/private/", Type: pluginstore.AuthTypeBearer, TokenEnv: "MISSING_PLUGIN_TOKEN"},
-		{Match: "https://downloads.example/", Type: pluginstore.AuthTypeBearer, TokenEnv: "FALLBACK_PLUGIN_TOKEN"},
-	})
-	if errResolved != nil {
-		t.Fatalf("resolveLegacyAuth() error = %v", errResolved)
-	}
-	defer pluginstore.ClearResolvedAuthConfigs(resolved)
-	if len(resolved) != 2 || resolved[0].Type != pluginstore.AuthTypeNone {
-		t.Fatalf("resolved rules = %#v, want no-auth barrier before fallback", resolved)
-	}
-	matched, okMatched := pluginstore.ResolvedAuthForRequest(resolved, "https://downloads.example/private/plugin.zip", pluginstore.RequestKindArtifact)
-	if !okMatched {
-		t.Fatal("ResolvedAuthForRequest() matched = false")
-	}
-	defer matched.Clear()
-	if matched.Type != pluginstore.AuthTypeNone || len(matched.Token) != 0 {
-		t.Fatalf("matched auth = %#v, want no-auth barrier", matched)
-	}
-}
-
-func TestResolveLegacyAuthRejectsAllowInsecure(t *testing.T) {
-	resolved, errResolved := resolveLegacyAuth([]pluginstore.AuthConfig{{
-		Match: "http://downloads.example/", Type: pluginstore.AuthTypeNone, AllowInsecure: true,
-	}})
-	pluginstore.ClearResolvedAuthConfigs(resolved)
-	if errResolved == nil || !strings.Contains(errResolved.Error(), "allow-insecure") {
-		t.Fatalf("resolveLegacyAuth() error = %v, want allow-insecure migration error", errResolved)
 	}
 }
 

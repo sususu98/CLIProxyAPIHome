@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -55,7 +54,6 @@ type pluginStoreListEntry struct {
 	Repository       string                `json:"repository"`
 	InstallType      string                `json:"install_type"`
 	AuthRequired     bool                  `json:"auth_required"`
-	AuthConfigured   bool                  `json:"auth_configured"`
 	Platforms        []pluginStorePlatform `json:"platforms,omitempty"`
 	Logo             string                `json:"logo,omitempty"`
 	Homepage         string                `json:"homepage,omitempty"`
@@ -157,17 +155,18 @@ func (h *Handler) UninstallPluginFromStore(c *gin.Context) {
 func (h *Handler) ListPluginStore(c *gin.Context) {
 	ctx, cancel := h.pluginStoreRequestContext(c)
 	defer cancel()
-	cfg, _, errConfig := h.currentConfig(ctx)
-	if errConfig != nil {
-		respondError(c, http.StatusInternalServerError, "config_load_failed", errConfig)
-		return
-	}
-	auth, errAuth := h.pluginStoreAuth.ResolvedWithLegacy(ctx, cfg.Plugins.StoreAuth)
+	auth, errAuth := h.pluginStoreAuth.Resolved(ctx)
 	if errAuth != nil {
 		respondError(c, http.StatusInternalServerError, "plugin_store_auth_resolve_failed", errAuth)
 		return
 	}
 	defer pluginstore.ClearResolvedAuthConfigs(auth)
+
+	cfg, _, errConfig := h.currentConfig(ctx)
+	if errConfig != nil {
+		respondError(c, http.StatusInternalServerError, "config_load_failed", errConfig)
+		return
+	}
 	sources, errSources := pluginStoreSources(cfg)
 	if errSources != nil {
 		respondError(c, http.StatusInternalServerError, "plugin_store_source_invalid", errSources)
@@ -207,7 +206,6 @@ func (h *Handler) ListPluginStore(c *gin.Context) {
 			Repository:       trimString(item.plugin.Repository),
 			InstallType:      trimString(pluginstore.PluginInstallType(item.plugin)),
 			AuthRequired:     item.plugin.AuthRequired,
-			AuthConfigured:   pluginResolvedAuthConfigured(item.source, item.plugin, auth),
 			Platforms:        sanitizePluginStorePlatforms(pluginstore.PluginPlatforms(item.plugin)),
 			Logo:             trimString(item.plugin.Logo),
 			Homepage:         trimString(item.plugin.Homepage),
@@ -244,17 +242,18 @@ func (h *Handler) InstallPluginFromStore(c *gin.Context) {
 	}
 	ctx, cancel := h.pluginStoreRequestContext(c)
 	defer cancel()
-	cfg, root, errConfig := h.currentConfig(ctx)
-	if errConfig != nil {
-		respondError(c, http.StatusInternalServerError, "config_load_failed", errConfig)
-		return
-	}
-	auth, errAuth := h.pluginStoreAuth.ResolvedWithLegacy(ctx, cfg.Plugins.StoreAuth)
+	auth, errAuth := h.pluginStoreAuth.Resolved(ctx)
 	if errAuth != nil {
 		respondError(c, http.StatusInternalServerError, "plugin_store_auth_resolve_failed", errAuth)
 		return
 	}
 	defer pluginstore.ClearResolvedAuthConfigs(auth)
+
+	cfg, root, errConfig := h.currentConfig(ctx)
+	if errConfig != nil {
+		respondError(c, http.StatusInternalServerError, "config_load_failed", errConfig)
+		return
+	}
 	sources, errSources := pluginStoreSources(cfg)
 	if errSources != nil {
 		respondError(c, http.StatusInternalServerError, "plugin_store_source_invalid", errSources)
@@ -750,39 +749,6 @@ func sanitizePluginStorePlatforms(platforms []pluginstore.Platform) []pluginStor
 		})
 	}
 	return out
-}
-
-func pluginResolvedAuthConfigured(source pluginstore.Source, plugin pluginstore.Plugin, auth []pluginstore.ResolvedAuthConfig) bool {
-	if resolvedAuthConfigured(auth, source.URL, pluginstore.RequestKindRegistry) {
-		return true
-	}
-	switch pluginstore.PluginInstallType(plugin) {
-	case pluginstore.InstallTypeDirect:
-		for _, artifact := range pluginstore.PluginArtifacts(plugin) {
-			if resolvedAuthConfigured(auth, artifact.URL, pluginstore.RequestKindArtifact) {
-				return true
-			}
-		}
-	case pluginstore.InstallTypeGitHubRelease:
-		owner, repo, errRepository := pluginstore.GitHubRepositoryParts(plugin.Repository)
-		if errRepository != nil {
-			return false
-		}
-		metadataURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/", url.PathEscape(owner), url.PathEscape(repo))
-		return resolvedAuthConfigured(auth, metadataURL+"latest", pluginstore.RequestKindMetadata) ||
-			resolvedAuthConfigured(auth, metadataURL+"tags/", pluginstore.RequestKindMetadata)
-	}
-	return false
-}
-
-func resolvedAuthConfigured(auth []pluginstore.ResolvedAuthConfig, requestURL string, kind string) bool {
-	item, ok := pluginstore.ResolvedAuthForRequest(auth, requestURL, kind)
-	if !ok {
-		return false
-	}
-	defer item.Clear()
-	authType := strings.ToLower(strings.TrimSpace(item.Type))
-	return authType != "" && authType != pluginstore.AuthTypeNone
 }
 
 func trimString(value string) string {

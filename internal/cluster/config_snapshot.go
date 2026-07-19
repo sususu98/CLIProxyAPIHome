@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
 	appconfig "github.com/router-for-me/CLIProxyAPIHome/internal/config"
 	"gopkg.in/yaml.v3"
 )
@@ -43,31 +42,6 @@ func (r *Repository) LoadConfigAsRuntimeConfig(ctx context.Context) (*appconfig.
 		}
 	}
 	return cfg, payload, nil
-}
-
-// LoadLegacyPluginStoreAuth loads deprecated environment-backed plugin store rules.
-func (r *Repository) LoadLegacyPluginStoreAuth(ctx context.Context) ([]pluginstore.AuthConfig, error) {
-	snapshot, errSnapshot := r.LoadConfigSnapshot(ctx)
-	if errSnapshot != nil {
-		return nil, errSnapshot
-	}
-	root, errRoot := ConfigRootFromSnapshot(snapshot)
-	if errRoot != nil {
-		return nil, errRoot
-	}
-	cfg, _, errConfig := RuntimeConfigFromRoot(root)
-	if errConfig != nil {
-		return nil, errConfig
-	}
-	if cfg == nil || len(cfg.Plugins.StoreAuth) == 0 {
-		return nil, nil
-	}
-	out := make([]pluginstore.AuthConfig, len(cfg.Plugins.StoreAuth))
-	copy(out, cfg.Plugins.StoreAuth)
-	for index := range out {
-		out[index].ApplyTo = append([]string(nil), out[index].ApplyTo...)
-	}
-	return out, nil
 }
 
 // ConfigRootFromSnapshot derives config root from snapshot.
@@ -149,12 +123,11 @@ func projectPluginAuthConfig(root map[string]any, authRevision int64) error {
 		plugins = map[string]any{}
 	}
 	delete(plugins, "store-auth")
+	delete(plugins, "sync-revision")
 	if authRevision > 0 {
 		plugins["auth-revision"] = authRevision
-		plugins["sync-revision"] = authRevision
 	} else {
 		delete(plugins, "auth-revision")
-		delete(plugins, "sync-revision")
 	}
 	root["plugins"] = plugins
 	return nil
