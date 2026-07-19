@@ -1464,7 +1464,9 @@ Query 参数：
 
 本节所有路径都相对于 Management API 基础 URL，例如 `/v0/management/billing/overview` 或 `/v0/management/proxy/proxy-pools`。这些不是 `/user` 路由，调用时需要管理密钥。
 
-只有 `/billing/overview`、`/billing/charges` 和 `/billing/balance-records` 会将 `from` 和 `to` 解析为 `YYYY-MM-DD`、RFC3339 或 Unix 秒。纯日期值使用 UTC 日历日期，只有日期的 `to` 会包含结束 UTC 日期的完整一天。显式时间戳形式的 `to` 是包含在结果内的精确时刻，不会自动扩展。需要查询完整非 UTC 自然日的客户端应发送带目标时区偏移且覆盖到最后一纳秒的 RFC3339 边界。分页参数 `limit` 和 `offset` 仅适用于 `/billing/charges` 和 `/billing/balance-records`；这些路由的 `limit` 默认值为 `50`，最大值为 `200`，负数 `offset` 会规范化为 `0`。`/billing/model-prices` 仅支持 `provider`、`model` 和 `enabled` 查询参数。`/proxy/proxy-pools` 当前不解析查询参数。
+只有 `/billing/overview`、`/billing/charges` 和 `/billing/balance-records` 会将 `from` 和 `to` 解析为 `YYYY-MM-DD`、RFC3339 或 Unix 秒。可选的 `timezone` 参数默认为 `UTC`，并且必须是 IANA 时区名称。纯日期值使用 `timezone` 中的日历日期，纯日期形式的 `to` 会包含该时区结束日期的完整一天。显式时间戳表示精确时刻，不会因 `timezone` 被移动或扩展。`/billing/overview` 还使用 `timezone` 生成 `range` 日历日期和 `daily_trend` 分桶，因此一个自然日不会在 UTC 午夜被拆成两天。分页参数 `limit` 和 `offset` 仅适用于 `/billing/charges` 和 `/billing/balance-records`；这些路由的 `limit` 默认值为 `50`，最大值为 `200`，负数 `offset` 会规范化为 `0`。`/billing/model-prices` 仅支持 `provider`、`model` 和 `enabled` 查询参数。`/proxy/proxy-pools` 当前不解析查询参数。
+
+不支持的时区名称返回 `400 invalid_timezone`。`from` 晚于 `to` 时返回 `400 invalid_time_range`。
 
 ### GET `/billing/overview`
 
@@ -1475,7 +1477,8 @@ Query 参数：
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
 | `from` | string | 可选开始时间：`YYYY-MM-DD`、RFC3339 或 Unix 秒。 |
-| `to` | string | 可选结束时间；只有日期时包含完整 UTC 当天。 |
+| `to` | string | 可选结束时间，包含该时刻；纯日期值包含 `timezone` 中结束日期的完整一天。 |
+| `timezone` | string | 用于纯日期边界、响应范围日期和每日趋势分桶的 IANA 时区；默认 `UTC`。 |
 | `user` | string | 可选用户名、用户文本或用户 ID 过滤；别名：`user_text`、`username`。 |
 | `user_id` | integer | 可选精确用户 ID 过滤；别名：`uid`。 |
 | `provider` | string | 可选 provider 过滤。 |
@@ -1485,7 +1488,7 @@ Query 参数：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `range` | object | 实际使用的 `from` 和 `to` 范围。 |
+| `range` | object | 实际使用的日历 `from`、`to` 和 `timezone` 范围。 |
 | `total_charge_amount` | number | 总扣费金额。 |
 | `total_recharge_amount` | number | 总充值金额。 |
 | `total_deduct_amount` | number | 总手工扣减金额。 |
@@ -1495,7 +1498,7 @@ Query 参数：
 | `output_tokens` | integer | output token 总数。 |
 | `cache_tokens` | integer | cache token 总数。 |
 | `active_user_count` | integer | 范围内有扣费记录的用户数量。 |
-| `daily_trend[]` | array | 每日扣费金额和请求数量。 |
+| `daily_trend[]` | array | 按 `range.timezone` 分组的每日扣费金额和请求数量。 |
 | `top_users[]` | array | 用户排行，字段为 `id`、`label`、`amount`、`request_count`。 |
 | `top_models[]` | array | 模型排行，字段为 `id`、`label`、`amount`、`request_count`。 |
 | `top_providers[]` | array | Provider 排行，字段为 `id`、`label`、`amount`、`request_count`。 |
@@ -1509,7 +1512,8 @@ Query 参数：
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
 | `from` | string | 可选开始时间：`YYYY-MM-DD`、RFC3339 或 Unix 秒。 |
-| `to` | string | 可选结束时间；只有日期时包含完整 UTC 当天。 |
+| `to` | string | 可选结束时间，包含该时刻；纯日期值包含 `timezone` 中结束日期的完整一天。 |
+| `timezone` | string | 用于纯日期边界的 IANA 时区；默认 `UTC`。 |
 | `user` | string | 可选用户名、用户文本或用户 ID 过滤；别名：`user_text`、`username`。 |
 | `user_id` | integer | 可选精确用户 ID 过滤；别名：`uid`。 |
 | `provider` | string | 可选 provider 过滤。 |
@@ -1559,7 +1563,8 @@ Query 参数：
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
 | `from` | string | 可选开始时间：`YYYY-MM-DD`、RFC3339 或 Unix 秒。 |
-| `to` | string | 可选结束时间；只有日期时包含完整 UTC 当天。 |
+| `to` | string | 可选结束时间，包含该时刻；纯日期值包含 `timezone` 中结束日期的完整一天。 |
+| `timezone` | string | 用于纯日期边界的 IANA 时区；默认 `UTC`。 |
 | `user` | string | 可选用户名、用户文本或用户 ID 过滤；别名：`user_text`、`username`。 |
 | `user_id` | integer | 可选精确用户 ID 过滤；别名：`uid`。 |
 | `limit` | integer | 可选分页大小；默认 `50`，最大 `200`。 |

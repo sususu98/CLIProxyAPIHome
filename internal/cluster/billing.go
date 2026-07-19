@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -144,6 +145,7 @@ type BillingBalanceUpdate struct {
 type BillingOverviewQuery struct {
 	From     *time.Time
 	To       *time.Time
+	Timezone string
 	UserText string
 	UserID   *uint
 	Provider string
@@ -168,8 +170,9 @@ type BillingOverview struct {
 }
 
 type BillingRange struct {
-	From string
-	To   string
+	From     string
+	To       string
+	Timezone string
 }
 
 type BillingTrendPoint struct {
@@ -475,6 +478,8 @@ func (r *Repository) BillingOverview(ctx context.Context, query BillingOverviewQ
 		OutputTokens      int64
 		CacheTokens       int64
 		ActiveUserCount   int64
+		MinCreatedAt      sql.NullString `gorm:"column:min_created_at"`
+		MaxCreatedAt      sql.NullString `gorm:"column:max_created_at"`
 	}
 	if errScan := chargeScope.Select(`
 		COALESCE(SUM("billing_charge"."amount"), 0) AS total_charge_amount,
@@ -482,7 +487,9 @@ func (r *Repository) BillingOverview(ctx context.Context, query BillingOverviewQ
 		COALESCE(SUM("billing_charge"."input_tokens"), 0) AS input_tokens,
 		COALESCE(SUM("billing_charge"."output_tokens"), 0) AS output_tokens,
 		COALESCE(SUM("billing_charge"."cache_tokens"), 0) AS cache_tokens,
-		COUNT(DISTINCT "billing_charge"."user_id") AS active_user_count`,
+		COUNT(DISTINCT "billing_charge"."user_id") AS active_user_count,
+		MIN("billing_charge"."created_at") AS min_created_at,
+		MAX("billing_charge"."created_at") AS max_created_at`,
 	).Scan(&chargeTotals).Error; errScan != nil {
 		return BillingOverview{}, errScan
 	}
@@ -493,7 +500,10 @@ func (r *Repository) BillingOverview(ctx context.Context, query BillingOverviewQ
 		return BillingOverview{}, errBalance
 	}
 
-	dailyTrend, errDailyTrend := billingDailyTrend(ctx, db, chargeQuery)
+	dailyTrend, errDailyTrend := billingDailyTrend(ctx, db, chargeQuery, query.Timezone, billingTrendBounds{
+		MinCreatedAt: chargeTotals.MinCreatedAt,
+		MaxCreatedAt: chargeTotals.MaxCreatedAt,
+	})
 	if errDailyTrend != nil {
 		return BillingOverview{}, errDailyTrend
 	}
@@ -515,7 +525,7 @@ func (r *Repository) BillingOverview(ctx context.Context, query BillingOverviewQ
 	}
 
 	return BillingOverview{
-		Range:               billingRange(query.From, query.To),
+		Range:               billingRange(query.From, query.To, query.Timezone),
 		TotalChargeAmount:   chargeTotals.TotalChargeAmount,
 		TotalRechargeAmount: ledgerTotals.RechargeAmount,
 		TotalDeductAmount:   ledgerTotals.DeductAmount,
@@ -849,13 +859,19 @@ type billingLedgerSummary struct {
 	DeductAmount   float64
 }
 
-func billingRange(from *time.Time, to *time.Time) BillingRange {
-	result := BillingRange{}
+type billingTrendBounds struct {
+	MinCreatedAt sql.NullString
+	MaxCreatedAt sql.NullString
+}
+
+func billingRange(from *time.Time, to *time.Time, timezone string) BillingRange {
+	timezone, location := billingTimezoneLocation(timezone)
+	result := BillingRange{Timezone: timezone}
 	if from != nil {
-		result.From = from.UTC().Format("2006-01-02")
+		result.From = from.UTC().In(location).Format(time.DateOnly)
 	}
 	if to != nil {
-		result.To = to.UTC().Format("2006-01-02")
+		result.To = to.UTC().In(location).Format(time.DateOnly)
 	}
 	return result
 }
@@ -890,11 +906,11 @@ func billingLedgerTotals(ctx context.Context, db *gorm.DB, query BillingOverview
 	return summary, nil
 }
 
-func billingDailyTrend(ctx context.Context, db *gorm.DB, query BillingChargeQuery) ([]BillingTrendPoint, error) {
+func billingDailyTrend(ctx context.Context, db *gorm.DB, query BillingChargeQuery, timezone string, bounds billingTrendBounds) ([]BillingTrendPoint, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database connection is nil")
 	}
-	dateExpr := billingDateExpression(db, `"billing_charge"."created_at"`)
+	dateExpr, dateArgs := billingDateExpression(db, `"billing_charge"."created_at"`, timezone, bounds)
 	scope := billingChargeQueryScope(db.WithContext(contextOrBackground(ctx)).Model(&BillingChargeRecord{}), query)
 	var rows []struct {
 		Date         string
@@ -904,7 +920,7 @@ func billingDailyTrend(ctx context.Context, db *gorm.DB, query BillingChargeQuer
 	if errScan := scope.Select(fmt.Sprintf(
 		`%s AS date, COALESCE(SUM("billing_charge"."amount"), 0) AS charge_amount, COUNT(*) AS request_count`,
 		dateExpr,
-	)).Group(dateExpr).Order("date ASC").Scan(&rows).Error; errScan != nil {
+	), dateArgs...).Group("date").Order("date ASC").Scan(&rows).Error; errScan != nil {
 		return nil, errScan
 	}
 	out := make([]BillingTrendPoint, 0, len(rows))
@@ -1053,11 +1069,67 @@ func billingUserBalanceQueryScope(scope *gorm.DB, query BillingOverviewQuery) *g
 	return scope
 }
 
-func billingDateExpression(db *gorm.DB, column string) string {
+func billingDateExpression(db *gorm.DB, column string, timezone string, bounds billingTrendBounds) (string, []any) {
+	timezone, location := billingTimezoneLocation(timezone)
 	if db != nil && db.Dialector != nil && db.Dialector.Name() == "postgres" {
-		return fmt.Sprintf("TO_CHAR(%s, 'YYYY-MM-DD')", column)
+		return fmt.Sprintf("TO_CHAR(timezone(?, %s), 'YYYY-MM-DD')", column), []any{timezone}
 	}
-	return fmt.Sprintf("strftime('%%Y-%%m-%%d', %s)", column)
+	start, end := billingTrendRange(bounds)
+	reference := start
+	if reference.IsZero() {
+		reference = end
+	}
+	if reference.IsZero() {
+		reference = time.Now().UTC()
+	}
+	_, offsetSeconds := reference.In(location).Zone()
+	fallback := fmt.Sprintf("strftime('%%Y-%%m-%%d', %s, '%+d seconds')", column, offsetSeconds)
+	if start.IsZero() || end.IsZero() || !usageObservabilityTimezoneOffsetChanges(location, start, end) {
+		return fallback, nil
+	}
+	segments := usageObservabilityTrendBucketCaseSegments("day", location, start, end)
+	if len(segments) == 0 {
+		return fallback, nil
+	}
+	unixExpr := fmt.Sprintf("CAST(strftime('%%s', %s) AS INTEGER)", column)
+	var builder strings.Builder
+	builder.WriteString("CASE")
+	for _, segment := range segments {
+		date := time.Unix(segment.BucketUnix, 0).UTC().In(location).Format(time.DateOnly)
+		builder.WriteString(fmt.Sprintf(" WHEN %s >= %d AND %s < %d THEN '%s'", unixExpr, segment.StartUnix, unixExpr, segment.EndUnix, date))
+	}
+	builder.WriteString(" ELSE ")
+	builder.WriteString(fallback)
+	builder.WriteString(" END")
+	return builder.String(), nil
+}
+
+func billingTimezoneLocation(timezone string) (string, *time.Location) {
+	value := strings.TrimSpace(timezone)
+	if value == "" {
+		return "UTC", time.UTC
+	}
+	location, errLoad := time.LoadLocation(value)
+	if errLoad != nil {
+		return "UTC", time.UTC
+	}
+	return value, location
+}
+
+func billingTrendRange(bounds billingTrendBounds) (time.Time, time.Time) {
+	var start time.Time
+	var end time.Time
+	if bounds.MinCreatedAt.Valid {
+		if parsedStart, ok := usageObservabilityAggregateTime(bounds.MinCreatedAt.String); ok {
+			start = parsedStart.UTC()
+		}
+	}
+	if bounds.MaxCreatedAt.Valid {
+		if parsedEnd, ok := usageObservabilityAggregateTime(bounds.MaxCreatedAt.String); ok {
+			end = parsedEnd.UTC()
+		}
+	}
+	return start, end
 }
 
 func billingBalanceQueryScope(scope *gorm.DB, query BillingBalanceQuery) *gorm.DB {

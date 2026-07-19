@@ -633,6 +633,57 @@ func TestGetBillingOverviewReturnsTotals(t *testing.T) {
 	if overview["total_recharge_amount"] != float64(50) {
 		t.Fatalf("overview.total_recharge_amount = %v, want 50", overview["total_recharge_amount"])
 	}
+	rangeValue, ok := overview["range"].(map[string]any)
+	if !ok {
+		t.Fatalf("overview.range = %T, want object", overview["range"])
+	}
+	if rangeValue["timezone"] != "UTC" {
+		t.Fatalf("overview.range.timezone = %v, want UTC", rangeValue["timezone"])
+	}
+}
+
+func TestGetBillingOverviewGroupsRequestedTimezone(t *testing.T) {
+	t.Parallel()
+
+	handler, closeRepo := newBillingManagementTestHandler(t)
+	defer closeRepo()
+	seedBillingManagementCharge(t, handler)
+	payload := `{"timestamp":"2026-06-09T17:00:00Z","provider":"openai","model":"gpt-4.1-mini","api_key":"client-key","request_id":"req-2","tokens":{"input_tokens":1,"total_tokens":1}}`
+	if _, errUsage := handler.repo.AppendUsage(context.Background(), payload, "192.0.2.10"); errUsage != nil {
+		t.Fatalf("AppendUsage() error = %v", errUsage)
+	}
+
+	resp := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(resp)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/billing/overview?from=2026-06-09T16%3A00%3A00Z&to=2026-06-10T15%3A59%3A59.999Z&timezone=Asia%2FShanghai", nil)
+	handler.GetBillingOverview(ctx)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s, want 200", resp.Code, resp.Body.String())
+	}
+	var response map[string]any
+	if errDecode := json.Unmarshal(resp.Body.Bytes(), &response); errDecode != nil {
+		t.Fatalf("decode response: %v", errDecode)
+	}
+	overview, ok := response["overview"].(map[string]any)
+	if !ok {
+		t.Fatalf("overview = %T, want object", response["overview"])
+	}
+	if overview["request_count"] != float64(2) || overview["total_charge_amount"] != float64(4) {
+		t.Fatalf("overview totals = requests %v amount %v, want 2 and 4", overview["request_count"], overview["total_charge_amount"])
+	}
+	trend, ok := overview["daily_trend"].([]any)
+	if !ok || len(trend) != 1 {
+		t.Fatalf("daily_trend = %#v, want one point", overview["daily_trend"])
+	}
+	point, ok := trend[0].(map[string]any)
+	if !ok || point["date"] != "2026-06-10" || point["request_count"] != float64(2) {
+		t.Fatalf("daily_trend[0] = %#v, want June 10 with 2 requests", trend[0])
+	}
+	rangeValue, ok := overview["range"].(map[string]any)
+	if !ok || rangeValue["from"] != "2026-06-10" || rangeValue["to"] != "2026-06-10" || rangeValue["timezone"] != "Asia/Shanghai" {
+		t.Fatalf("range = %#v, want June 10 in Asia/Shanghai", overview["range"])
+	}
 }
 
 func TestListBillingChargesReturnsItems(t *testing.T) {
@@ -691,6 +742,77 @@ func TestBillingChargeQueryDateOnlyToNormalizesEndOfDay(t *testing.T) {
 	want := time.Date(2026, time.June, 10, 23, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
 	if !query.To.Equal(want) {
 		t.Fatalf("query.To = %s, want %s", query.To.Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
+	}
+}
+
+func TestBillingOverviewQueryUsesTimezoneForDateOnlyRange(t *testing.T) {
+	t.Parallel()
+
+	resp := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(resp)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/billing/overview?from=2026-07-19&to=2026-07-19&timezone=Asia%2FShanghai", nil)
+
+	query, ok := billingOverviewQueryFromRequest(ctx)
+	if !ok {
+		t.Fatalf("billingOverviewQueryFromRequest() ok = false, status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if query.Timezone != "Asia/Shanghai" {
+		t.Fatalf("query.Timezone = %q, want Asia/Shanghai", query.Timezone)
+	}
+	if query.From == nil || query.To == nil {
+		t.Fatalf("query range = %v to %v, want both boundaries", query.From, query.To)
+	}
+	wantFrom := time.Date(2026, time.July, 18, 16, 0, 0, 0, time.UTC)
+	wantTo := time.Date(2026, time.July, 19, 15, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
+	if !query.From.Equal(wantFrom) || !query.To.Equal(wantTo) {
+		t.Fatalf("query range = %s to %s, want %s to %s", query.From.Format(time.RFC3339Nano), query.To.Format(time.RFC3339Nano), wantFrom.Format(time.RFC3339Nano), wantTo.Format(time.RFC3339Nano))
+	}
+
+	dstResp := httptest.NewRecorder()
+	dstCtx, _ := gin.CreateTestContext(dstResp)
+	dstCtx.Request = httptest.NewRequest(http.MethodGet, "/billing/overview?from=2026-03-08&to=2026-03-08&timezone=America%2FLos_Angeles", nil)
+	dstQuery, ok := billingOverviewQueryFromRequest(dstCtx)
+	if !ok || dstQuery.From == nil || dstQuery.To == nil {
+		t.Fatalf("DST query = %#v ok=%v, status=%d body=%s", dstQuery, ok, dstResp.Code, dstResp.Body.String())
+	}
+	wantDSTFrom := time.Date(2026, time.March, 8, 8, 0, 0, 0, time.UTC)
+	wantDSTTo := time.Date(2026, time.March, 9, 6, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
+	if !dstQuery.From.Equal(wantDSTFrom) || !dstQuery.To.Equal(wantDSTTo) {
+		t.Fatalf("DST query range = %s to %s, want %s to %s", dstQuery.From.Format(time.RFC3339Nano), dstQuery.To.Format(time.RFC3339Nano), wantDSTFrom.Format(time.RFC3339Nano), wantDSTTo.Format(time.RFC3339Nano))
+	}
+}
+
+func TestBillingRangeQueryRejectsInvalidTimezoneAndInvertedRange(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		path      string
+		wantError string
+	}{
+		{name: "invalid timezone", path: "/billing/overview?timezone=Invalid%2FTimezone", wantError: "invalid_timezone"},
+		{name: "inverted range", path: "/billing/overview?from=2026-07-20&to=2026-07-19", wantError: "invalid_time_range"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(resp)
+			ctx.Request = httptest.NewRequest(http.MethodGet, tt.path, nil)
+
+			if _, ok := billingOverviewQueryFromRequest(ctx); ok {
+				t.Fatal("billingOverviewQueryFromRequest() ok = true, want false")
+			}
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s, want 400", resp.Code, resp.Body.String())
+			}
+			var payload map[string]any
+			if errDecode := json.Unmarshal(resp.Body.Bytes(), &payload); errDecode != nil {
+				t.Fatalf("decode response: %v", errDecode)
+			}
+			if payload["error"] != tt.wantError {
+				t.Fatalf("error = %v, want %s", payload["error"], tt.wantError)
+			}
+		})
 	}
 }
 
