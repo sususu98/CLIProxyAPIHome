@@ -123,12 +123,11 @@ func projectPluginAuthConfig(root map[string]any, authRevision int64) error {
 		plugins = map[string]any{}
 	}
 	delete(plugins, "store-auth")
+	delete(plugins, "sync-revision")
 	if authRevision > 0 {
 		plugins["auth-revision"] = authRevision
-		plugins["sync-revision"] = authRevision
 	} else {
 		delete(plugins, "auth-revision")
-		delete(plugins, "sync-revision")
 	}
 	root["plugins"] = plugins
 	return nil
