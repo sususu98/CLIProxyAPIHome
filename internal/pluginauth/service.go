@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
@@ -315,81 +314,6 @@ func (s *Service) Resolved(ctx context.Context) ([]pluginstore.ResolvedAuthConfi
 		out = append(out, item)
 	}
 	return out, nil
-}
-
-// ResolvedWithLegacy returns database rules followed by configured legacy rules.
-func (s *Service) ResolvedWithLegacy(ctx context.Context, legacy []pluginstore.AuthConfig) ([]pluginstore.ResolvedAuthConfig, error) {
-	resolved, errResolved := s.Resolved(ctx)
-	if errResolved != nil {
-		return nil, errResolved
-	}
-	legacyResolved, errLegacy := resolveLegacyAuth(legacy)
-	if errLegacy != nil {
-		pluginstore.ClearResolvedAuthConfigs(resolved)
-		return nil, errLegacy
-	}
-	return append(resolved, legacyResolved...), nil
-}
-
-func resolveLegacyAuth(configs []pluginstore.AuthConfig) ([]pluginstore.ResolvedAuthConfig, error) {
-	normalized := pluginstore.NormalizeAuthConfigs(configs)
-	resolved := make([]pluginstore.ResolvedAuthConfig, 0, len(normalized))
-	for index := range normalized {
-		item := normalized[index]
-		authType := normalizeAuthType(item.Type)
-		entry := pluginstore.ResolvedAuthConfig{
-			Match: item.Match, ApplyTo: append([]string(nil), item.ApplyTo...), Type: authType,
-			HeaderName: item.HeaderName,
-		}
-		if item.AllowInsecure {
-			entry.Clear()
-			pluginstore.ClearResolvedAuthConfigs(resolved)
-			return nil, fmt.Errorf("legacy plugin store auth %d: allow-insecure is no longer supported; migrate the source to HTTPS", index)
-		}
-		switch authType {
-		case pluginstore.AuthTypeNone:
-		case pluginstore.AuthTypeBearer, pluginstore.AuthTypeGitHubToken:
-			value := strings.TrimSpace(os.Getenv(item.TokenEnv))
-			if value == "" {
-				entry.Type = pluginstore.AuthTypeNone
-				break
-			}
-			entry.Token = pluginstore.Secret(value)
-		case pluginstore.AuthTypeBasic:
-			username := strings.TrimSpace(os.Getenv(item.UsernameEnv))
-			password := strings.TrimSpace(os.Getenv(item.PasswordEnv))
-			if username == "" || password == "" {
-				entry.Type = pluginstore.AuthTypeNone
-				break
-			}
-			entry.Username = pluginstore.Secret(username)
-			entry.Password = pluginstore.Secret(password)
-		case pluginstore.AuthTypeHeader:
-			value := strings.TrimSpace(os.Getenv(item.HeaderValueEnv))
-			if strings.TrimSpace(entry.HeaderName) == "" || value == "" {
-				entry.Type = pluginstore.AuthTypeNone
-				entry.HeaderName = ""
-				break
-			}
-			entry.HeaderValue = pluginstore.Secret(value)
-		default:
-			entry.Clear()
-			pluginstore.ClearResolvedAuthConfigs(resolved)
-			return nil, fmt.Errorf("legacy plugin store auth %d: unsupported auth type %q", index, item.Type)
-		}
-		if errValidate := validateResolvedAuthHeaders(entry); errValidate != nil {
-			entry.Clear()
-			pluginstore.ClearResolvedAuthConfigs(resolved)
-			return nil, fmt.Errorf("legacy plugin store auth %d: %w", index, errValidate)
-		}
-		if errValidate := pluginstore.ValidateResolvedAuthConfig(entry); errValidate != nil {
-			entry.Clear()
-			pluginstore.ClearResolvedAuthConfigs(resolved)
-			return nil, fmt.Errorf("legacy plugin store auth %d: %w", index, errValidate)
-		}
-		resolved = append(resolved, entry)
-	}
-	return resolved, nil
 }
 
 func (s *Service) getRecord(ctx context.Context, id uint) (*cluster.PluginStoreAuthRecord, credentials, error) {

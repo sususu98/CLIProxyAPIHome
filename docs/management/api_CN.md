@@ -837,7 +837,6 @@ openai-compatibility
       "repository": "https://github.com/author-name/sample-provider",
       "install_type": "github-release",
       "auth_required": false,
-      "auth_configured": false,
       "installed": true,
       "installed_version": "0.2.0",
       "configured": true,
@@ -858,7 +857,6 @@ openai-compatibility
 | `source_errors` | array | 部分 registry 查询失败时的来源级错误。 |
 | `plugins[].install_type` | string | registry 安装类型，目前为 `github-release` 或 `direct`。 |
 | `plugins[].auth_required` | boolean | registry 声明该插件来源可能需要认证。 |
-| `plugins[].auth_configured` | boolean | 启用的数据库规则或已弃用的环境变量规则匹配该插件的 registry、metadata 或 artifact 请求时为 true。 |
 | `plugins[].platforms` | array | direct registry 条目声明的可用平台；GitHub release 条目为空。 |
 | `plugins[].installed` | boolean | 当前配置中是否存在该插件的 store manifest。 |
 | `plugins[].installed_version` | string | 当前配置 manifest 固定的版本。 |
@@ -952,7 +950,7 @@ Query：
 
 ### 插件商店凭证接口
 
-Home 将插件商店凭证加密保存在共享数据库中。Secret 为只写字段：任何响应都不会返回明文凭证或密文。创建、实际更新或删除规则会记录集群事件，供后续下游同步使用。规则按数据库创建顺序匹配，第一条匹配规则生效。迁移期间，数据库规则优先于已弃用的 `plugins.store-auth` 环境变量规则。`match` 必须是无 userinfo、query 和 fragment 的绝对 HTTPS URL。旧 `allow-insecure` 规则会返回迁移错误，相关来源必须迁移到 HTTPS。
+Home 将插件商店凭证加密保存在共享数据库中。Secret 为只写字段：任何响应都不会返回明文凭证或密文。创建、实际更新或删除规则会记录集群事件，供后续下游同步使用。规则按数据库创建顺序匹配，第一条匹配规则生效。`match` 必须是无 userinfo、query 和 fragment 的绝对 HTTPS URL。
 
 请求 body 上限为 64 KiB，必须只包含一个 JSON object，并且不允许未知字段。超出上限返回 `413`，格式错误返回 `400`。
 
@@ -3667,7 +3665,6 @@ DELETE query：
 | `plugins.enabled` | boolean | 在 Home 和下游 CPA 节点启用受信任的进程内插件。 |
 | `plugins.dir` | string | 每个节点本地插件产物目录。 |
 | `plugins.store-sources` | array of string | 额外插件商店 registry URL；内置官方 registry 始终包含。 |
-| `plugins.store-auth` | array | 为迁移兼容保留的已弃用环境变量 HTTPS 认证规则。新凭证应使用 `/plugin-store-auth`；旧规则由 Home 解析且不会发送给 CPA 节点。`allow-insecure` 不再受支持。 |
 | `plugins.configs` | object | 以插件 ID 为 key 的单插件配置。插件商店安装会在插件条目下写入固定 `store` manifest；Home-mode CPA 节点根据该 manifest 下载产物，Home 仅在显式设置 `load-in-home: true` 时下载并加载。 |
 | `usage-statistics-enabled` | boolean | 启用内存 usage aggregation。Home 会向下游 CPA 强制为 `true`，并拒绝通过 Management API 关闭。 |
 | `redis-usage-queue-retention-seconds` | integer | Usage queue 保留窗口；默认 `60`，最大 `3600`。 |

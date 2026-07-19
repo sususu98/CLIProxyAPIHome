@@ -573,15 +573,15 @@ func TestListPluginStoreReportsDirectMetadata(t *testing.T) {
 	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
 		t.Fatalf("decode response: %v", errDecode)
 	}
-	if !strings.Contains(resp.Body.String(), "auth_configured") {
-		t.Fatalf("response omitted auth_configured field: %s", resp.Body.String())
+	if strings.Contains(resp.Body.String(), "auth_configured") {
+		t.Fatalf("response retained removed auth_configured field: %s", resp.Body.String())
 	}
 	if len(body.Plugins) != 1 {
 		t.Fatalf("plugins len = %d, want 1", len(body.Plugins))
 	}
 	entry := body.Plugins[0]
-	if entry.InstallType != pluginstore.InstallTypeDirect || !entry.AuthRequired || entry.AuthConfigured {
-		t.Fatalf("plugin entry = %+v, want direct metadata without configured auth", entry)
+	if entry.InstallType != pluginstore.InstallTypeDirect || !entry.AuthRequired {
+		t.Fatalf("plugin entry = %+v, want direct metadata", entry)
 	}
 	if len(entry.Platforms) != 1 || entry.Platforms[0].GOOS != "linux" || entry.Platforms[0].GOARCH != "amd64" {
 		t.Fatalf("platforms = %+v, want linux/amd64", entry.Platforms)
@@ -688,8 +688,8 @@ func TestListPluginStoreUsesDatabaseAuthForPrivateRegistry(t *testing.T) {
 	if errDecode := json.Unmarshal(resp.Body.Bytes(), &body); errDecode != nil {
 		t.Fatalf("decode response: %v", errDecode)
 	}
-	if len(body.Plugins) != 1 || body.Plugins[0].ID != "private-provider" || !body.Plugins[0].AuthConfigured {
-		t.Fatalf("plugins = %+v, want private-provider with configured auth", body.Plugins)
+	if len(body.Plugins) != 1 || body.Plugins[0].ID != "private-provider" {
+		t.Fatalf("plugins = %+v, want private-provider", body.Plugins)
 	}
 }
 

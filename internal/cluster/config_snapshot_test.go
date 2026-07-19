@@ -94,13 +94,6 @@ func TestLoadConfigAsRuntimeConfigProjectsPluginAuthRevisionWithoutStoreAuth(t *
 	if strings.Contains(string(payload), "store-auth") || strings.Contains(string(payload), "SHOULD_NOT_LEAK") {
 		t.Fatalf("runtime config leaked plugin store auth: %s", payload)
 	}
-	legacy, errLegacy := repo.LoadLegacyPluginStoreAuth(context.Background())
-	if errLegacy != nil {
-		t.Fatalf("LoadLegacyPluginStoreAuth() error = %v", errLegacy)
-	}
-	if len(legacy) != 1 || legacy[0].TokenEnv != "SHOULD_NOT_LEAK" {
-		t.Fatalf("legacy plugin store auth = %#v, want preserved environment rule", legacy)
-	}
 }
 
 func TestRuntimeConfigFromRootPreservesPluginConfig(t *testing.T) {
