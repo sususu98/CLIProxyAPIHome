@@ -155,17 +155,18 @@ func (h *Handler) UninstallPluginFromStore(c *gin.Context) {
 func (h *Handler) ListPluginStore(c *gin.Context) {
 	ctx, cancel := h.pluginStoreRequestContext(c)
 	defer cancel()
-	cfg, _, errConfig := h.currentConfig(ctx)
-	if errConfig != nil {
-		respondError(c, http.StatusInternalServerError, "config_load_failed", errConfig)
-		return
-	}
 	auth, errAuth := h.pluginStoreAuth.Resolved(ctx)
 	if errAuth != nil {
 		respondError(c, http.StatusInternalServerError, "plugin_store_auth_resolve_failed", errAuth)
 		return
 	}
 	defer pluginstore.ClearResolvedAuthConfigs(auth)
+
+	cfg, _, errConfig := h.currentConfig(ctx)
+	if errConfig != nil {
+		respondError(c, http.StatusInternalServerError, "config_load_failed", errConfig)
+		return
+	}
 	sources, errSources := pluginStoreSources(cfg)
 	if errSources != nil {
 		respondError(c, http.StatusInternalServerError, "plugin_store_source_invalid", errSources)
@@ -241,17 +242,18 @@ func (h *Handler) InstallPluginFromStore(c *gin.Context) {
 	}
 	ctx, cancel := h.pluginStoreRequestContext(c)
 	defer cancel()
-	cfg, root, errConfig := h.currentConfig(ctx)
-	if errConfig != nil {
-		respondError(c, http.StatusInternalServerError, "config_load_failed", errConfig)
-		return
-	}
 	auth, errAuth := h.pluginStoreAuth.Resolved(ctx)
 	if errAuth != nil {
 		respondError(c, http.StatusInternalServerError, "plugin_store_auth_resolve_failed", errAuth)
 		return
 	}
 	defer pluginstore.ClearResolvedAuthConfigs(auth)
+
+	cfg, root, errConfig := h.currentConfig(ctx)
+	if errConfig != nil {
+		respondError(c, http.StatusInternalServerError, "config_load_failed", errConfig)
+		return
+	}
 	sources, errSources := pluginStoreSources(cfg)
 	if errSources != nil {
 		respondError(c, http.StatusInternalServerError, "plugin_store_source_invalid", errSources)
