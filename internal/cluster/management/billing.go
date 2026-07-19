@@ -30,6 +30,7 @@ type billingModelPriceRequest struct {
 
 type billingSettingsRequest struct {
 	ServiceTierSource *string `json:"service_tier_source"`
+	ReportTimezone    *string `json:"report_timezone"`
 }
 
 type billingBalanceRequest struct {
@@ -135,13 +136,17 @@ func (h *Handler) DeductBillingBalance(c *gin.Context) {
 }
 
 func (h *Handler) GetBillingOverview(c *gin.Context) {
-	query, ok := billingOverviewQueryFromRequest(c)
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	settings, errSettings := h.repo.GetBillingSettings(ctx)
+	if errSettings != nil {
+		respondError(c, http.StatusInternalServerError, "billing_settings_load_failed", errSettings)
+		return
+	}
+	query, ok := billingOverviewQueryFromRequest(c, settings.ReportTimezone)
 	if !ok {
 		return
 	}
-
-	ctx, cancel := h.requestContext(c)
-	defer cancel()
 	overview, errOverview := h.repo.BillingOverview(ctx, query)
 	if errOverview != nil {
 		respondError(c, http.StatusInternalServerError, "billing_overview_load_failed", errOverview)
@@ -151,14 +156,18 @@ func (h *Handler) GetBillingOverview(c *gin.Context) {
 }
 
 func (h *Handler) ListBillingCharges(c *gin.Context) {
-	query, ok := billingChargeQueryFromRequest(c)
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	settings, errSettings := h.repo.GetBillingSettings(ctx)
+	if errSettings != nil {
+		respondError(c, http.StatusInternalServerError, "billing_settings_load_failed", errSettings)
+		return
+	}
+	query, ok := billingChargeQueryFromRequest(c, settings.ReportTimezone)
 	if !ok {
 		return
 	}
 	limit, offset := query.Limit, query.Offset
-
-	ctx, cancel := h.requestContext(c)
-	defer cancel()
 	result, errCharges := h.repo.ListBillingCharges(ctx, query)
 	if errCharges != nil {
 		respondError(c, http.StatusInternalServerError, "billing_charge_load_failed", errCharges)
@@ -177,14 +186,18 @@ func (h *Handler) ListBillingCharges(c *gin.Context) {
 }
 
 func (h *Handler) ListBillingBalanceRecords(c *gin.Context) {
-	query, ok := billingBalanceQueryFromRequest(c)
+	ctx, cancel := h.requestContext(c)
+	defer cancel()
+	settings, errSettings := h.repo.GetBillingSettings(ctx)
+	if errSettings != nil {
+		respondError(c, http.StatusInternalServerError, "billing_settings_load_failed", errSettings)
+		return
+	}
+	query, ok := billingBalanceQueryFromRequest(c, settings.ReportTimezone)
 	if !ok {
 		return
 	}
 	limit, offset := query.Limit, query.Offset
-
-	ctx, cancel := h.requestContext(c)
-	defer cancel()
 	result, errRecords := h.repo.ListBillingBalanceRecords(ctx, query)
 	if errRecords != nil {
 		respondError(c, http.StatusInternalServerError, "billing_balance_record_load_failed", errRecords)
@@ -245,9 +258,12 @@ func (h *Handler) UpdateBillingSettings(c *gin.Context) {
 	}
 	ctx, cancel := h.requestContext(c)
 	defer cancel()
-	settings, errSettings := h.repo.UpdateBillingSettings(ctx, cluster.BillingSettingsPatch{ServiceTierSource: body.ServiceTierSource})
+	settings, errSettings := h.repo.UpdateBillingSettings(ctx, cluster.BillingSettingsPatch{
+		ServiceTierSource: body.ServiceTierSource,
+		ReportTimezone:    body.ReportTimezone,
+	})
 	if errSettings != nil {
-		if strings.Contains(errSettings.Error(), "service_tier_source") {
+		if strings.Contains(errSettings.Error(), "service_tier_source") || strings.Contains(errSettings.Error(), "report_timezone") {
 			respondError(c, http.StatusBadRequest, "invalid_body", errSettings)
 			return
 		}
@@ -483,9 +499,11 @@ func billingOverviewResponse(overview cluster.BillingOverview) gin.H {
 	}
 	return gin.H{
 		"range": gin.H{
-			"from":     overview.Range.From,
-			"to":       overview.Range.To,
-			"timezone": overview.Range.Timezone,
+			"from":            overview.Range.From,
+			"to":              overview.Range.To,
+			"from_at":         overview.Range.FromAt,
+			"to_at_exclusive": overview.Range.ToAtExclusive,
+			"timezone":        overview.Range.Timezone,
 		},
 		"total_charge_amount":   overview.TotalChargeAmount,
 		"total_recharge_amount": overview.TotalRechargeAmount,
@@ -533,8 +551,8 @@ func billingBalanceRecordResponse(record *cluster.BillingBalanceRecord) gin.H {
 	}
 }
 
-func billingOverviewQueryFromRequest(c *gin.Context) (cluster.BillingOverviewQuery, bool) {
-	from, to, timezone, ok := billingRangeQueryFromRequest(c)
+func billingOverviewQueryFromRequest(c *gin.Context, defaultTimezone string) (cluster.BillingOverviewQuery, bool) {
+	from, to, timezone, ok := billingRangeQueryFromRequest(c, defaultTimezone)
 	if !ok {
 		return cluster.BillingOverviewQuery{}, false
 	}
@@ -543,18 +561,18 @@ func billingOverviewQueryFromRequest(c *gin.Context) (cluster.BillingOverviewQue
 		return cluster.BillingOverviewQuery{}, false
 	}
 	return cluster.BillingOverviewQuery{
-		From:     from,
-		To:       to,
-		Timezone: timezone,
-		UserText: firstNonEmptyQuery(c, "user", "user_text", "username"),
-		UserID:   userID,
-		Provider: firstNonEmptyQuery(c, "provider"),
-		Model:    firstNonEmptyQuery(c, "model"),
+		From:        from,
+		ToExclusive: to,
+		Timezone:    timezone,
+		UserText:    firstNonEmptyQuery(c, "user", "user_text", "username"),
+		UserID:      userID,
+		Provider:    firstNonEmptyQuery(c, "provider"),
+		Model:       firstNonEmptyQuery(c, "model"),
 	}, true
 }
 
-func billingChargeQueryFromRequest(c *gin.Context) (cluster.BillingChargeQuery, bool) {
-	from, to, _, ok := billingRangeQueryFromRequest(c)
+func billingChargeQueryFromRequest(c *gin.Context, defaultTimezone string) (cluster.BillingChargeQuery, bool) {
+	from, to, _, ok := billingRangeQueryFromRequest(c, defaultTimezone)
 	if !ok {
 		return cluster.BillingChargeQuery{}, false
 	}
@@ -567,19 +585,19 @@ func billingChargeQueryFromRequest(c *gin.Context) (cluster.BillingChargeQuery, 
 		return cluster.BillingChargeQuery{}, false
 	}
 	return cluster.BillingChargeQuery{
-		From:     from,
-		To:       to,
-		UserText: firstNonEmptyQuery(c, "user", "user_text", "username"),
-		UserID:   userID,
-		Provider: firstNonEmptyQuery(c, "provider"),
-		Model:    firstNonEmptyQuery(c, "model"),
-		Limit:    limit,
-		Offset:   offset,
+		From:        from,
+		ToExclusive: to,
+		UserText:    firstNonEmptyQuery(c, "user", "user_text", "username"),
+		UserID:      userID,
+		Provider:    firstNonEmptyQuery(c, "provider"),
+		Model:       firstNonEmptyQuery(c, "model"),
+		Limit:       limit,
+		Offset:      offset,
 	}, true
 }
 
-func billingBalanceQueryFromRequest(c *gin.Context) (cluster.BillingBalanceQuery, bool) {
-	from, to, _, ok := billingRangeQueryFromRequest(c)
+func billingBalanceQueryFromRequest(c *gin.Context, defaultTimezone string) (cluster.BillingBalanceQuery, bool) {
+	from, to, _, ok := billingRangeQueryFromRequest(c, defaultTimezone)
 	if !ok {
 		return cluster.BillingBalanceQuery{}, false
 	}
@@ -592,12 +610,12 @@ func billingBalanceQueryFromRequest(c *gin.Context) (cluster.BillingBalanceQuery
 		return cluster.BillingBalanceQuery{}, false
 	}
 	return cluster.BillingBalanceQuery{
-		From:     from,
-		To:       to,
-		UserText: firstNonEmptyQuery(c, "user", "user_text", "username"),
-		UserID:   userID,
-		Limit:    limit,
-		Offset:   offset,
+		From:        from,
+		ToExclusive: to,
+		UserText:    firstNonEmptyQuery(c, "user", "user_text", "username"),
+		UserID:      userID,
+		Limit:       limit,
+		Offset:      offset,
 	}, true
 }
 
@@ -614,8 +632,12 @@ func clusterBillingPagination(limit int, offset int) (int, int) {
 	return limit, offset
 }
 
-func billingRangeQueryFromRequest(c *gin.Context) (*time.Time, *time.Time, string, bool) {
-	location, timezone, errTimezone := parseUsageTimezone(c.Query("timezone"))
+func billingRangeQueryFromRequest(c *gin.Context, defaultTimezone string) (*time.Time, *time.Time, string, bool) {
+	timezoneInput := strings.TrimSpace(c.Query("timezone"))
+	if timezoneInput == "" {
+		timezoneInput = defaultTimezone
+	}
+	location, timezone, errTimezone := parseUsageTimezone(timezoneInput)
 	if errTimezone != nil {
 		respondUsageHTTPError(c, errTimezone)
 		return nil, nil, "", false
@@ -624,19 +646,19 @@ func billingRangeQueryFromRequest(c *gin.Context) (*time.Time, *time.Time, strin
 	if !ok {
 		return nil, nil, "", false
 	}
-	to, toDateOnly, ok := billingTimeQuery(c, "to", location)
+	toExclusive, toDateOnly, ok := billingTimeQuery(c, "to", location)
 	if !ok {
 		return nil, nil, "", false
 	}
-	if to != nil && toDateOnly {
-		normalized := endOfBillingDate(*to, location)
-		to = &normalized
+	if toExclusive != nil && toDateOnly {
+		normalized := nextBillingDateBoundary(*toExclusive, location)
+		toExclusive = &normalized
 	}
-	if from != nil && to != nil && from.After(*to) {
+	if from != nil && toExclusive != nil && from.After(*toExclusive) {
 		respondError(c, http.StatusBadRequest, "invalid_time_range", fmt.Errorf("from must not be after to"))
 		return nil, nil, "", false
 	}
-	return from, to, timezone, true
+	return from, toExclusive, timezone, true
 }
 
 func billingTimeQuery(c *gin.Context, key string, location *time.Location) (*time.Time, bool, bool) {
@@ -670,12 +692,12 @@ func parseBillingTime(raw string, location *time.Location) (time.Time, bool, err
 	return time.Time{}, false, fmt.Errorf("time must be YYYY-MM-DD, RFC3339, or unix seconds")
 }
 
-func endOfBillingDate(value time.Time, location *time.Location) time.Time {
+func nextBillingDateBoundary(value time.Time, location *time.Location) time.Time {
 	if location == nil {
 		location = time.UTC
 	}
 	local := value.In(location)
-	return time.Date(local.Year(), local.Month(), local.Day(), 23, 59, 59, int(time.Second-time.Nanosecond), location).UTC()
+	return time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, location).UTC()
 }
 
 func billingPaginationQuery(c *gin.Context) (int, int, bool) {

@@ -28,6 +28,7 @@ const (
 	BillingServiceTierWildcard       = "*"
 	BillingServiceTierSourceRequest  = "request"
 	BillingServiceTierSourceResponse = "response"
+	BillingReportTimezoneUTC         = "UTC"
 	billingSettingsKVKey             = "billing.settings"
 
 	billingIDRandomBytes    = 12
@@ -143,13 +144,13 @@ type BillingBalanceUpdate struct {
 }
 
 type BillingOverviewQuery struct {
-	From     *time.Time
-	To       *time.Time
-	Timezone string
-	UserText string
-	UserID   *uint
-	Provider string
-	Model    string
+	From        *time.Time
+	ToExclusive *time.Time
+	Timezone    string
+	UserText    string
+	UserID      *uint
+	Provider    string
+	Model       string
 }
 
 type BillingOverview struct {
@@ -170,9 +171,11 @@ type BillingOverview struct {
 }
 
 type BillingRange struct {
-	From     string
-	To       string
-	Timezone string
+	From          string
+	To            string
+	FromAt        *time.Time
+	ToAtExclusive *time.Time
+	Timezone      string
 }
 
 type BillingTrendPoint struct {
@@ -189,12 +192,12 @@ type BillingTopItem struct {
 }
 
 type BillingBalanceQuery struct {
-	From     *time.Time
-	To       *time.Time
-	UserText string
-	UserID   *uint
-	Limit    int
-	Offset   int
+	From        *time.Time
+	ToExclusive *time.Time
+	UserText    string
+	UserID      *uint
+	Limit       int
+	Offset      int
 }
 
 type BillingBalanceResult struct {
@@ -209,14 +212,14 @@ type BillingModelPriceQuery struct {
 }
 
 type BillingChargeQuery struct {
-	From     *time.Time
-	To       *time.Time
-	UserText string
-	UserID   *uint
-	Provider string
-	Model    string
-	Limit    int
-	Offset   int
+	From        *time.Time
+	ToExclusive *time.Time
+	UserText    string
+	UserID      *uint
+	Provider    string
+	Model       string
+	Limit       int
+	Offset      int
 }
 
 type BillingChargeResult struct {
@@ -243,10 +246,12 @@ type BillingPriceSnapshot struct {
 
 type BillingSettings struct {
 	ServiceTierSource string `json:"service_tier_source"`
+	ReportTimezone    string `json:"report_timezone"`
 }
 
 type BillingSettingsPatch struct {
 	ServiceTierSource *string
+	ReportTimezone    *string
 }
 
 func (r *Repository) GetBillingSettings(ctx context.Context) (BillingSettings, error) {
@@ -268,6 +273,13 @@ func (r *Repository) UpdateBillingSettings(ctx context.Context, patch BillingSet
 			return BillingSettings{}, errSource
 		}
 		settings.ServiceTierSource = source
+	}
+	if patch.ReportTimezone != nil {
+		timezone, errTimezone := normalizeBillingReportTimezone(*patch.ReportTimezone)
+		if errTimezone != nil {
+			return BillingSettings{}, errTimezone
+		}
+		settings.ReportTimezone = timezone
 	}
 	raw, errMarshal := json.Marshal(settings)
 	if errMarshal != nil {
@@ -525,7 +537,7 @@ func (r *Repository) BillingOverview(ctx context.Context, query BillingOverviewQ
 	}
 
 	return BillingOverview{
-		Range:               billingRange(query.From, query.To, query.Timezone),
+		Range:               billingRange(query.From, query.ToExclusive, query.Timezone),
 		TotalChargeAmount:   chargeTotals.TotalChargeAmount,
 		TotalRechargeAmount: ledgerTotals.RechargeAmount,
 		TotalDeductAmount:   ledgerTotals.DeductAmount,
@@ -823,8 +835,8 @@ func billingChargeQueryScope(scope *gorm.DB, query BillingChargeQuery) *gorm.DB 
 	if query.From != nil {
 		scope = scope.Where(`"billing_charge"."created_at" >= ?`, query.From.UTC())
 	}
-	if query.To != nil {
-		scope = scope.Where(`"billing_charge"."created_at" <= ?`, query.To.UTC())
+	if query.ToExclusive != nil {
+		scope = scope.Where(`"billing_charge"."created_at" < ?`, query.ToExclusive.UTC())
 	}
 	if userID := normalizeOptionalUserID(query.UserID); userID != nil {
 		scope = scope.Where(`"billing_charge"."user_id" = ?`, *userID)
@@ -845,12 +857,12 @@ func billingChargeQueryScope(scope *gorm.DB, query BillingChargeQuery) *gorm.DB 
 
 func billingChargeQueryFromOverview(query BillingOverviewQuery) BillingChargeQuery {
 	return BillingChargeQuery{
-		From:     query.From,
-		To:       query.To,
-		UserText: query.UserText,
-		UserID:   query.UserID,
-		Provider: query.Provider,
-		Model:    query.Model,
+		From:        query.From,
+		ToExclusive: query.ToExclusive,
+		UserText:    query.UserText,
+		UserID:      query.UserID,
+		Provider:    query.Provider,
+		Model:       query.Model,
 	}
 }
 
@@ -864,14 +876,22 @@ type billingTrendBounds struct {
 	MaxCreatedAt sql.NullString
 }
 
-func billingRange(from *time.Time, to *time.Time, timezone string) BillingRange {
+func billingRange(from *time.Time, toExclusive *time.Time, timezone string) BillingRange {
 	timezone, location := billingTimezoneLocation(timezone)
 	result := BillingRange{Timezone: timezone}
 	if from != nil {
-		result.From = from.UTC().In(location).Format(time.DateOnly)
+		fromUTC := from.UTC()
+		result.FromAt = &fromUTC
+		result.From = fromUTC.In(location).Format(time.DateOnly)
 	}
-	if to != nil {
-		result.To = to.UTC().In(location).Format(time.DateOnly)
+	if toExclusive != nil {
+		toExclusiveUTC := toExclusive.UTC()
+		result.ToAtExclusive = &toExclusiveUTC
+		calendarEnd := toExclusiveUTC
+		if from == nil || toExclusiveUTC.After(from.UTC()) {
+			calendarEnd = calendarEnd.Add(-time.Nanosecond)
+		}
+		result.To = calendarEnd.In(location).Format(time.DateOnly)
 	}
 	return result
 }
@@ -881,10 +901,10 @@ func billingLedgerTotals(ctx context.Context, db *gorm.DB, query BillingOverview
 		return billingLedgerSummary{}, fmt.Errorf("database connection is nil")
 	}
 	scope := billingBalanceQueryScope(db.WithContext(contextOrBackground(ctx)).Model(&BillingBalanceRecord{}), BillingBalanceQuery{
-		From:     query.From,
-		To:       query.To,
-		UserText: query.UserText,
-		UserID:   query.UserID,
+		From:        query.From,
+		ToExclusive: query.ToExclusive,
+		UserText:    query.UserText,
+		UserID:      query.UserID,
 	})
 	var rows []struct {
 		Type  string
@@ -1136,8 +1156,8 @@ func billingBalanceQueryScope(scope *gorm.DB, query BillingBalanceQuery) *gorm.D
 	if query.From != nil {
 		scope = scope.Where(`"billing_balance_record"."created_at" >= ?`, query.From.UTC())
 	}
-	if query.To != nil {
-		scope = scope.Where(`"billing_balance_record"."created_at" <= ?`, query.To.UTC())
+	if query.ToExclusive != nil {
+		scope = scope.Where(`"billing_balance_record"."created_at" < ?`, query.ToExclusive.UTC())
 	}
 	if userID := normalizeOptionalUserID(query.UserID); userID != nil {
 		scope = scope.Where(`"billing_balance_record"."user_id" = ?`, *userID)
@@ -1331,7 +1351,11 @@ func billingMatchedPriceRule(record *BillingModelPriceRecord) string {
 }
 
 func billingSettingsFromDB(ctx context.Context, db *gorm.DB) (BillingSettings, error) {
-	settings := BillingSettings{ServiceTierSource: BillingServiceTierSourceRequest}
+	defaults := BillingSettings{
+		ServiceTierSource: BillingServiceTierSourceRequest,
+		ReportTimezone:    BillingReportTimezoneUTC,
+	}
+	settings := defaults
 	if db == nil {
 		return settings, fmt.Errorf("database connection is nil")
 	}
@@ -1344,13 +1368,19 @@ func billingSettingsFromDB(ctx context.Context, db *gorm.DB) (BillingSettings, e
 		return settings, nil
 	}
 	if errUnmarshal := json.Unmarshal(record.Value, &settings); errUnmarshal != nil {
-		return BillingSettings{ServiceTierSource: BillingServiceTierSourceRequest}, nil
+		return defaults, nil
 	}
 	source, errSource := normalizeBillingServiceTierSource(settings.ServiceTierSource)
 	if errSource != nil {
 		settings.ServiceTierSource = BillingServiceTierSourceRequest
 	} else {
 		settings.ServiceTierSource = source
+	}
+	timezone, errTimezone := normalizeBillingReportTimezone(settings.ReportTimezone)
+	if errTimezone != nil {
+		settings.ReportTimezone = BillingReportTimezoneUTC
+	} else {
+		settings.ReportTimezone = timezone
 	}
 	return settings, nil
 }
@@ -1364,6 +1394,17 @@ func normalizeBillingServiceTierSource(value string) (string, error) {
 	default:
 		return "", fmt.Errorf("service_tier_source must be request or response")
 	}
+}
+
+func normalizeBillingReportTimezone(value string) (string, error) {
+	timezone := strings.TrimSpace(value)
+	if timezone == "" {
+		return BillingReportTimezoneUTC, nil
+	}
+	if _, errLoad := time.LoadLocation(timezone); errLoad != nil {
+		return "", fmt.Errorf("report_timezone must be a supported IANA timezone")
+	}
+	return timezone, nil
 }
 
 func normalizeBillingEffectiveServiceTier(value string) string {

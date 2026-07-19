@@ -919,7 +919,7 @@ func TestAppendUsageListBillingChargesFiltersUserText(t *testing.T) {
 	}
 }
 
-func TestListBillingChargesUsesExactInclusiveToBoundary(t *testing.T) {
+func TestListBillingChargesUsesExclusiveToBoundary(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -953,9 +953,13 @@ func TestListBillingChargesUsesExactInclusiveToBoundary(t *testing.T) {
 	if _, errAfter := repo.AppendUsage(ctx, afterPayload, "192.0.2.10"); errAfter != nil {
 		t.Fatalf("AppendUsage(after) error = %v", errAfter)
 	}
+	atBoundaryPayload := `{"timestamp":"2026-06-10T12:00:00Z","provider":"openai","model":"gpt-4.1-mini","api_key":"client-key","request_id":"req-at-to-exclusive","tokens":{"input_tokens":1,"total_tokens":1}}`
+	if _, errAtBoundary := repo.AppendUsage(ctx, atBoundaryPayload, "192.0.2.10"); errAtBoundary != nil {
+		t.Fatalf("AppendUsage(at boundary) error = %v", errAtBoundary)
+	}
 
 	to := time.Date(2026, time.June, 10, 12, 0, 0, 0, time.UTC)
-	result, errCharges := repo.ListBillingCharges(ctx, BillingChargeQuery{To: &to, Limit: 10})
+	result, errCharges := repo.ListBillingCharges(ctx, BillingChargeQuery{ToExclusive: &to, Limit: 10})
 	if errCharges != nil {
 		t.Fatalf("ListBillingCharges() error = %v", errCharges)
 	}
@@ -967,7 +971,7 @@ func TestListBillingChargesUsesExactInclusiveToBoundary(t *testing.T) {
 	}
 }
 
-func TestListBillingBalanceRecordsUsesExactInclusiveToBoundary(t *testing.T) {
+func TestListBillingBalanceRecordsUsesExclusiveToBoundary(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -998,9 +1002,19 @@ func TestListBillingBalanceRecordsUsesExactInclusiveToBoundary(t *testing.T) {
 			ID:            billingID("balance"),
 			UserID:        user.ID,
 			Type:          BillingBalanceTypeRecharge,
-			Amount:        20,
+			Amount:        15,
 			BalanceBefore: 10,
-			BalanceAfter:  30,
+			BalanceAfter:  25,
+			Operator:      "admin",
+			CreatedAt:     time.Date(2026, time.June, 10, 12, 0, 0, 0, time.UTC),
+		},
+		{
+			ID:            billingID("balance"),
+			UserID:        user.ID,
+			Type:          BillingBalanceTypeRecharge,
+			Amount:        20,
+			BalanceBefore: 25,
+			BalanceAfter:  45,
 			Operator:      "admin",
 			CreatedAt:     time.Date(2026, time.June, 10, 12, 0, 1, 0, time.UTC),
 		},
@@ -1010,7 +1024,7 @@ func TestListBillingBalanceRecordsUsesExactInclusiveToBoundary(t *testing.T) {
 	}
 
 	to := time.Date(2026, time.June, 10, 12, 0, 0, 0, time.UTC)
-	result, errRecords := repo.ListBillingBalanceRecords(ctx, BillingBalanceQuery{To: &to, Limit: 10})
+	result, errRecords := repo.ListBillingBalanceRecords(ctx, BillingBalanceQuery{ToExclusive: &to, Limit: 10})
 	if errRecords != nil {
 		t.Fatalf("ListBillingBalanceRecords() error = %v", errRecords)
 	}
@@ -1059,8 +1073,8 @@ func TestBillingOverviewAggregatesChargesAndBalances(t *testing.T) {
 	}
 
 	from := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
-	to := time.Date(2026, time.December, 31, 0, 0, 0, 0, time.UTC)
-	overview, errOverview := repo.BillingOverview(ctx, BillingOverviewQuery{From: &from, To: &to})
+	to := time.Date(2027, time.January, 1, 0, 0, 0, 0, time.UTC)
+	overview, errOverview := repo.BillingOverview(ctx, BillingOverviewQuery{From: &from, ToExclusive: &to})
 	if errOverview != nil {
 		t.Fatalf("BillingOverview() error = %v", errOverview)
 	}
@@ -1069,6 +1083,12 @@ func TestBillingOverviewAggregatesChargesAndBalances(t *testing.T) {
 	}
 	if overview.Range.To != "2026-12-31" {
 		t.Fatalf("range to = %q, want 2026-12-31", overview.Range.To)
+	}
+	if overview.Range.FromAt == nil || !overview.Range.FromAt.Equal(from) {
+		t.Fatalf("range from_at = %v, want %s", overview.Range.FromAt, from.Format(time.RFC3339Nano))
+	}
+	if overview.Range.ToAtExclusive == nil || !overview.Range.ToAtExclusive.Equal(to) {
+		t.Fatalf("range to_at_exclusive = %v, want %s", overview.Range.ToAtExclusive, to.Format(time.RFC3339Nano))
 	}
 	if overview.Range.Timezone != "UTC" {
 		t.Fatalf("range timezone = %q, want UTC", overview.Range.Timezone)
@@ -1142,8 +1162,8 @@ func TestBillingOverviewGroupsDailyTrendByTimezone(t *testing.T) {
 	}
 
 	from := time.Date(2026, time.June, 9, 16, 0, 0, 0, time.UTC)
-	to := time.Date(2026, time.June, 10, 15, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
-	overview, errOverview := repo.BillingOverview(ctx, BillingOverviewQuery{From: &from, To: &to, Timezone: "Asia/Shanghai"})
+	to := time.Date(2026, time.June, 10, 16, 0, 0, 0, time.UTC)
+	overview, errOverview := repo.BillingOverview(ctx, BillingOverviewQuery{From: &from, ToExclusive: &to, Timezone: "Asia/Shanghai"})
 	if errOverview != nil {
 		t.Fatalf("BillingOverview(Asia/Shanghai) error = %v", errOverview)
 	}
@@ -1160,7 +1180,7 @@ func TestBillingOverviewGroupsDailyTrendByTimezone(t *testing.T) {
 		t.Fatalf("daily trend = %#v, want 2026-06-10 amount 2 request count 2", overview.DailyTrend[0])
 	}
 
-	utcOverview, errUTCOverview := repo.BillingOverview(ctx, BillingOverviewQuery{From: &from, To: &to})
+	utcOverview, errUTCOverview := repo.BillingOverview(ctx, BillingOverviewQuery{From: &from, ToExclusive: &to})
 	if errUTCOverview != nil {
 		t.Fatalf("BillingOverview(UTC) error = %v", errUTCOverview)
 	}
@@ -1172,8 +1192,8 @@ func TestBillingOverviewGroupsDailyTrendByTimezone(t *testing.T) {
 	}
 
 	dstFrom := time.Date(2026, time.March, 8, 8, 0, 0, 0, time.UTC)
-	dstTo := time.Date(2026, time.March, 9, 6, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
-	dstOverview, errDSTOverview := repo.BillingOverview(ctx, BillingOverviewQuery{From: &dstFrom, To: &dstTo, Timezone: "America/Los_Angeles"})
+	dstTo := time.Date(2026, time.March, 9, 7, 0, 0, 0, time.UTC)
+	dstOverview, errDSTOverview := repo.BillingOverview(ctx, BillingOverviewQuery{From: &dstFrom, ToExclusive: &dstTo, Timezone: "America/Los_Angeles"})
 	if errDSTOverview != nil {
 		t.Fatalf("BillingOverview(America/Los_Angeles) error = %v", errDSTOverview)
 	}

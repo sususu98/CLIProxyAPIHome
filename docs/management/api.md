@@ -1462,7 +1462,7 @@ Unknown IDs return `404 api_key_not_found`. If an ID and key selector are both s
 
 All paths in this section are relative to the Management API base URL, for example `/v0/management/billing/overview` or `/v0/management/proxy/proxy-pools`. They are not `/user` routes and require the management key.
 
-Only `/billing/overview`, `/billing/charges`, and `/billing/balance-records` parse `from` and `to` as `YYYY-MM-DD`, RFC3339, or Unix seconds. The optional `timezone` parameter defaults to `UTC` and must be an IANA timezone name. Date-only values use calendar dates in `timezone`, and a date-only `to` includes the whole ending day in that timezone. Explicit timestamps are exact instants and are not shifted or expanded by `timezone`. `/billing/overview` also uses `timezone` for `range` calendar dates and `daily_trend` buckets, so one natural day is not split at UTC midnight. Pagination with `limit` and `offset` applies only to `/billing/charges` and `/billing/balance-records`; those routes use `limit` default `50`, max `200`, and normalize negative `offset` values to `0`. `/billing/model-prices` supports only `provider`, `model`, and `enabled` query parameters. `/proxy/proxy-pools` currently does not parse query parameters.
+Only `/billing/overview`, `/billing/charges`, and `/billing/balance-records` parse `from` and `to` as `YYYY-MM-DD`, RFC3339, or Unix seconds. All three routes use the half-open interval `[from,to)`: `from` is included and `to` is excluded. The optional `timezone` parameter is a reporting-timezone override and must be an IANA timezone name. When omitted, the routes use `/billing/settings.report_timezone`, which defaults to `UTC`. Date-only values use calendar dates in the applied reporting timezone, and a date-only `to` is normalized to the next local midnight so the whole ending day remains included across DST transitions. Explicit timestamps are exact exclusive boundaries and are not shifted or expanded by the reporting timezone. `/billing/overview` also uses the applied reporting timezone for `range` calendar dates and `daily_trend` buckets, so one natural day is not split at UTC midnight. The reporting timezone only controls query boundaries and report grouping; it never reprices immutable charges, changes price snapshots, or mutates user balances. Pagination with `limit` and `offset` applies only to `/billing/charges` and `/billing/balance-records`; those routes use `limit` default `50`, max `200`, and normalize negative `offset` values to `0`. `/billing/model-prices` supports only `provider`, `model`, and `enabled` query parameters. `/proxy/proxy-pools` currently does not parse query parameters.
 
 Unsupported timezone names return `400 invalid_timezone`. A `from` value after `to` returns `400 invalid_time_range`.
 
@@ -1475,8 +1475,8 @@ Query parameters:
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `from` | string | Optional start time: `YYYY-MM-DD`, RFC3339, or Unix seconds. |
-| `to` | string | Optional inclusive end time. Date-only values include the full ending day in `timezone`. |
-| `timezone` | string | IANA timezone for date-only boundaries, response range dates, and daily trend buckets. Default `UTC`. |
+| `to` | string | Optional exclusive end time. Date-only values include the full ending day in `timezone` by using the next local midnight. |
+| `timezone` | string | Optional IANA reporting-timezone override for date-only boundaries, response range dates, and daily trend buckets. Defaults to `/billing/settings.report_timezone`. |
 | `user` | string | Optional username, user text, or user ID filter. Aliases: `user_text`, `username`. |
 | `user_id` | integer | Optional exact user ID filter. Alias: `uid`. |
 | `provider` | string | Optional provider filter. |
@@ -1486,7 +1486,7 @@ Response fields:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `range` | object | Applied calendar `from`, `to`, and `timezone` range. |
+| `range` | object | Applied calendar `from`/`to`, exact UTC `from_at`/`to_at_exclusive`, and `timezone`. Exact boundaries are `null` when the corresponding query boundary is omitted. |
 | `total_charge_amount` | number | Total charged amount. |
 | `total_recharge_amount` | number | Total recharge amount. |
 | `total_deduct_amount` | number | Total manual deduction amount. |
@@ -1510,8 +1510,8 @@ Query parameters:
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `from` | string | Optional start time: `YYYY-MM-DD`, RFC3339, or Unix seconds. |
-| `to` | string | Optional inclusive end time. Date-only values include the full ending day in `timezone`. |
-| `timezone` | string | IANA timezone for date-only boundaries. Default `UTC`. |
+| `to` | string | Optional exclusive end time. Date-only values include the full ending day in `timezone` by using the next local midnight. |
+| `timezone` | string | Optional IANA reporting-timezone override for date-only boundaries. Defaults to `/billing/settings.report_timezone`. |
 | `user` | string | Optional username, user text, or user ID filter. Aliases: `user_text`, `username`. |
 | `user_id` | integer | Optional exact user ID filter. Alias: `uid`. |
 | `provider` | string | Optional provider filter. |
@@ -1561,8 +1561,8 @@ Query parameters:
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `from` | string | Optional start time: `YYYY-MM-DD`, RFC3339, or Unix seconds. |
-| `to` | string | Optional inclusive end time. Date-only values include the full ending day in `timezone`. |
-| `timezone` | string | IANA timezone for date-only boundaries. Default `UTC`. |
+| `to` | string | Optional exclusive end time. Date-only values include the full ending day in `timezone` by using the next local midnight. |
+| `timezone` | string | Optional IANA reporting-timezone override for date-only boundaries. Defaults to `/billing/settings.report_timezone`. |
 | `user` | string | Optional username, user text, or user ID filter. Aliases: `user_text`, `username`. |
 | `user_id` | integer | Optional exact user ID filter. Alias: `uid`. |
 | `limit` | integer | Optional page size. Default `50`, max `200`. |
@@ -1717,18 +1717,18 @@ Response:
 
 ### GET `/billing/settings`
 
-Returns the DB-backed billing matching policy. `service_tier_source` is `request` by default and may be `request` or `response`. In either mode, `auto`, `default`, and `standard` match the local Standard price tier.
+Returns the DB-backed billing policy. `service_tier_source` is `request` by default and may be `request` or `response`. `report_timezone` is a supported IANA timezone and defaults to `UTC`; it is the default calendar timezone for Management Billing reports when a request does not provide a `timezone` override. Changing it affects future report boundaries and grouping only. It does not reprice historical charges, rewrite price snapshots, or change balances. In either tier-source mode, `auto`, `default`, and `standard` match the local Standard price tier.
 
 ```json
-{ "service_tier_source": "request" }
+{ "service_tier_source": "request", "report_timezone": "UTC" }
 ```
 
 ### PATCH `/billing/settings`
 
-Partially updates billing settings. In `response` mode, a missing response tier falls back to the request tier and records that fallback in the charge price snapshot.
+Partially updates billing settings. Both fields are optional. In `response` mode, a missing response tier falls back to the request tier and records that fallback in the charge price snapshot. Invalid tier-source values or unsupported timezone names return `400 invalid_body`.
 
 ```json
-{ "service_tier_source": "response" }
+{ "service_tier_source": "response", "report_timezone": "Asia/Shanghai" }
 ```
 
 OpenAI defines an omitted `service_tier` as `auto`; `auto` is represented internally by Home and is not a literal Codex backend request value. See the [OpenAI pricing page](https://developers.openai.com/api/docs/pricing) and [Responses Create reference](https://developers.openai.com/api/reference/resources/responses/methods/create). Home stores the request `service_tier` and optional upstream `response_service_tier` so later billing policy can switch sources without re-ingesting usage. The default `request` source bills from `service_tier` (client-requested tier). In `response` mode, Home uses `response_service_tier` when present and falls back to the request tier when the upstream omits it. `auto`, `default`, and `standard` map to the local Standard price tier; configure `flex` or `priority` rules when those tiers are used.

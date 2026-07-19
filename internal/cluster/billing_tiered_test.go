@@ -356,6 +356,9 @@ func TestBillingSettingsDefaultToRequest(t *testing.T) {
 	if settings.ServiceTierSource != BillingServiceTierSourceRequest {
 		t.Fatalf("service tier source = %q, want request", settings.ServiceTierSource)
 	}
+	if settings.ReportTimezone != BillingReportTimezoneUTC {
+		t.Fatalf("report timezone = %q, want UTC", settings.ReportTimezone)
+	}
 }
 
 func TestBillingMalformedSettingsFallBackAndCanBeRepaired(t *testing.T) {
@@ -374,16 +377,26 @@ func TestBillingMalformedSettingsFallBackAndCanBeRepaired(t *testing.T) {
 	if settings.ServiceTierSource != BillingServiceTierSourceRequest {
 		t.Fatalf("service tier source = %q, want request", settings.ServiceTierSource)
 	}
+	if settings.ReportTimezone != BillingReportTimezoneUTC {
+		t.Fatalf("report timezone = %q, want UTC", settings.ReportTimezone)
+	}
 	payload := `{"timestamp":"2026-07-11T00:00:00Z","provider":"openai","model":"gpt-test","tokens":{"input_tokens":1}}`
 	if _, errUsage := repo.AppendUsage(ctx, payload, ""); errUsage != nil {
 		t.Fatalf("AppendUsage() error = %v", errUsage)
 	}
-	settings, errSettings = repo.UpdateBillingSettings(ctx, BillingSettingsPatch{ServiceTierSource: stringPtr(BillingServiceTierSourceResponse)})
+	reportTimezone := "America/Los_Angeles"
+	settings, errSettings = repo.UpdateBillingSettings(ctx, BillingSettingsPatch{
+		ServiceTierSource: stringPtr(BillingServiceTierSourceResponse),
+		ReportTimezone:    &reportTimezone,
+	})
 	if errSettings != nil {
 		t.Fatalf("UpdateBillingSettings() error = %v", errSettings)
 	}
 	if settings.ServiceTierSource != BillingServiceTierSourceResponse {
 		t.Fatalf("repaired service tier source = %q, want response", settings.ServiceTierSource)
+	}
+	if settings.ReportTimezone != reportTimezone {
+		t.Fatalf("repaired report timezone = %q, want %q", settings.ReportTimezone, reportTimezone)
 	}
 }
 

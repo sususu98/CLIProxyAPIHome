@@ -49,7 +49,7 @@ func TestUserBillingChargesUseAuthenticatedUserOnly(t *testing.T) {
 	assertUserBillingChargeRequests(t, secondPayload.Items, []string{"req-second"}, []string{"req-first"})
 }
 
-func TestUserBillingChargesAcceptRFC3339TimezoneRange(t *testing.T) {
+func TestUserBillingChargesAcceptHalfOpenRFC3339TimezoneRange(t *testing.T) {
 	t.Parallel()
 
 	handler, closeRepo := newUserBillingTestHandler(t)
@@ -67,13 +67,18 @@ func TestUserBillingChargesAcceptRFC3339TimezoneRange(t *testing.T) {
 		{
 			name:        "Shanghai June 10 includes the charge",
 			from:        "2026-06-10T00:00:00+08:00",
-			to:          "2026-06-10T23:59:59.999999999+08:00",
+			to:          "2026-06-11T00:00:00+08:00",
 			wantRequest: []string{"req-first"},
 		},
 		{
 			name: "Shanghai June 9 excludes the charge",
 			from: "2026-06-09T00:00:00+08:00",
-			to:   "2026-06-09T23:59:59.999999999+08:00",
+			to:   "2026-06-10T00:00:00+08:00",
+		},
+		{
+			name: "exact exclusive boundary excludes the charge",
+			from: "2026-06-10T00:00:00Z",
+			to:   "2026-06-10T01:02:03Z",
 		},
 	}
 
@@ -268,28 +273,28 @@ func TestUserBillingDateQuerySupportsExplicitTimeRanges(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		value    string
-		endOfDay bool
-		want     time.Time
+		name         string
+		value        string
+		endExclusive bool
+		want         time.Time
 	}{
 		{
-			name:     "date-only end includes UTC day",
-			value:    "2026-07-10",
-			endOfDay: true,
-			want:     time.Date(2026, time.July, 10, 23, 59, 59, int(time.Second-time.Nanosecond), time.UTC),
+			name:         "date-only end uses next UTC midnight",
+			value:        "2026-07-10",
+			endExclusive: true,
+			want:         time.Date(2026, time.July, 11, 0, 0, 0, 0, time.UTC),
 		},
 		{
-			name:     "RFC3339 end preserves exact nanosecond boundary",
-			value:    "2026-07-10T23:59:59.999999999+08:00",
-			endOfDay: true,
-			want:     time.Date(2026, time.July, 10, 15, 59, 59, int(time.Second-time.Nanosecond), time.UTC),
+			name:         "RFC3339 end preserves exact exclusive boundary",
+			value:        "2026-07-11T00:00:00+08:00",
+			endExclusive: true,
+			want:         time.Date(2026, time.July, 10, 16, 0, 0, 0, time.UTC),
 		},
 		{
-			name:     "unix seconds",
-			value:    "1783612800",
-			endOfDay: true,
-			want:     time.Unix(1783612800, 0).UTC(),
+			name:         "unix seconds",
+			value:        "1783612800",
+			endExclusive: true,
+			want:         time.Unix(1783612800, 0).UTC(),
 		},
 	}
 
@@ -301,7 +306,7 @@ func TestUserBillingDateQuerySupportsExplicitTimeRanges(t *testing.T) {
 			query.Set("to", tt.value)
 			ctx.Request.URL.RawQuery = query.Encode()
 
-			got, ok := userBillingDateQuery(ctx, "to", tt.endOfDay)
+			got, ok := userBillingDateQuery(ctx, "to", tt.endExclusive)
 			if !ok || got == nil {
 				t.Fatalf("userBillingDateQuery() = %v, %v; want a parsed time", got, ok)
 			}
