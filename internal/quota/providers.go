@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -248,20 +249,92 @@ func parseAntigravityWindows(body []byte, observedAt time.Time) ([]cluster.Quota
 	return windows, nil
 }
 
+// flexFloat tolerates providers that encode finite numeric fields as JSON strings.
+// Unparseable values leave the field unset instead of failing the whole payload.
+type flexFloat struct {
+	value float64
+	set   bool
+}
+
+func (f *flexFloat) UnmarshalJSON(data []byte) error {
+	*f = flexFloat{}
+	raw, ok := flexibleNumberText(data)
+	if !ok {
+		return nil
+	}
+	value, errParse := strconv.ParseFloat(raw, 64)
+	if errParse != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+		return nil
+	}
+	f.value = value
+	f.set = true
+	return nil
+}
+
+func flexFloatValue(value flexFloat) *float64 {
+	if !value.set || math.IsNaN(value.value) || math.IsInf(value.value, 0) {
+		return nil
+	}
+	converted := value.value
+	return &converted
+}
+
+// flexInt64 tolerates integer fields encoded as either JSON numbers or strings.
+type flexInt64 struct {
+	value int64
+	set   bool
+}
+
+func (f *flexInt64) UnmarshalJSON(data []byte) error {
+	*f = flexInt64{}
+	raw, ok := flexibleNumberText(data)
+	if !ok {
+		return nil
+	}
+	value, errParse := strconv.ParseInt(raw, 10, 64)
+	if errParse != nil {
+		return nil
+	}
+	f.value = value
+	f.set = true
+	return nil
+}
+
+func flexibleNumberText(data []byte) (string, bool) {
+	raw := strings.TrimSpace(string(data))
+	if raw == "" || raw == "null" {
+		return "", false
+	}
+	if strings.HasPrefix(raw, "\"") {
+		unquoted, errUnquote := strconv.Unquote(raw)
+		if errUnquote != nil {
+			return "", false
+		}
+		raw = strings.TrimSpace(unquoted)
+	}
+	return raw, raw != ""
+}
+
 type kimiUsagePayload struct {
 	Usage  *kimiUsageDetail `json:"usage"`
 	Limits []kimiLimitItem  `json:"limits"`
 }
 
 type kimiUsageDetail struct {
-	Used      *float64 `json:"used"`
-	Limit     *float64 `json:"limit"`
-	Remaining *float64 `json:"remaining"`
-	Name      string   `json:"name"`
-	Title     string   `json:"title"`
-	ResetAt   string   `json:"reset_at"`
-	ResetIn   *float64 `json:"resetIn"`
-	TTL       *float64 `json:"ttl"`
+	Used           flexFloat `json:"used"`
+	Limit          flexFloat `json:"limit"`
+	Remaining      flexFloat `json:"remaining"`
+	Name           string    `json:"name"`
+	Title          string    `json:"title"`
+	Duration       flexInt64 `json:"duration"`
+	TimeUnit       string    `json:"timeUnit"`
+	ResetAtSnake   string    `json:"reset_at"`
+	ResetAt        string    `json:"resetAt"`
+	ResetTimeSnake string    `json:"reset_time"`
+	ResetTime      string    `json:"resetTime"`
+	ResetInSnake   flexFloat `json:"reset_in"`
+	ResetIn        flexFloat `json:"resetIn"`
+	TTL            flexFloat `json:"ttl"`
 }
 
 type kimiLimitItem struct {
@@ -270,17 +343,21 @@ type kimiLimitItem struct {
 	Scope  string           `json:"scope"`
 	Detail *kimiUsageDetail `json:"detail"`
 	Window *struct {
-		Duration int64  `json:"duration"`
-		TimeUnit string `json:"timeUnit"`
+		Duration flexInt64 `json:"duration"`
+		TimeUnit string    `json:"timeUnit"`
 	} `json:"window"`
-	Used      *float64 `json:"used"`
-	Limit     *float64 `json:"limit"`
-	Remaining *float64 `json:"remaining"`
-	Duration  int64    `json:"duration"`
-	TimeUnit  string   `json:"timeUnit"`
-	ResetAt   string   `json:"resetAt"`
-	ResetIn   *float64 `json:"resetIn"`
-	TTL       *float64 `json:"ttl"`
+	Used           flexFloat `json:"used"`
+	Limit          flexFloat `json:"limit"`
+	Remaining      flexFloat `json:"remaining"`
+	Duration       flexInt64 `json:"duration"`
+	TimeUnit       string    `json:"timeUnit"`
+	ResetAtSnake   string    `json:"reset_at"`
+	ResetAt        string    `json:"resetAt"`
+	ResetTimeSnake string    `json:"reset_time"`
+	ResetTime      string    `json:"resetTime"`
+	ResetInSnake   flexFloat `json:"reset_in"`
+	ResetIn        flexFloat `json:"resetIn"`
+	TTL            flexFloat `json:"ttl"`
 }
 
 func parseKimiUsageWindows(body []byte, observedAt time.Time) ([]cluster.QuotaWindow, error) {
@@ -289,14 +366,14 @@ func parseKimiUsageWindows(body []byte, observedAt time.Time) ([]cluster.QuotaWi
 		return nil, fmt.Errorf("decode kimi quota response: %w", errDecode)
 	}
 	windows := make([]cluster.QuotaWindow, 0, len(payload.Limits)+1)
+	if window, ok := kimiSummaryWindow(payload.Usage, observedAt); ok {
+		windows = append(windows, window)
+	}
+	priorityOffset := len(windows)
 	for index, limit := range payload.Limits {
 		window, ok := kimiLimitWindow(limit, index, observedAt)
 		if ok {
-			windows = append(windows, window)
-		}
-	}
-	if len(windows) == 0 {
-		if window, ok := kimiSummaryWindow(payload.Usage, observedAt); ok {
+			window.Priority = priorityOffset + index
 			windows = append(windows, window)
 		}
 	}
@@ -304,9 +381,9 @@ func parseKimiUsageWindows(body []byte, observedAt time.Time) ([]cluster.QuotaWi
 }
 
 func kimiLimitWindow(input kimiLimitItem, index int, observedAt time.Time) (cluster.QuotaWindow, bool) {
-	used := firstFloat(input.Used, detailFloat(input.Detail, "used"))
-	limit := firstFloat(input.Limit, detailFloat(input.Detail, "limit"))
-	remaining := firstFloat(input.Remaining, detailFloat(input.Detail, "remaining"))
+	used := firstFloat(flexFloatValue(input.Used), detailFloat(input.Detail, "used"))
+	limit := firstFloat(flexFloatValue(input.Limit), detailFloat(input.Detail, "limit"))
+	remaining := firstFloat(flexFloatValue(input.Remaining), detailFloat(input.Detail, "remaining"))
 	if used == nil && limit == nil && remaining == nil {
 		return cluster.QuotaWindow{}, false
 	}
@@ -315,15 +392,15 @@ func kimiLimitWindow(input kimiLimitItem, index int, observedAt time.Time) (clus
 		name = fmt.Sprintf("%d", index+1)
 	}
 	label := firstNonEmptyString(input.Title, input.Name, "Limit")
-	window := cluster.QuotaWindow{ID: "kimi-limit-" + quotaIDSlug(name), Label: &label, Scope: normalizeProviderScope(input.Scope), Mode: "rolling", Status: "unknown", Unit: "requests", Used: nonNegativeFloat(used), Remaining: nonNegativeFloat(remaining), Limit: nonNegativeFloat(limit), PeriodUnit: "unknown", Source: "active_probe", ObservedAt: observedAt, Priority: index}
-	duration, unit := input.Duration, input.TimeUnit
-	if input.Window != nil {
-		duration, unit = input.Window.Duration, input.Window.TimeUnit
-	}
+	window := cluster.QuotaWindow{ID: "kimi-limit-" + quotaIDSlug(name), Label: &label, Scope: normalizeProviderScope(input.Scope), Mode: "rolling", Status: "unknown", Unit: "requests", Used: nonNegativeFloat(used), Remaining: nonNegativeFloat(remaining), Limit: nonNegativeFloat(limit), PeriodUnit: "unknown", Source: "active_probe", ObservedAt: observedAt}
+	duration, unit := kimiLimitPeriod(input)
 	window.PeriodUnit, window.PeriodValue, window.WindowSeconds = structuredPeriod(duration, unit)
-	window.ResetAt = firstProviderTime(input.ResetAt, detailString(input.Detail, "reset_at"))
-	resetIn := firstFloat(input.ResetIn, detailFloat(input.Detail, "reset_in"))
-	if window.ResetAt == nil && resetIn != nil && *resetIn >= 0 {
+	window.ResetAt = firstProviderTime(input.ResetAtSnake, input.ResetAt, input.ResetTimeSnake, input.ResetTime)
+	if window.ResetAt == nil {
+		window.ResetAt = kimiUsageResetAt(input.Detail)
+	}
+	resetIn := firstNonNegativeFloat(flexFloatValue(input.ResetInSnake), flexFloatValue(input.ResetIn), flexFloatValue(input.TTL), kimiUsageResetSeconds(input.Detail))
+	if window.ResetAt == nil && resetIn != nil {
 		resetAt := observedAt.Add(time.Duration(*resetIn) * time.Second)
 		window.ResetAt = &resetAt
 	}
@@ -332,14 +409,19 @@ func kimiLimitWindow(input kimiLimitItem, index int, observedAt time.Time) (clus
 }
 
 func kimiSummaryWindow(input *kimiUsageDetail, observedAt time.Time) (cluster.QuotaWindow, bool) {
-	if input == nil || (input.Used == nil && input.Limit == nil && input.Remaining == nil) {
+	if input == nil {
+		return cluster.QuotaWindow{}, false
+	}
+	used, limit, remaining := flexFloatValue(input.Used), flexFloatValue(input.Limit), flexFloatValue(input.Remaining)
+	if used == nil && limit == nil && remaining == nil {
 		return cluster.QuotaWindow{}, false
 	}
 	label := firstNonEmptyString(input.Title, "Usage")
-	window := cluster.QuotaWindow{ID: "kimi-usage", Label: &label, Scope: "account", Mode: "balance", Status: "unknown", Unit: "requests", Used: nonNegativeFloat(input.Used), Remaining: nonNegativeFloat(input.Remaining), Limit: nonNegativeFloat(input.Limit), PeriodUnit: "unknown", Source: "active_probe", ObservedAt: observedAt}
-	window.ResetAt = parseProviderTime(input.ResetAt)
-	if window.ResetAt == nil && input.ResetIn != nil && *input.ResetIn >= 0 {
-		resetAt := observedAt.Add(time.Duration(*input.ResetIn) * time.Second)
+	window := cluster.QuotaWindow{ID: "kimi-usage", Label: &label, Scope: "account", Mode: "balance", Status: "unknown", Unit: "requests", Used: nonNegativeFloat(used), Remaining: nonNegativeFloat(remaining), Limit: nonNegativeFloat(limit), PeriodUnit: "unknown", Source: "active_probe", ObservedAt: observedAt}
+	window.ResetAt = kimiUsageResetAt(input)
+	resetIn := kimiUsageResetSeconds(input)
+	if window.ResetAt == nil && resetIn != nil {
+		resetAt := observedAt.Add(time.Duration(*resetIn) * time.Second)
 		window.ResetAt = &resetAt
 	}
 	normalizeWindowValues(&window)
@@ -394,26 +476,43 @@ func structuredPeriod(duration int64, rawUnit string) (string, *float64, *int64)
 		return "unknown", nil, nil
 	}
 	unit := strings.ToLower(strings.TrimSpace(rawUnit))
+	unit = strings.TrimPrefix(unit, "time_unit_")
 	value := float64(duration)
 	var seconds int64
+	var ok bool
 	switch unit {
 	case "minute", "minutes", "m":
-		unit, seconds = "minute", duration*60
+		unit = "minute"
+		seconds, ok = checkedPeriodSeconds(duration, 60)
 	case "hour", "hours", "h":
-		unit, seconds = "hour", duration*60*60
+		unit = "hour"
+		seconds, ok = checkedPeriodSeconds(duration, 60*60)
 	case "day", "days", "d":
-		unit, seconds = "day", duration*24*60*60
+		unit = "day"
+		seconds, ok = checkedPeriodSeconds(duration, 24*60*60)
 	case "week", "weeks", "w":
-		unit, seconds = "week", duration*7*24*60*60
+		unit = "week"
+		seconds, ok = checkedPeriodSeconds(duration, 7*24*60*60)
 	case "month", "months":
 		unit, seconds = "month", 0
+		ok = true
 	default:
+		return "unknown", nil, nil
+	}
+	if !ok {
 		return "unknown", nil, nil
 	}
 	if seconds > 0 {
 		return unit, &value, &seconds
 	}
 	return unit, &value, nil
+}
+
+func checkedPeriodSeconds(duration, multiplier int64) (int64, bool) {
+	if duration <= 0 || multiplier <= 0 || duration > math.MaxInt64/multiplier {
+		return 0, false
+	}
+	return duration * multiplier, true
 }
 
 func periodSeconds(unit string, value float64) *int64 {
@@ -489,32 +588,68 @@ func firstFloat(values ...*float64) *float64 {
 	return nil
 }
 
+func firstNonNegativeFloat(values ...*float64) *float64 {
+	for _, value := range values {
+		if value != nil && !math.IsNaN(*value) && !math.IsInf(*value, 0) && *value >= 0 {
+			return value
+		}
+	}
+	return nil
+}
+
+func firstPositiveFlexInt64(values ...flexInt64) int64 {
+	for _, value := range values {
+		if value.set && value.value > 0 {
+			return value.value
+		}
+	}
+	return 0
+}
+
+func kimiLimitPeriod(input kimiLimitItem) (int64, string) {
+	var windowDuration flexInt64
+	var windowUnit string
+	if input.Window != nil {
+		windowDuration = input.Window.Duration
+		windowUnit = input.Window.TimeUnit
+	}
+	var detailDuration flexInt64
+	var detailUnit string
+	if input.Detail != nil {
+		detailDuration = input.Detail.Duration
+		detailUnit = input.Detail.TimeUnit
+	}
+	return firstPositiveFlexInt64(windowDuration, input.Duration, detailDuration), firstNonEmptyString(windowUnit, input.TimeUnit, detailUnit)
+}
+
+func kimiUsageResetAt(input *kimiUsageDetail) *time.Time {
+	if input == nil {
+		return nil
+	}
+	return firstProviderTime(input.ResetAtSnake, input.ResetAt, input.ResetTimeSnake, input.ResetTime)
+}
+
+func kimiUsageResetSeconds(input *kimiUsageDetail) *float64 {
+	if input == nil {
+		return nil
+	}
+	return firstNonNegativeFloat(flexFloatValue(input.ResetInSnake), flexFloatValue(input.ResetIn), flexFloatValue(input.TTL))
+}
+
 func detailFloat(detail *kimiUsageDetail, field string) *float64 {
 	if detail == nil {
 		return nil
 	}
 	switch field {
 	case "used":
-		return detail.Used
+		return flexFloatValue(detail.Used)
 	case "limit":
-		return detail.Limit
+		return flexFloatValue(detail.Limit)
 	case "remaining":
-		return detail.Remaining
-	case "reset_in":
-		return detail.ResetIn
+		return flexFloatValue(detail.Remaining)
 	default:
 		return nil
 	}
-}
-
-func detailString(detail *kimiUsageDetail, field string) string {
-	if detail == nil {
-		return ""
-	}
-	if field == "reset_at" {
-		return detail.ResetAt
-	}
-	return ""
 }
 
 func firstNonEmptyString(values ...string) string {
