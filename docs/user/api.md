@@ -457,7 +457,7 @@ User billing routes are under the `/user` base path, so the full paths are `/use
 
 User billing responses do not include admin notes, global totals, model price management data, proxy-pool data, raw API keys, masked API keys, price snapshots, matched price rules, endpoint, `balance_before`, or other users' data.
 
-User billing `from` and `to` query parameters accept `YYYY-MM-DD`, RFC3339, or Unix seconds. Unix-second values must be between `2000-01-01T00:00:00Z` and `9999-12-31T23:59:59Z`; millisecond timestamps are rejected. A date-only `to` includes the whole ending UTC day. Explicit timestamp `to` values are inclusive exact instants and are not expanded. Clients that need a full natural day outside UTC should send RFC3339 boundaries with the intended timezone offset through the final nanosecond, for example `23:59:59.999999999+08:00`.
+User billing `from` and `to` query parameters accept `YYYY-MM-DD`, RFC3339, or Unix seconds and use the half-open interval `[from,to)`. Unix-second values must be between `2000-01-01T00:00:00Z` and `9999-12-31T23:59:59Z`; millisecond timestamps are rejected. A date-only `to` becomes the next UTC midnight so the whole ending UTC day is included. Explicit timestamp `to` values are exact exclusive boundaries and are not expanded. Clients that need a full natural day outside UTC should send RFC3339 boundaries from local midnight to the next local midnight, for example `2026-06-10T00:00:00+08:00` through `2026-06-11T00:00:00+08:00`.
 
 ### GET `/billing/overview`
 
@@ -474,7 +474,7 @@ Query parameters:
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `from` | string | Optional start time: `YYYY-MM-DD`, RFC3339, or Unix seconds. |
-| `to` | string | Optional inclusive end time. Date-only values include the full UTC day; explicit timestamps are preserved exactly. |
+| `to` | string | Optional exclusive end time. Date-only values include the full UTC day by using the next UTC midnight; explicit timestamps are preserved exactly. |
 
 Example response:
 
@@ -520,7 +520,7 @@ Query parameters:
 | Parameter | Type | Description |
 | --- | --- | --- |
 | `from` | string | Optional start time: `YYYY-MM-DD`, RFC3339, or Unix seconds. |
-| `to` | string | Optional inclusive end time. Date-only values include the full UTC day; explicit timestamps are preserved exactly. |
+| `to` | string | Optional exclusive end time. Date-only values include the full UTC day by using the next UTC midnight; explicit timestamps are preserved exactly. |
 | `limit` | integer | Optional page size. Default `50`, max `200`. Invalid non-positive or non-integer values return `400`. |
 | `offset` | integer | Optional page offset. Default `0`. Negative or non-integer values return `400`. |
 

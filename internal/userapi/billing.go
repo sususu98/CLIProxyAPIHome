@@ -33,9 +33,9 @@ func (h *Handler) CurrentUserBillingOverview(c *gin.Context) {
 	}
 
 	overview, errOverview := h.repo.BillingOverview(ctx, cluster.BillingOverviewQuery{
-		From:   from,
-		To:     to,
-		UserID: &user.ID,
+		From:        from,
+		ToExclusive: to,
+		UserID:      &user.ID,
 	})
 	if errOverview != nil {
 		respondError(c, http.StatusInternalServerError, "billing_overview_load_failed", errOverview)
@@ -66,11 +66,11 @@ func (h *Handler) ListCurrentUserBillingCharges(c *gin.Context) {
 	}
 
 	result, errCharges := h.repo.ListBillingCharges(ctx, cluster.BillingChargeQuery{
-		From:   from,
-		To:     to,
-		UserID: &user.ID,
-		Limit:  limit,
-		Offset: offset,
+		From:        from,
+		ToExclusive: to,
+		UserID:      &user.ID,
+		Limit:       limit,
+		Offset:      offset,
 	})
 	if errCharges != nil {
 		respondError(c, http.StatusInternalServerError, "billing_charge_load_failed", errCharges)
@@ -147,7 +147,7 @@ func userBillingDateRangeFromRequest(c *gin.Context) (*time.Time, *time.Time, bo
 	return from, to, true
 }
 
-func userBillingDateQuery(c *gin.Context, key string, endOfDay bool) (*time.Time, bool) {
+func userBillingDateQuery(c *gin.Context, key string, dateOnlyEndExclusive bool) (*time.Time, bool) {
 	raw := strings.TrimSpace(c.Query(key))
 	if raw == "" {
 		return nil, true
@@ -158,8 +158,8 @@ func userBillingDateQuery(c *gin.Context, key string, endOfDay bool) (*time.Time
 		return nil, false
 	}
 	parsed = parsed.UTC()
-	if endOfDay && dateOnly {
-		parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 23, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
+	if dateOnlyEndExclusive && dateOnly {
+		parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day()+1, 0, 0, 0, 0, time.UTC)
 	}
 	return &parsed, true
 }

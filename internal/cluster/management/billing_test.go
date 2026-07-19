@@ -151,17 +151,30 @@ func TestBillingSettingsGetAndPatch(t *testing.T) {
 	getCtx, _ := gin.CreateTestContext(getResp)
 	getCtx.Request = httptest.NewRequest(http.MethodGet, "/billing/settings", nil)
 	handler.GetBillingSettings(getCtx)
-	if getResp.Code != http.StatusOK || !bytes.Contains(getResp.Body.Bytes(), []byte(`"service_tier_source":"request"`)) {
+	if getResp.Code != http.StatusOK ||
+		!bytes.Contains(getResp.Body.Bytes(), []byte(`"service_tier_source":"request"`)) ||
+		!bytes.Contains(getResp.Body.Bytes(), []byte(`"report_timezone":"UTC"`)) {
 		t.Fatalf("GET status/body = %d %s", getResp.Code, getResp.Body.String())
 	}
 
 	patchResp := httptest.NewRecorder()
 	patchCtx, _ := gin.CreateTestContext(patchResp)
-	patchCtx.Request = httptest.NewRequest(http.MethodPatch, "/billing/settings", bytes.NewBufferString(`{"service_tier_source":"response"}`))
+	patchCtx.Request = httptest.NewRequest(http.MethodPatch, "/billing/settings", bytes.NewBufferString(`{"service_tier_source":"response","report_timezone":"Asia/Shanghai"}`))
 	patchCtx.Request.Header.Set("Content-Type", "application/json")
 	handler.UpdateBillingSettings(patchCtx)
-	if patchResp.Code != http.StatusOK || !bytes.Contains(patchResp.Body.Bytes(), []byte(`"service_tier_source":"response"`)) {
+	if patchResp.Code != http.StatusOK ||
+		!bytes.Contains(patchResp.Body.Bytes(), []byte(`"service_tier_source":"response"`)) ||
+		!bytes.Contains(patchResp.Body.Bytes(), []byte(`"report_timezone":"Asia/Shanghai"`)) {
 		t.Fatalf("PATCH status/body = %d %s", patchResp.Code, patchResp.Body.String())
+	}
+
+	invalidResp := httptest.NewRecorder()
+	invalidCtx, _ := gin.CreateTestContext(invalidResp)
+	invalidCtx.Request = httptest.NewRequest(http.MethodPatch, "/billing/settings", bytes.NewBufferString(`{"report_timezone":"Invalid/Timezone"}`))
+	invalidCtx.Request.Header.Set("Content-Type", "application/json")
+	handler.UpdateBillingSettings(invalidCtx)
+	if invalidResp.Code != http.StatusBadRequest || !bytes.Contains(invalidResp.Body.Bytes(), []byte(`"error":"invalid_body"`)) {
+		t.Fatalf("invalid PATCH status/body = %d %s, want invalid_body", invalidResp.Code, invalidResp.Body.String())
 	}
 }
 
@@ -640,6 +653,9 @@ func TestGetBillingOverviewReturnsTotals(t *testing.T) {
 	if rangeValue["timezone"] != "UTC" {
 		t.Fatalf("overview.range.timezone = %v, want UTC", rangeValue["timezone"])
 	}
+	if rangeValue["from_at"] != nil || rangeValue["to_at_exclusive"] != nil {
+		t.Fatalf("overview.range exact bounds = %#v, want null bounds", rangeValue)
+	}
 }
 
 func TestGetBillingOverviewGroupsRequestedTimezone(t *testing.T) {
@@ -652,10 +668,14 @@ func TestGetBillingOverviewGroupsRequestedTimezone(t *testing.T) {
 	if _, errUsage := handler.repo.AppendUsage(context.Background(), payload, "192.0.2.10"); errUsage != nil {
 		t.Fatalf("AppendUsage() error = %v", errUsage)
 	}
+	boundaryPayload := `{"timestamp":"2026-06-10T16:00:00Z","provider":"openai","model":"gpt-4.1-mini","api_key":"client-key","request_id":"req-next-midnight","tokens":{"input_tokens":1,"total_tokens":1}}`
+	if _, errUsage := handler.repo.AppendUsage(context.Background(), boundaryPayload, "192.0.2.10"); errUsage != nil {
+		t.Fatalf("AppendUsage(boundary) error = %v", errUsage)
+	}
 
 	resp := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(resp)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/billing/overview?from=2026-06-09T16%3A00%3A00Z&to=2026-06-10T15%3A59%3A59.999Z&timezone=Asia%2FShanghai", nil)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/billing/overview?from=2026-06-09T16%3A00%3A00Z&to=2026-06-10T16%3A00%3A00Z&timezone=Asia%2FShanghai", nil)
 	handler.GetBillingOverview(ctx)
 
 	if resp.Code != http.StatusOK {
@@ -681,9 +701,56 @@ func TestGetBillingOverviewGroupsRequestedTimezone(t *testing.T) {
 		t.Fatalf("daily_trend[0] = %#v, want June 10 with 2 requests", trend[0])
 	}
 	rangeValue, ok := overview["range"].(map[string]any)
-	if !ok || rangeValue["from"] != "2026-06-10" || rangeValue["to"] != "2026-06-10" || rangeValue["timezone"] != "Asia/Shanghai" {
+	if !ok ||
+		rangeValue["from"] != "2026-06-10" ||
+		rangeValue["to"] != "2026-06-10" ||
+		rangeValue["from_at"] != "2026-06-09T16:00:00Z" ||
+		rangeValue["to_at_exclusive"] != "2026-06-10T16:00:00Z" ||
+		rangeValue["timezone"] != "Asia/Shanghai" {
 		t.Fatalf("range = %#v, want June 10 in Asia/Shanghai", overview["range"])
 	}
+}
+
+func TestGetBillingOverviewUsesConfiguredReportTimezoneAndAllowsOverride(t *testing.T) {
+	t.Parallel()
+
+	handler, closeRepo := newBillingManagementTestHandler(t)
+	defer closeRepo()
+	seedBillingManagementCharge(t, handler)
+	payload := `{"timestamp":"2026-06-09T17:00:00Z","provider":"openai","model":"gpt-4.1-mini","api_key":"client-key","request_id":"req-configured-timezone","tokens":{"input_tokens":1,"total_tokens":1}}`
+	if _, errUsage := handler.repo.AppendUsage(context.Background(), payload, "192.0.2.10"); errUsage != nil {
+		t.Fatalf("AppendUsage() error = %v", errUsage)
+	}
+	reportTimezone := "Asia/Shanghai"
+	if _, errSettings := handler.repo.UpdateBillingSettings(context.Background(), cluster.BillingSettingsPatch{ReportTimezone: &reportTimezone}); errSettings != nil {
+		t.Fatalf("UpdateBillingSettings() error = %v", errSettings)
+	}
+
+	assertOverview := func(path string, wantTimezone string, wantRequests float64) {
+		t.Helper()
+		resp := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(resp)
+		ctx.Request = httptest.NewRequest(http.MethodGet, path, nil)
+		handler.GetBillingOverview(ctx)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d body=%s, want 200", path, resp.Code, resp.Body.String())
+		}
+		var response map[string]any
+		if errDecode := json.Unmarshal(resp.Body.Bytes(), &response); errDecode != nil {
+			t.Fatalf("decode response: %v", errDecode)
+		}
+		overview, ok := response["overview"].(map[string]any)
+		if !ok {
+			t.Fatalf("overview = %T, want object", response["overview"])
+		}
+		rangeValue, ok := overview["range"].(map[string]any)
+		if !ok || rangeValue["timezone"] != wantTimezone || overview["request_count"] != wantRequests {
+			t.Fatalf("overview = %#v, want timezone %s and requests %v", overview, wantTimezone, wantRequests)
+		}
+	}
+
+	assertOverview("/billing/overview?from=2026-06-10&to=2026-06-10", "Asia/Shanghai", 2)
+	assertOverview("/billing/overview?from=2026-06-10&to=2026-06-10&timezone=UTC", "UTC", 1)
 }
 
 func TestListBillingChargesReturnsItems(t *testing.T) {
@@ -725,23 +792,23 @@ func TestListBillingChargesReturnsItems(t *testing.T) {
 	}
 }
 
-func TestBillingChargeQueryDateOnlyToNormalizesEndOfDay(t *testing.T) {
+func TestBillingChargeQueryDateOnlyToNormalizesToNextMidnight(t *testing.T) {
 	t.Parallel()
 
 	resp := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(resp)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/billing/charges?to=2026-06-10", nil)
 
-	query, ok := billingChargeQueryFromRequest(ctx)
+	query, ok := billingChargeQueryFromRequest(ctx, cluster.BillingReportTimezoneUTC)
 	if !ok {
 		t.Fatalf("billingChargeQueryFromRequest() ok = false, status=%d body=%s", resp.Code, resp.Body.String())
 	}
-	if query.To == nil {
-		t.Fatal("query.To is nil")
+	if query.ToExclusive == nil {
+		t.Fatal("query.ToExclusive is nil")
 	}
-	want := time.Date(2026, time.June, 10, 23, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
-	if !query.To.Equal(want) {
-		t.Fatalf("query.To = %s, want %s", query.To.Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
+	want := time.Date(2026, time.June, 11, 0, 0, 0, 0, time.UTC)
+	if !query.ToExclusive.Equal(want) {
+		t.Fatalf("query.ToExclusive = %s, want %s", query.ToExclusive.Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
 	}
 }
 
@@ -752,33 +819,47 @@ func TestBillingOverviewQueryUsesTimezoneForDateOnlyRange(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(resp)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/billing/overview?from=2026-07-19&to=2026-07-19&timezone=Asia%2FShanghai", nil)
 
-	query, ok := billingOverviewQueryFromRequest(ctx)
+	query, ok := billingOverviewQueryFromRequest(ctx, cluster.BillingReportTimezoneUTC)
 	if !ok {
 		t.Fatalf("billingOverviewQueryFromRequest() ok = false, status=%d body=%s", resp.Code, resp.Body.String())
 	}
 	if query.Timezone != "Asia/Shanghai" {
 		t.Fatalf("query.Timezone = %q, want Asia/Shanghai", query.Timezone)
 	}
-	if query.From == nil || query.To == nil {
-		t.Fatalf("query range = %v to %v, want both boundaries", query.From, query.To)
+	if query.From == nil || query.ToExclusive == nil {
+		t.Fatalf("query range = %v to %v, want both boundaries", query.From, query.ToExclusive)
 	}
 	wantFrom := time.Date(2026, time.July, 18, 16, 0, 0, 0, time.UTC)
-	wantTo := time.Date(2026, time.July, 19, 15, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
-	if !query.From.Equal(wantFrom) || !query.To.Equal(wantTo) {
-		t.Fatalf("query range = %s to %s, want %s to %s", query.From.Format(time.RFC3339Nano), query.To.Format(time.RFC3339Nano), wantFrom.Format(time.RFC3339Nano), wantTo.Format(time.RFC3339Nano))
+	wantTo := time.Date(2026, time.July, 19, 16, 0, 0, 0, time.UTC)
+	if !query.From.Equal(wantFrom) || !query.ToExclusive.Equal(wantTo) {
+		t.Fatalf("query range = %s to %s, want %s to %s", query.From.Format(time.RFC3339Nano), query.ToExclusive.Format(time.RFC3339Nano), wantFrom.Format(time.RFC3339Nano), wantTo.Format(time.RFC3339Nano))
 	}
 
 	dstResp := httptest.NewRecorder()
 	dstCtx, _ := gin.CreateTestContext(dstResp)
 	dstCtx.Request = httptest.NewRequest(http.MethodGet, "/billing/overview?from=2026-03-08&to=2026-03-08&timezone=America%2FLos_Angeles", nil)
-	dstQuery, ok := billingOverviewQueryFromRequest(dstCtx)
-	if !ok || dstQuery.From == nil || dstQuery.To == nil {
+	dstQuery, ok := billingOverviewQueryFromRequest(dstCtx, cluster.BillingReportTimezoneUTC)
+	if !ok || dstQuery.From == nil || dstQuery.ToExclusive == nil {
 		t.Fatalf("DST query = %#v ok=%v, status=%d body=%s", dstQuery, ok, dstResp.Code, dstResp.Body.String())
 	}
 	wantDSTFrom := time.Date(2026, time.March, 8, 8, 0, 0, 0, time.UTC)
-	wantDSTTo := time.Date(2026, time.March, 9, 6, 59, 59, int(time.Second-time.Nanosecond), time.UTC)
-	if !dstQuery.From.Equal(wantDSTFrom) || !dstQuery.To.Equal(wantDSTTo) {
-		t.Fatalf("DST query range = %s to %s, want %s to %s", dstQuery.From.Format(time.RFC3339Nano), dstQuery.To.Format(time.RFC3339Nano), wantDSTFrom.Format(time.RFC3339Nano), wantDSTTo.Format(time.RFC3339Nano))
+	wantDSTTo := time.Date(2026, time.March, 9, 7, 0, 0, 0, time.UTC)
+	if !dstQuery.From.Equal(wantDSTFrom) || !dstQuery.ToExclusive.Equal(wantDSTTo) {
+		t.Fatalf("DST query range = %s to %s, want %s to %s", dstQuery.From.Format(time.RFC3339Nano), dstQuery.ToExclusive.Format(time.RFC3339Nano), wantDSTFrom.Format(time.RFC3339Nano), wantDSTTo.Format(time.RFC3339Nano))
+	}
+	if got := dstQuery.ToExclusive.Sub(*dstQuery.From); got != 23*time.Hour {
+		t.Fatalf("spring DST range duration = %s, want 23h", got)
+	}
+
+	fallResp := httptest.NewRecorder()
+	fallCtx, _ := gin.CreateTestContext(fallResp)
+	fallCtx.Request = httptest.NewRequest(http.MethodGet, "/billing/overview?from=2026-11-01&to=2026-11-01&timezone=America%2FLos_Angeles", nil)
+	fallQuery, ok := billingOverviewQueryFromRequest(fallCtx, cluster.BillingReportTimezoneUTC)
+	if !ok || fallQuery.From == nil || fallQuery.ToExclusive == nil {
+		t.Fatalf("fall DST query = %#v ok=%v, status=%d body=%s", fallQuery, ok, fallResp.Code, fallResp.Body.String())
+	}
+	if got := fallQuery.ToExclusive.Sub(*fallQuery.From); got != 25*time.Hour {
+		t.Fatalf("fall DST range duration = %s, want 25h", got)
 	}
 }
 
@@ -791,7 +872,7 @@ func TestBillingRangeQueryRejectsInvalidTimezoneAndInvertedRange(t *testing.T) {
 		wantError string
 	}{
 		{name: "invalid timezone", path: "/billing/overview?timezone=Invalid%2FTimezone", wantError: "invalid_timezone"},
-		{name: "inverted range", path: "/billing/overview?from=2026-07-20&to=2026-07-19", wantError: "invalid_time_range"},
+		{name: "inverted range", path: "/billing/overview?from=2026-07-21&to=2026-07-19", wantError: "invalid_time_range"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -799,7 +880,7 @@ func TestBillingRangeQueryRejectsInvalidTimezoneAndInvertedRange(t *testing.T) {
 			ctx, _ := gin.CreateTestContext(resp)
 			ctx.Request = httptest.NewRequest(http.MethodGet, tt.path, nil)
 
-			if _, ok := billingOverviewQueryFromRequest(ctx); ok {
+			if _, ok := billingOverviewQueryFromRequest(ctx, cluster.BillingReportTimezoneUTC); ok {
 				t.Fatal("billingOverviewQueryFromRequest() ok = true, want false")
 			}
 			if resp.Code != http.StatusBadRequest {

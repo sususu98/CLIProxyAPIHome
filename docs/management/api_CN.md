@@ -1462,7 +1462,7 @@ Query 参数：
 
 本节所有路径都相对于 Management API 基础 URL，例如 `/v0/management/billing/overview` 或 `/v0/management/proxy/proxy-pools`。这些不是 `/user` 路由，调用时需要管理密钥。
 
-只有 `/billing/overview`、`/billing/charges` 和 `/billing/balance-records` 会将 `from` 和 `to` 解析为 `YYYY-MM-DD`、RFC3339 或 Unix 秒。可选的 `timezone` 参数默认为 `UTC`，并且必须是 IANA 时区名称。纯日期值使用 `timezone` 中的日历日期，纯日期形式的 `to` 会包含该时区结束日期的完整一天。显式时间戳表示精确时刻，不会因 `timezone` 被移动或扩展。`/billing/overview` 还使用 `timezone` 生成 `range` 日历日期和 `daily_trend` 分桶，因此一个自然日不会在 UTC 午夜被拆成两天。分页参数 `limit` 和 `offset` 仅适用于 `/billing/charges` 和 `/billing/balance-records`；这些路由的 `limit` 默认值为 `50`，最大值为 `200`，负数 `offset` 会规范化为 `0`。`/billing/model-prices` 仅支持 `provider`、`model` 和 `enabled` 查询参数。`/proxy/proxy-pools` 当前不解析查询参数。
+只有 `/billing/overview`、`/billing/charges` 和 `/billing/balance-records` 会将 `from` 和 `to` 解析为 `YYYY-MM-DD`、RFC3339 或 Unix 秒。三个路由统一使用半开区间 `[from,to)`：包含 `from`，不包含 `to`。可选的 `timezone` 参数是报表时区覆盖，并且必须是 IANA 时区名称。未提供时，路由使用 `/billing/settings.report_timezone`，该设置默认为 `UTC`。纯日期值使用实际报表时区中的日历日期，纯日期形式的 `to` 会规范化为下一个本地零点，因此即使跨越 DST，也会完整包含结束日期。显式时间戳是精确的排他上界，不会因报表时区被移动或扩展。`/billing/overview` 还使用实际报表时区生成 `range` 日历日期和 `daily_trend` 分桶，因此一个自然日不会在 UTC 午夜被拆成两天。报表时区只控制查询边界和报表分组，不会重新计算不可变 charge、修改价格快照或改变用户余额。分页参数 `limit` 和 `offset` 仅适用于 `/billing/charges` 和 `/billing/balance-records`；这些路由的 `limit` 默认值为 `50`，最大值为 `200`，负数 `offset` 会规范化为 `0`。`/billing/model-prices` 仅支持 `provider`、`model` 和 `enabled` 查询参数。`/proxy/proxy-pools` 当前不解析查询参数。
 
 不支持的时区名称返回 `400 invalid_timezone`。`from` 晚于 `to` 时返回 `400 invalid_time_range`。
 
@@ -1475,8 +1475,8 @@ Query 参数：
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
 | `from` | string | 可选开始时间：`YYYY-MM-DD`、RFC3339 或 Unix 秒。 |
-| `to` | string | 可选结束时间，包含该时刻；纯日期值包含 `timezone` 中结束日期的完整一天。 |
-| `timezone` | string | 用于纯日期边界、响应范围日期和每日趋势分桶的 IANA 时区；默认 `UTC`。 |
+| `to` | string | 可选排他结束时间；纯日期通过使用下一个本地零点，完整包含 `timezone` 中的结束日期。 |
+| `timezone` | string | 可选的 IANA 报表时区覆盖，用于纯日期边界、响应范围日期和每日趋势分桶；默认使用 `/billing/settings.report_timezone`。 |
 | `user` | string | 可选用户名、用户文本或用户 ID 过滤；别名：`user_text`、`username`。 |
 | `user_id` | integer | 可选精确用户 ID 过滤；别名：`uid`。 |
 | `provider` | string | 可选 provider 过滤。 |
@@ -1486,7 +1486,7 @@ Query 参数：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `range` | object | 实际使用的日历 `from`、`to` 和 `timezone` 范围。 |
+| `range` | object | 实际使用的日历 `from`/`to`、精确 UTC `from_at`/`to_at_exclusive` 和 `timezone`；未传对应查询边界时，精确边界为 `null`。 |
 | `total_charge_amount` | number | 总扣费金额。 |
 | `total_recharge_amount` | number | 总充值金额。 |
 | `total_deduct_amount` | number | 总手工扣减金额。 |
@@ -1510,8 +1510,8 @@ Query 参数：
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
 | `from` | string | 可选开始时间：`YYYY-MM-DD`、RFC3339 或 Unix 秒。 |
-| `to` | string | 可选结束时间，包含该时刻；纯日期值包含 `timezone` 中结束日期的完整一天。 |
-| `timezone` | string | 用于纯日期边界的 IANA 时区；默认 `UTC`。 |
+| `to` | string | 可选排他结束时间；纯日期通过使用下一个本地零点，完整包含 `timezone` 中的结束日期。 |
+| `timezone` | string | 可选的 IANA 报表时区覆盖，用于纯日期边界；默认使用 `/billing/settings.report_timezone`。 |
 | `user` | string | 可选用户名、用户文本或用户 ID 过滤；别名：`user_text`、`username`。 |
 | `user_id` | integer | 可选精确用户 ID 过滤；别名：`uid`。 |
 | `provider` | string | 可选 provider 过滤。 |
@@ -1561,8 +1561,8 @@ Query 参数：
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
 | `from` | string | 可选开始时间：`YYYY-MM-DD`、RFC3339 或 Unix 秒。 |
-| `to` | string | 可选结束时间，包含该时刻；纯日期值包含 `timezone` 中结束日期的完整一天。 |
-| `timezone` | string | 用于纯日期边界的 IANA 时区；默认 `UTC`。 |
+| `to` | string | 可选排他结束时间；纯日期通过使用下一个本地零点，完整包含 `timezone` 中的结束日期。 |
+| `timezone` | string | 可选的 IANA 报表时区覆盖，用于纯日期边界；默认使用 `/billing/settings.report_timezone`。 |
 | `user` | string | 可选用户名、用户文本或用户 ID 过滤；别名：`user_text`、`username`。 |
 | `user_id` | integer | 可选精确用户 ID 过滤；别名：`uid`。 |
 | `limit` | integer | 可选分页大小；默认 `50`，最大 `200`。 |
@@ -1717,18 +1717,18 @@ Query 参数：
 
 ### GET `/billing/settings`
 
-返回 DB-backed 计费匹配策略。`service_tier_source` 默认为 `request`，允许值为 `request` 或 `response`。无论哪种模式，`auto`、`default` 和 `standard` 都按本地 Standard 价格 tier 匹配。
+返回 DB-backed 计费策略。`service_tier_source` 默认为 `request`，允许值为 `request` 或 `response`。`report_timezone` 必须是受支持的 IANA 时区，默认值为 `UTC`；当 Management Billing 请求未提供 `timezone` 覆盖时，它作为报表默认日历时区。修改该设置只影响后续报表的边界和分组，不会重新计算历史 charge、重写价格快照或改变余额。无论哪种 tier-source 模式，`auto`、`default` 和 `standard` 都按本地 Standard 价格 tier 匹配。
 
 ```json
-{ "service_tier_source": "request" }
+{ "service_tier_source": "request", "report_timezone": "UTC" }
 ```
 
 ### PATCH `/billing/settings`
 
-局部更新计费设置。在 `response` 模式下，如果 response tier 缺失，会回退到 request tier，并在扣费价格快照中记录该回退。
+局部更新计费设置。两个字段均为可选。在 `response` 模式下，如果 response tier 缺失，会回退到 request tier，并在扣费价格快照中记录该回退。非法 tier-source 值或不支持的时区名称返回 `400 invalid_body`。
 
 ```json
-{ "service_tier_source": "response" }
+{ "service_tier_source": "response", "report_timezone": "Asia/Shanghai" }
 ```
 
 OpenAI 规定未传 `service_tier` 时为 `auto`；`auto` 是 Home 的内部表示，不能作为字面量直接发给 Codex backend。参见 [OpenAI 定价页](https://developers.openai.com/api/docs/pricing) 和 [Responses Create 参考](https://developers.openai.com/api/reference/resources/responses/methods/create)。Home 保存请求 `service_tier` 和可选上游 `response_service_tier`，方便后续切换计费来源而无需重新灌入 usage。默认 `request` 来源按 `service_tier`（客户端请求 tier）计费。在 `response` 模式下优先使用 `response_service_tier`，上游未返回时回退请求 tier。`auto`、`default` 和 `standard` 都映射到本地 Standard 规则；使用 `flex` 或 `priority` 时请配置相应规则。
