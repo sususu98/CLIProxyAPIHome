@@ -505,12 +505,16 @@ Management secret / existing Home Management auth remains required. Session ids 
 
 ## 9. HomeUI Design
 
-Static mockups for review:
+Static mockups are **not** stored in `docs/` (they are design assets, not product docs).
 
-- `docs/design/session-ui-mockups/usage-session-filter.png`
-- `docs/design/session-ui-mockups/sessions-list.png`
-- `docs/design/session-ui-mockups/session-detail.png`
-- HTML sources under `docs/design/session-ui-mockups/`
+Hosted release assets for review:
+
+- https://github.com/sususu98/CLIProxyAPIHome/releases/tag/session-ui-mockups-v1
+- usage filter: `usage-session-filter.png`
+- sessions list: `sessions-list.png`
+- session timeline: `session-detail.png`
+
+Also attached on related issues for discussion.
 
 ### 9.1 Product surfaces
 
