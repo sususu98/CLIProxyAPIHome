@@ -3,6 +3,8 @@ docs/*
 !docs/management/**
 !docs/user/
 !docs/user/**
+!docs/design/
+!docs/design/**
 logs/
 static/*
 !static/.gitkeep

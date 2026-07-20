@@ -1,0 +1,945 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HomeUI Session Observability Mockups</title>
+    <style>
+      :root {
+        --bg: #0b1220;
+        --bg-elev: #111a2b;
+        --bg-soft: #162235;
+        --panel: #121c2e;
+        --border: rgba(148, 163, 184, 0.16);
+        --border-strong: rgba(148, 163, 184, 0.28);
+        --text: #e5eefc;
+        --muted: #93a4bf;
+        --faint: #6b7c99;
+        --primary: #5b8cff;
+        --primary-soft: rgba(91, 140, 255, 0.14);
+        --ok: #34d399;
+        --ok-soft: rgba(52, 211, 153, 0.14);
+        --warn: #fbbf24;
+        --warn-soft: rgba(251, 191, 36, 0.14);
+        --err: #f87171;
+        --err-soft: rgba(248, 113, 113, 0.14);
+        --chip: #1b2940;
+        --shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: #070b14;
+        color: var(--text);
+        font-family: var(--sans);
+      }
+
+      body {
+        padding: 28px;
+      }
+
+      .page {
+        width: 1440px;
+        margin: 0 auto 40px;
+        background:
+          radial-gradient(circle at top left, rgba(91,140,255,0.12), transparent 28%),
+          radial-gradient(circle at top right, rgba(52,211,153,0.08), transparent 24%),
+          var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 22px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .shell {
+        display: grid;
+        grid-template-columns: 232px 1fr;
+        min-height: 920px;
+      }
+
+      .sidebar {
+        background: linear-gradient(180deg, #0d1524 0%, #0b1220 100%);
+        border-right: 1px solid var(--border);
+        padding: 22px 16px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 10px 22px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      .brand-badge {
+        width: 28px;
+        height: 28px;
+        border-radius: 9px;
+        background: linear-gradient(135deg, #5b8cff, #34d399);
+        box-shadow: 0 0 0 4px rgba(91,140,255,0.12);
+      }
+
+      .nav-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        color: var(--muted);
+        font-size: 14px;
+        margin-bottom: 4px;
+      }
+
+      .nav-item.active {
+        background: var(--primary-soft);
+        color: #dce8ff;
+        border: 1px solid rgba(91,140,255,0.25);
+      }
+
+      .main {
+        padding: 24px 28px 28px;
+      }
+
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+
+      .title {
+        font-size: 28px;
+        font-weight: 700;
+        letter-spacing: -0.03em;
+        margin: 0 0 6px;
+      }
+
+      .subtitle {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+      }
+
+      .btn {
+        border: 1px solid var(--border-strong);
+        background: var(--bg-soft);
+        color: var(--text);
+        border-radius: 12px;
+        padding: 9px 14px;
+        font-size: 13px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .btn.primary {
+        background: linear-gradient(180deg, #6a97ff, #4f7ff0);
+        border-color: transparent;
+        color: white;
+        box-shadow: 0 8px 24px rgba(79, 127, 240, 0.28);
+      }
+
+      .btn.danger {
+        background: var(--err-soft);
+        border-color: rgba(248,113,113,0.28);
+        color: #fecaca;
+      }
+
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .kpi, .card, .panel {
+        background: rgba(18, 28, 46, 0.92);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+      }
+
+      .kpi {
+        padding: 14px 16px;
+      }
+
+      .kpi-label {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 8px;
+      }
+
+      .kpi-value {
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: -0.03em;
+      }
+
+      .kpi-meta {
+        margin-top: 6px;
+        color: var(--faint);
+        font-size: 12px;
+      }
+
+      .filters {
+        padding: 14px;
+        margin-bottom: 14px;
+        display: grid;
+        grid-template-columns: 1.4fr 1fr 1fr 1fr 1fr auto;
+        gap: 10px;
+        align-items: end;
+      }
+
+      .field label {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 6px;
+      }
+
+      .field input, .field select, .search {
+        width: 100%;
+        height: 38px;
+        border-radius: 11px;
+        border: 1px solid var(--border-strong);
+        background: #0d1626;
+        color: var(--text);
+        padding: 0 12px;
+        font-size: 13px;
+      }
+
+      .field input.highlight {
+        border-color: rgba(91,140,255,0.55);
+        box-shadow: 0 0 0 3px rgba(91,140,255,0.12);
+        background: #101d34;
+      }
+
+      .table-wrap {
+        overflow: hidden;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      th {
+        text-align: left;
+        color: var(--faint);
+        font-weight: 600;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(255,255,255,0.015);
+      }
+
+      td {
+        padding: 13px 14px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+        vertical-align: middle;
+      }
+
+      tr:last-child td { border-bottom: none; }
+      tr.active-row { background: rgba(91,140,255,0.08); }
+      tr:hover td { background: rgba(255,255,255,0.015); }
+
+      .mono {
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+
+      .linkish {
+        color: #9cbcff;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border-radius: 999px;
+        padding: 4px 9px;
+        font-size: 12px;
+        border: 1px solid transparent;
+        white-space: nowrap;
+      }
+
+      .pill.ok { background: var(--ok-soft); color: #86efac; border-color: rgba(52,211,153,0.18); }
+      .pill.err { background: var(--err-soft); color: #fca5a5; border-color: rgba(248,113,113,0.18); }
+      .pill.warn { background: var(--warn-soft); color: #fde68a; border-color: rgba(251,191,36,0.18); }
+      .pill.blue { background: var(--primary-soft); color: #bfdbfe; border-color: rgba(91,140,255,0.18); }
+      .pill.neutral { background: var(--chip); color: var(--muted); border-color: var(--border); }
+
+      .muted { color: var(--muted); }
+      .faint { color: var(--faint); }
+      .tiny { font-size: 12px; }
+
+      .caption {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 14px;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .tag-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .mock-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 14px;
+        padding: 7px 12px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .mock-label strong { color: var(--text); font-weight: 600; }
+
+      /* Session list cards */
+      .session-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+
+      .session-card {
+        padding: 16px 18px;
+        display: grid;
+        grid-template-columns: 1.5fr 1fr 1fr 0.8fr auto;
+        gap: 14px;
+        align-items: center;
+      }
+
+      .session-card:hover {
+        border-color: rgba(91,140,255,0.35);
+        background: #15223a;
+      }
+
+      .session-id {
+        font-family: var(--mono);
+        font-size: 13px;
+        color: #cfe0ff;
+      }
+
+      /* Detail layout */
+      .detail-layout {
+        display: grid;
+        grid-template-columns: 340px 1fr;
+        gap: 14px;
+        min-height: 720px;
+      }
+
+      .side-list {
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .side-list-header {
+        padding: 14px 14px 10px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .turn {
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(148,163,184,0.08);
+        cursor: default;
+      }
+
+      .turn.active {
+        background: rgba(91,140,255,0.10);
+        box-shadow: inset 3px 0 0 #5b8cff;
+      }
+
+      .turn-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+
+      .detail-main {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+      }
+
+      .meta-box {
+        padding: 12px 14px;
+        background: #0e1728;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+      }
+
+      .meta-box .label {
+        color: var(--faint);
+        font-size: 11px;
+        margin-bottom: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .meta-box .value {
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .split-2 {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr;
+        gap: 12px;
+      }
+
+      .codeblock {
+        margin: 0;
+        padding: 14px;
+        border-radius: 14px;
+        background: #0a1220;
+        border: 1px solid var(--border);
+        color: #d7e4ff;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        min-height: 220px;
+      }
+
+      .section-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+
+      .section-title h3 {
+        margin: 0;
+        font-size: 14px;
+      }
+
+      .binding-box {
+        padding: 14px;
+        border-radius: 14px;
+        background: linear-gradient(180deg, rgba(91,140,255,0.08), rgba(18,28,46,0.2));
+        border: 1px solid rgba(91,140,255,0.2);
+      }
+
+      .footer-note {
+        width: 1440px;
+        margin: 0 auto 20px;
+        color: #7f90ad;
+        font-size: 12px;
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+      .dot.ok { background: var(--ok); }
+      .dot.err { background: var(--err); }
+      .dot.warn { background: var(--warn); }
+    </style>
+  </head>
+  <body>
+    <!-- PAGE 1: Usage with session filter -->
+    <div class="page" id="usage-session-filter">
+      <div class="shell">
+        <aside class="sidebar">
+          <div class="brand"><div class="brand-badge"></div><div>Home Management</div></div>
+          <div class="nav-item">Dashboard</div>
+          <div class="nav-item">Credentials</div>
+          <div class="nav-item">Access Keys</div>
+          <div class="nav-item active">Usage</div>
+          <div class="nav-item">Sessions</div>
+          <div class="nav-item">Logs</div>
+          <div class="nav-item">Diagnostics</div>
+          <div class="nav-item">System Nodes</div>
+        </aside>
+        <main class="main">
+          <div class="mock-label"><strong>Mock A</strong> Usage workbench + Session ID filter</div>
+          <div class="topbar">
+            <div>
+              <h1 class="title">Usage Observability</h1>
+              <p class="subtitle">Filter requests by client session identity to reconstruct one conversation across turns.</p>
+              <div class="tag-row">
+                <span class="pill blue">session filter enabled</span>
+                <span class="pill neutral">exact match</span>
+                <span class="pill ok">DB-backed usage</span>
+              </div>
+            </div>
+            <div class="actions">
+              <div class="btn">Refresh</div>
+              <div class="btn primary">Export CSV</div>
+            </div>
+          </div>
+
+          <div class="kpis">
+            <div class="kpi">
+              <div class="kpi-label">Matched Requests</div>
+              <div class="kpi-value">12</div>
+              <div class="kpi-meta">this session · last 24h</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">Failed</div>
+              <div class="kpi-value">2</div>
+              <div class="kpi-meta">429 + upstream timeout</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">Total Tokens</div>
+              <div class="kpi-value">486.2k</div>
+              <div class="kpi-meta">cache read 312k</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">Bound Auth</div>
+              <div class="kpi-value" style="font-size:18px;">claude-acc-17</div>
+              <div class="kpi-meta">sticky hit · high confidence</div>
+            </div>
+          </div>
+
+          <div class="filters card">
+            <div class="field" style="grid-column: span 2;">
+              <label>Session ID</label>
+              <input class="highlight" value="11111111-1111-4111-8111-111111111111" />
+            </div>
+            <div class="field">
+              <label>Client Type</label>
+              <select><option>claude-code</option></select>
+            </div>
+            <div class="field">
+              <label>Provider</label>
+              <select><option>anthropic</option></select>
+            </div>
+            <div class="field">
+              <label>Status</label>
+              <select><option>all</option></select>
+            </div>
+            <div class="btn primary">Apply</div>
+          </div>
+
+          <div class="table-wrap card">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Session / Thread</th>
+                  <th>Client</th>
+                  <th>Model</th>
+                  <th>Auth</th>
+                  <th>Status</th>
+                  <th>Latency</th>
+                  <th>Request ID</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="mono">14:08:21</td>
+                  <td>
+                    <div class="mono linkish">11111111-1111-4111-8111-111111111111</div>
+                    <div class="tiny faint">thread = root</div>
+                  </td>
+                  <td><span class="pill blue">claude-code</span></td>
+                  <td>claude-sonnet-4-5</td>
+                  <td class="mono">claude-acc-17</td>
+                  <td><span class="pill ok">200</span></td>
+                  <td>1.42s</td>
+                  <td class="mono faint">req_01H…A1</td>
+                </tr>
+                <tr class="active-row">
+                  <td class="mono">14:11:03</td>
+                  <td>
+                    <div class="mono linkish">11111111-1111-4111-8111-111111111111</div>
+                    <div class="tiny faint">thread = root</div>
+                  </td>
+                  <td><span class="pill blue">claude-code</span></td>
+                  <td>claude-sonnet-4-5</td>
+                  <td class="mono">claude-acc-17</td>
+                  <td><span class="pill err">429</span></td>
+                  <td>0.38s</td>
+                  <td class="mono faint">req_01H…B7</td>
+                </tr>
+                <tr>
+                  <td class="mono">14:11:09</td>
+                  <td>
+                    <div class="mono linkish">11111111-1111-4111-8111-111111111111</div>
+                    <div class="tiny faint">rebind after cooldown</div>
+                  </td>
+                  <td><span class="pill blue">claude-code</span></td>
+                  <td>claude-sonnet-4-5</td>
+                  <td class="mono">claude-acc-22</td>
+                  <td><span class="pill ok">200</span></td>
+                  <td>2.17s</td>
+                  <td class="mono faint">req_01H…C2</td>
+                </tr>
+                <tr>
+                  <td class="mono">14:16:44</td>
+                  <td>
+                    <div class="mono linkish">11111111-1111-4111-8111-111111111111</div>
+                    <div class="tiny faint">thread = subagent-3</div>
+                  </td>
+                  <td><span class="pill blue">claude-code</span></td>
+                  <td>claude-haiku-4-5</td>
+                  <td class="mono">claude-acc-22</td>
+                  <td><span class="pill ok">200</span></td>
+                  <td>0.91s</td>
+                  <td class="mono faint">req_01H…D9</td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="caption">
+              <span>Showing 4 of 12 requests for session · source=claude_header · confidence=high</span>
+              <span>Open timeline →</span>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <!-- PAGE 2: Sessions list -->
+    <div class="page" id="sessions-list">
+      <div class="shell">
+        <aside class="sidebar">
+          <div class="brand"><div class="brand-badge"></div><div>Home Management</div></div>
+          <div class="nav-item">Dashboard</div>
+          <div class="nav-item">Credentials</div>
+          <div class="nav-item">Access Keys</div>
+          <div class="nav-item">Usage</div>
+          <div class="nav-item active">Sessions</div>
+          <div class="nav-item">Logs</div>
+          <div class="nav-item">Diagnostics</div>
+          <div class="nav-item">System Nodes</div>
+        </aside>
+        <main class="main">
+          <div class="mock-label"><strong>Mock B</strong> `/admin/sessions` list workbench</div>
+          <div class="topbar">
+            <div>
+              <h1 class="title">Sessions</h1>
+              <p class="subtitle">Browse client conversations by session identity. Paste an id from Claude Code / Codex / pi logs.</p>
+            </div>
+            <div class="actions">
+              <div class="btn">Active only</div>
+              <div class="btn primary">Paste Session ID</div>
+            </div>
+          </div>
+
+          <div class="filters card" style="grid-template-columns: 1.6fr 1fr 1fr 1fr auto;">
+            <div class="field">
+              <label>Session ID</label>
+              <input placeholder="Paste client session id…" value="" />
+            </div>
+            <div class="field">
+              <label>Client Type</label>
+              <select><option>all</option><option>claude-code</option><option>codex</option><option>opencode</option><option>pi</option></select>
+            </div>
+            <div class="field">
+              <label>User / Key</label>
+              <input value="alice@corp" />
+            </div>
+            <div class="field">
+              <label>Time Range</label>
+              <select><option>Last 24 hours</option></select>
+            </div>
+            <div class="btn primary">Search</div>
+          </div>
+
+          <div class="session-grid">
+            <div class="session-card card">
+              <div>
+                <div class="session-id">11111111-1111-4111-8111-111111111111</div>
+                <div class="tiny muted" style="margin-top:6px;">claude-code · alice@corp · key prod-claude</div>
+              </div>
+              <div>
+                <div class="tiny faint">Providers / Models</div>
+                <div style="margin-top:6px;">anthropic · sonnet-4-5, haiku-4-5</div>
+              </div>
+              <div>
+                <div class="tiny faint">Traffic</div>
+                <div style="margin-top:6px;">12 req · 2 failed · 486.2k tok</div>
+              </div>
+              <div>
+                <span class="pill ok"><span class="dot ok"></span> active</span>
+                <div class="tiny faint" style="margin-top:8px;">last 2m ago</div>
+              </div>
+              <div class="btn">Open</div>
+            </div>
+
+            <div class="session-card card">
+              <div>
+                <div class="session-id">019f7e3b-218c-77e3-b8dd-7f3f2289c071</div>
+                <div class="tiny muted" style="margin-top:6px;">codex · bob · key codex-main</div>
+              </div>
+              <div>
+                <div class="tiny faint">Providers / Models</div>
+                <div style="margin-top:6px;">openai · gpt-5.4</div>
+              </div>
+              <div>
+                <div class="tiny faint">Traffic</div>
+                <div style="margin-top:6px;">7 req · 0 failed · 91.4k tok</div>
+              </div>
+              <div>
+                <span class="pill warn"><span class="dot warn"></span> idle</span>
+                <div class="tiny faint" style="margin-top:8px;">last 18m ago</div>
+              </div>
+              <div class="btn">Open</div>
+            </div>
+
+            <div class="session-card card">
+              <div>
+                <div class="session-id">ses_0x91afc3d8e2b14f</div>
+                <div class="tiny muted" style="margin-top:6px;">opencode · ci-bot · key ci-runner</div>
+              </div>
+              <div>
+                <div class="tiny faint">Providers / Models</div>
+                <div style="margin-top:6px;">anthropic · sonnet-4-5</div>
+              </div>
+              <div>
+                <div class="tiny faint">Traffic</div>
+                <div style="margin-top:6px;">3 req · 1 failed · 22.0k tok</div>
+              </div>
+              <div>
+                <span class="pill neutral">ended</span>
+                <div class="tiny faint" style="margin-top:8px;">last 3h ago</div>
+              </div>
+              <div class="btn">Open</div>
+            </div>
+
+            <div class="session-card card">
+              <div>
+                <div class="session-id">pi-sess-7c21a9</div>
+                <div class="tiny muted" style="margin-top:6px;">pi · local-dev · key dev-pi</div>
+              </div>
+              <div>
+                <div class="tiny faint">Providers / Models</div>
+                <div style="margin-top:6px;">openai · gpt-4.1-mini</div>
+              </div>
+              <div>
+                <div class="tiny faint">Traffic</div>
+                <div style="margin-top:6px;">5 req · 0 failed · 18.7k tok</div>
+              </div>
+              <div>
+                <span class="pill ok"><span class="dot ok"></span> active</span>
+                <div class="tiny faint" style="margin-top:8px;">last 40s ago</div>
+              </div>
+              <div class="btn">Open</div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <!-- PAGE 3: Session detail timeline -->
+    <div class="page" id="session-detail">
+      <div class="shell">
+        <aside class="sidebar">
+          <div class="brand"><div class="brand-badge"></div><div>Home Management</div></div>
+          <div class="nav-item">Dashboard</div>
+          <div class="nav-item">Credentials</div>
+          <div class="nav-item">Access Keys</div>
+          <div class="nav-item">Usage</div>
+          <div class="nav-item active">Sessions</div>
+          <div class="nav-item">Logs</div>
+          <div class="nav-item">Diagnostics</div>
+          <div class="nav-item">System Nodes</div>
+        </aside>
+        <main class="main">
+          <div class="mock-label"><strong>Mock C</strong> `/admin/sessions/:sessionId` conversation timeline</div>
+          <div class="topbar">
+            <div>
+              <h1 class="title" style="font-size:22px; font-family: var(--mono);">11111111-1111-4111-8111-111111111111</h1>
+              <p class="subtitle">Claude Code conversation timeline · sticky routing audit · request-log correlation</p>
+              <div class="tag-row">
+                <span class="pill blue">claude-code</span>
+                <span class="pill ok">confidence high</span>
+                <span class="pill neutral">source: x-claude-code-session-id</span>
+                <span class="pill warn">rebound once</span>
+              </div>
+            </div>
+            <div class="actions">
+              <div class="btn">Copy ID</div>
+              <div class="btn">Filter in Usage</div>
+              <div class="btn danger">Expire Binding</div>
+            </div>
+          </div>
+
+          <div class="binding-box" style="margin-bottom:14px;">
+            <div style="display:flex; justify-content:space-between; gap:16px; align-items:center;">
+              <div>
+                <div class="tiny faint">Current sticky binding</div>
+                <div style="margin-top:6px; font-size:15px; font-weight:650;">claude-acc-22 · provider=anthropic · model family=claude · TTL refreshed 2m ago</div>
+                <div class="tiny muted" style="margin-top:6px;">Previous: claude-acc-17 (429 cooldown) · rebound at 14:11:09</div>
+              </div>
+              <div class="pill ok">session sticky healthy</div>
+            </div>
+          </div>
+
+          <div class="detail-layout">
+            <div class="side-list card">
+              <div class="side-list-header">
+                <div style="font-weight:650;">Request timeline</div>
+                <div class="tiny muted" style="margin-top:4px;">12 turns · ordered by time</div>
+              </div>
+              <div class="turn">
+                <div class="turn-top">
+                  <strong class="mono">#01</strong>
+                  <span class="pill ok">200</span>
+                </div>
+                <div class="tiny">14:08:21 · sonnet-4-5</div>
+                <div class="tiny faint">auth claude-acc-17 · 1.42s</div>
+              </div>
+              <div class="turn active">
+                <div class="turn-top">
+                  <strong class="mono">#02</strong>
+                  <span class="pill err">429</span>
+                </div>
+                <div class="tiny">14:11:03 · sonnet-4-5</div>
+                <div class="tiny faint">auth claude-acc-17 · rate limited</div>
+              </div>
+              <div class="turn">
+                <div class="turn-top">
+                  <strong class="mono">#03</strong>
+                  <span class="pill ok">200</span>
+                </div>
+                <div class="tiny">14:11:09 · sonnet-4-5</div>
+                <div class="tiny faint">rebound → claude-acc-22</div>
+              </div>
+              <div class="turn">
+                <div class="turn-top">
+                  <strong class="mono">#04</strong>
+                  <span class="pill ok">200</span>
+                </div>
+                <div class="tiny">14:16:44 · haiku-4-5</div>
+                <div class="tiny faint">thread subagent-3</div>
+              </div>
+              <div class="turn">
+                <div class="turn-top">
+                  <strong class="mono">#05</strong>
+                  <span class="pill warn">timeout</span>
+                </div>
+                <div class="tiny">14:18:02 · sonnet-4-5</div>
+                <div class="tiny faint">upstream timeout</div>
+              </div>
+            </div>
+
+            <div class="detail-main">
+              <div class="card" style="padding:16px;">
+                <div class="section-title">
+                  <h3>Selected turn #02</h3>
+                  <div class="actions">
+                    <div class="btn">Open Request Log</div>
+                    <div class="btn primary">Copy Request ID</div>
+                  </div>
+                </div>
+                <div class="meta-grid">
+                  <div class="meta-box">
+                    <div class="label">Status</div>
+                    <div class="value" style="color:#fca5a5;">429 rate limited</div>
+                  </div>
+                  <div class="meta-box">
+                    <div class="label">Auth</div>
+                    <div class="value mono" style="font-size:13px;">claude-acc-17</div>
+                  </div>
+                  <div class="meta-box">
+                    <div class="label">Model</div>
+                    <div class="value">claude-sonnet-4-5</div>
+                  </div>
+                  <div class="meta-box">
+                    <div class="label">Latency</div>
+                    <div class="value">380 ms</div>
+                  </div>
+                  <div class="meta-box">
+                    <div class="label">Request ID</div>
+                    <div class="value mono" style="font-size:12px;">req_01HZX…B7</div>
+                  </div>
+                  <div class="meta-box">
+                    <div class="label">Home / CPA</div>
+                    <div class="value" style="font-size:13px;">us12 / rn-us2</div>
+                  </div>
+                  <div class="meta-box">
+                    <div class="label">Session Source</div>
+                    <div class="value" style="font-size:13px;">claude_header</div>
+                  </div>
+                  <div class="meta-box">
+                    <div class="label">Tokens</div>
+                    <div class="value">0 billable</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="split-2">
+                <div class="card" style="padding:16px;">
+                  <div class="section-title">
+                    <h3>Error / response excerpt</h3>
+                    <span class="pill err">fail body</span>
+                  </div>
+                  <pre class="codeblock">{
+  "type": "error",
+  "error": {
+    "type": "rate_limit_error",
+    "message": "This organization has been rate limited."
+  },
+  "request_id": "req_01HZX…B7"
+}</pre>
+                </div>
+                <div class="card" style="padding:16px;">
+                  <div class="section-title">
+                    <h3>Correlation</h3>
+                    <span class="pill blue">ops actions</span>
+                  </div>
+                  <div style="display:grid; gap:10px;">
+                    <div class="meta-box">
+                      <div class="label">Request log</div>
+                      <div class="value" style="font-size:13px; color:#86efac;">available · download</div>
+                    </div>
+                    <div class="meta-box">
+                      <div class="label">Next turn</div>
+                      <div class="value" style="font-size:13px;">#03 rebound success on claude-acc-22</div>
+                    </div>
+                    <div class="meta-box">
+                      <div class="label">Suggested action</div>
+                      <div class="value" style="font-size:13px;">keep rebound · inspect acc-17 5h window</div>
+                    </div>
+                    <div class="meta-box">
+                      <div class="label">Deep links</div>
+                      <div class="value" style="font-size:13px; color:#9cbcff;">Usage filter · Diagnostics · Credential</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <div class="footer-note">
+      Design mockups for HomeUI session observability · not production screenshots · generated for issue/design review
+    </div>
+  </body>
+</html>
